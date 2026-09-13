@@ -1,0 +1,248 @@
+// ============================================================================
+// Autonomous World — Prisma Schema v1.1
+// ============================================================================
+// This file defines the complete data model for the autonomous world game.
+// All models are designed for a single shared world with round-based simulation.
+//
+// Key design decisions:
+// - World is singleton (active = true marks the current world)
+// - Characters have speed (v1.1) for battle escape mechanics
+// - RoundSnapshot stores compressed game state per round for replay
+// - Friendship/Discontent are bidirectional/unidirectional relationships
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── World ─────────────────────────────────────────────────────────────────
+// The game world. Only one world should have active = true at any time.
+// seed + rngState enable exact reproduction of any round.
+model World {
+  id           String   @id @default(cuid())
+  name         String
+  currentRound Int      @default(0)
+  seed         String                    // RNG seed for reproducibility
+  rngState     String                    // Serialized RNG state after each round
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  // Back-relations (required by Prisma 7+)
+  factions         Faction[]
+  places           Place[]
+  roads            Road[]
+  characters       Character[]
+  friendships      Friendship[]
+  discontents      Discontent[]
+  signals          Signal[]
+  roundSnapshots   RoundSnapshot[]
+  events           Event[]
+  ambitionEvents   AmbitionEvent[]
+}
+
+// ─── Faction ───────────────────────────────────────────────────────────────
+// A faction (kingdom/nation). When the king dies, collapsing = true
+// and the faction gradually dissolves over subsequent rounds.
+model Faction {
+  id             String   @id @default(cuid())
+  worldId        String
+  name           String
+  color          String                    // HSL color string (e.g. "hsl(120, 70%, 50%)")
+  alive          Boolean  @default(true)
+  collapsing     Boolean  @default(false)  // King died, faction dissolving
+  createdAtRound Int                      // Round when this faction was created
+  endedAtRound   Int?                     // Round when faction fully dissolved
+  kingId         String?   @unique         // Current king (unique per faction)
+
+  world  World    @relation(fields: [worldId], references: [id])
+  places Place[]
+  characters Character[]
+}
+
+// ─── Place ─────────────────────────────────────────────────────────────────
+// A location on the map. Can be owned by a faction, with an administrator.
+// Buildings (fortress, market, barracks) affect gameplay mechanics.
+model Place {
+  id              String   @id @default(cuid())
+  worldId         String
+  name            String
+  factionId       String?                 // Owning faction (null = unowned)
+  administratorId String?   @unique       // Character who administers this place
+  garrison        Int      @default(0)    // Stationed troops (auto-recruited)
+  fortress        Int      @default(0)    // Defense bonus (0-5)
+  market          Int      @default(0)    // Income bonus (0-5)
+  barracks        Int      @default(0)    // Recruitment bonus (0-5)
+  layoutX         Float                    // Graph layout X position
+  layoutY         Float                    // Graph layout Y position
+  createdAtRound  Int                     // Round when this place was created
+
+  world      World         @relation(fields: [worldId], references: [id])
+  faction    Faction?      @relation(fields: [factionId], references: [id])
+  administrator Character? @relation("Administrator", fields: [administratorId], references: [id])
+  characters Character[]
+  roadsA     Road[]        @relation("RoadA")
+  roadsB     Road[]        @relation("RoadB")
+  signals    Signal[]
+}
+
+// ─── Road ──────────────────────────────────────────────────────────────────
+// A connection between two places. aId < bId for consistency.
+// Characters can move 1 place per turn along roads.
+model Road {
+  id             String @id @default(cuid())
+  worldId        String
+  aId            String                    // First place (aId < bId)
+  bId            String                    // Second place
+  createdAtRound Int
+
+  world  World  @relation(fields: [worldId], references: [id])
+  placeA Place  @relation("RoadA", fields: [aId], references: [id])
+  placeB Place  @relation("RoadB", fields: [bId], references: [id])
+
+  @@unique([worldId, aId, bId])
+}
+
+// ─── Character ─────────────────────────────────────────────────────────────
+// A character (general/leader). Has stats, troops, gold, and relationships.
+// speed (v1.1) determines battle escape probability and action order.
+model Character {
+  id                String   @id @default(cuid())
+  worldId           String
+  name              String
+  factionId         String?                 // Current faction (null = unaffiliated)
+  wu                Int                       // 武力 Martial power (5-30)
+  tong              Int                       // 統領 Leadership (5-30)
+  jing              Int                       // 經濟 Economy (5-30)
+  speed             Int                       // 速度 Speed (5-30, v1.1)
+  loyalty           Loyalty                  // 忠誠 Loyalty tag (doesn't affect defection)
+  ambition          Float                    // 野心 Ambition (5-30, normal dist μ=17 σ=5)
+  age               Int      @default(20)
+  maxAge            Int                      // Random 50-80 at creation
+  placeId           String                   // Current location
+  troops            Int      @default(0)
+  gold              Int      @default(0)     // Personal treasury
+  alive             Boolean  @default(true)
+  isKing            Boolean  @default(false)
+  diedAtRound       Int?
+  signalCooldown    Int      @default(0)     // Rounds before can send signal again
+  lastPromotedRound Int?                     // Last round when made administrator
+
+  world          World          @relation(fields: [worldId], references: [id])
+  faction        Faction?       @relation(fields: [factionId], references: [id])
+  place          Place          @relation(fields: [placeId], references: [id])
+  administered   Place?         @relation("Administrator")
+  friendshipsA   Friendship[]   @relation("FriendshipA")
+  friendshipsB   Friendship[]   @relation("FriendshipB")
+  discontentsA   Discontent[]   @relation("DiscontentA")
+  discontentsB   Discontent[]   @relation("DiscontentB")
+  signalsSent    Signal[]
+  ambitionEvents AmbitionEvent[]
+}
+
+// Loyalty is a tag only — it does NOT directly affect defection probability.
+// Defection is driven by ambition, relationships, and faction size.
+enum Loyalty {
+  SELF      // 為己 Loyal to self
+  PATH      // 為道 Loyal to a cause
+  ALTRUISM  // 為人 Loyal to others
+}
+
+// ─── Friendship ────────────────────────────────────────────────────────────
+// Bidirectional friendship between two characters.
+// If a friend defects, this character's defection chance increases.
+model Friendship {
+  id         String @id @default(cuid())
+  worldId    String
+  aId        String                    // Character A (aId < bId for consistency)
+  bId        String                    // Character B
+  sinceRound Int                     // When this friendship formed
+
+  world     World      @relation(fields: [worldId], references: [id])
+  characterA Character @relation("FriendshipA", fields: [aId], references: [id])
+  characterB Character @relation("FriendshipB", fields: [bId], references: [id])
+
+  @@unique([worldId, aId, bId])
+}
+
+// ─── Discontent ────────────────────────────────────────────────────────────
+// Unidirectional discontent. A feels resentment toward B.
+// Increases A's defection chance.
+model Discontent {
+  id         String @id @default(cuid())
+  worldId    String
+  aId        String                    // Character who feels discontent
+  bId        String                    // Character who is resented
+  sinceRound Int
+
+  world     World      @relation(fields: [worldId], references: [id])
+  characterA Character @relation("DiscontentA", fields: [aId], references: [id])
+  characterB Character @relation("DiscontentB", fields: [bId], references: [id])
+
+  @@unique([worldId, aId, bId])
+}
+
+// ─── Signal ────────────────────────────────────────────────────────────────
+// A signal sent by a king/administrator to rally troops to a target place.
+// All eligible characters within range will move toward the target.
+model Signal {
+  id            String  @id @default(cuid())
+  worldId       String
+  fromId        String                    // Character who sent the signal
+  targetPlaceId String                    // Target destination
+  createdRound  Int
+  expireRound   Int                     // Becomes inactive after this round
+  active        Boolean @default(true)
+
+  world  World  @relation(fields: [worldId], references: [id])
+  sender Character @relation(fields: [fromId], references: [id])
+  target Place  @relation(fields: [targetPlaceId], references: [id])
+}
+
+// ─── RoundSnapshot ─────────────────────────────────────────────────────────
+// Compressed game state for a specific round. Used for replay/history.
+// data is gzip(JSON) — binary blob for storage efficiency.
+// TODO: Add partition by round for performance at scale.
+model RoundSnapshot {
+  id      String @id @default(cuid())
+  worldId String
+  round   Int
+  data    Bytes                    // gzip(JSON) of full round state
+
+  world World @relation(fields: [worldId], references: [id])
+
+  @@unique([worldId, round])
+}
+
+// ─── Event ─────────────────────────────────────────────────────────────────
+// Log of game events (battles, defections, signals, etc.)
+// Used for the event log UI and debugging.
+model Event {
+  id        String   @id @default(cuid())
+  worldId   String
+  round     Int
+  type      String                    // Event type (e.g. "BATTLE", "DEFECT", "SIGNAL")
+  data      Json                      // Event-specific data
+  createdAt DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id])
+
+  @@index([worldId, round])
+}
+
+// ─── AmbitionEvent ─────────────────────────────────────────────────────────
+// Tracks changes to character ambition for debugging/balancing.
+model AmbitionEvent {
+  id     String @id @default(cuid())
+  worldId String
+  charId String
+  round  Int
+  delta  Float                    // Change in ambition (+/-)
+  reason String                    // Human-readable reason
+
+  world     World      @relation(fields: [worldId], references: [id])
+  character Character @relation(fields: [charId], references: [id])
+}

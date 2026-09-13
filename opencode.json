@@ -1,0 +1,49 @@
+{
+	"$schema": "https://opencode.ai/config.json",
+	"name": "autonomous-world",
+	"description": "Autonomous World - An infinitely running autonomous simulation game",
+	"mcp": {
+		"godot-ai": {
+			"type": "local",
+			"enabled": false,
+			"command": [
+				"C:\\Users\\rocki\\AppData\\Roaming\\uv\\python\\cpython-3.12.9-windows-x86_64-none/pythonw.exe",
+				"-c",
+				"import subprocess,sys; raise SystemExit(subprocess.call(sys.argv[1:], stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr, creationflags=0x08000000))",
+				"C:\\Users\\rocki/.local/bin/uvx.exe",
+				"--link-mode",
+				"copy",
+				"--from",
+				"godot-ai==3.2.4",
+				"godot-ai",
+				"attach",
+				"--port",
+				"8000",
+				"--ws-port",
+				"9500"
+			]
+		}
+	},
+	"project": {
+		"type": "nextjs",
+		"language": "typescript",
+		"packageManager": "pnpm"
+	},
+	"rules": {
+		"imports": {
+			"pattern": "@/lib/*",
+			"target": "./src/lib/*",
+			"description": "Use @/* path alias for imports from src/ directory"
+		},
+		"prisma": {
+			"version": "7",
+			"configFile": "prisma.config.ts",
+			"note": "Prisma 7 requires prisma.config.ts at project root. Do NOT include url in schema.prisma datasource block."
+		},
+		"auth": {
+			"library": "next-auth",
+			"version": "5-beta",
+			"pattern": "Use auth() function, not getSession(). Export { GET, POST } from handlers."
+		}
+	}
+}

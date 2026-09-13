@@ -1,0 +1,81 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "name": "autonomous-world",
+  "description": "Autonomous World - An infinitely running autonomous simulation game",
+  "version": "0.1.0",
+  
+  "project": {
+    "type": "nextjs",
+    "language": "typescript",
+    "packageManager": "pnpm",
+    "nodeVersion": "20+"
+  },
+
+  "mcp": {
+    "godot-ai": {
+      "type": "local",
+      "enabled": false,
+      "description": "Godot AI integration (disabled for this web project)"
+    }
+  },
+
+  "rules": {
+    "imports": {
+      "pattern": "@/lib/*",
+      "target": "./src/lib/*",
+      "description": "Use @/* path alias for imports from src/ directory"
+    },
+    "prisma": {
+      "version": "7",
+      "configFile": "prisma.config.ts",
+      "notes": [
+        "Prisma 7 requires prisma.config.ts at project root",
+        "Do NOT include url in schema.prisma datasource block",
+        "Run 'npx prisma generate' after schema changes",
+        "Back-relation fields are required on parent models"
+      ]
+    },
+    "auth": {
+      "library": "next-auth",
+      "version": "5-beta.32",
+      "notes": [
+        "Use auth() function, not getSession()",
+        "Export { GET, POST } from handlers",
+        "Callbacks receive typed parameters",
+        "Session type from 'next-auth'"
+      ]
+    },
+    "typescript": {
+      "strict": true,
+      "noAny": true,
+      "notes": [
+        "Never use 'as any', '@ts-ignore', or '@ts-expect-error'",
+        "Use proper Prisma types for database queries",
+        "All functions must have explicit return types"
+      ]
+    }
+  },
+
+  "scripts": {
+    "dev": "pnpm dev",
+    "build": "pnpm build",
+    "lint": "pnpm lint",
+    "typecheck": "npx tsc --noEmit",
+    "prisma:generate": "npx prisma generate",
+    "prisma:migrate": "npx prisma migrate dev"
+  },
+
+  "environment": {
+    "required": [
+      "DATABASE_URL",
+      "AUTH_SECRET",
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "ADMIN_EMAIL"
+    ],
+    "optional": [
+      "ADMIN_TOKEN",
+      "DEBUG"
+    ]
+  }
+}
