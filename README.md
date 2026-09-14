@@ -236,6 +236,65 @@ docker build -t autonomous-world .
 docker run -p 3000:3000 autonomous-world
 ```
 
+#### Docker with Environment Variables
+
+```bash
+# Run with environment variables
+docker run -p 3000:3000 \
+  -e DATABASE_URL="postgresql://user:password@localhost:5432/autonomous_world" \
+  -e AUTH_SECRET="your-auth-secret" \
+  -e GOOGLE_CLIENT_ID="your-google-client-id" \
+  -e GOOGLE_CLIENT_SECRET="your-google-client-secret" \
+  -e ADMIN_EMAIL="admin@example.com" \
+  autonomous-world
+```
+
+#### Docker Compose
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/autonomous_world
+      - AUTH_SECRET=${AUTH_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=autonomous_world
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+```
+
+```bash
+# Start services
+docker compose up -d
+
+# View logs
+docker compose logs -f
+
+# Stop services
+docker compose down
+```
+
 ## Contributing
 
 1. Fork the repository

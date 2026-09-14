@@ -234,6 +234,65 @@ docker build -t autonomous-world .
 docker run -p 3000:3000 autonomous-world
 ```
 
+#### 使用環境變數的 Docker
+
+```bash
+# 使用環境變數執行
+docker run -p 3000:3000 \
+  -e DATABASE_URL="postgresql://user:password@localhost:5432/autonomous_world" \
+  -e AUTH_SECRET="your-auth-secret" \
+  -e GOOGLE_CLIENT_ID="your-google-client-id" \
+  -e GOOGLE_CLIENT_SECRET="your-google-client-secret" \
+  -e ADMIN_EMAIL="admin@example.com" \
+  autonomous-world
+```
+
+#### Docker Compose
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/autonomous_world
+      - AUTH_SECRET=${AUTH_SECRET}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=autonomous_world
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+```
+
+```bash
+# 啟動服務
+docker compose up -d
+
+# 檢視日誌
+docker compose logs -f
+
+# 停止服務
+docker compose down
+```
+
 ## 貢獻指南
 
 1. Fork 儲存庫
