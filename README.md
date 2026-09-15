@@ -54,6 +54,9 @@ cp .env.example .env.local
 # Run database migrations
 npx prisma migrate dev
 
+# Seed initial game data
+npx tsx prisma/seed.ts
+
 # Start development server
 pnpm dev
 ```
@@ -75,6 +78,7 @@ pnpm dev
 autonomous-world/
 ├── prisma/
 │   ├── schema.prisma              # Database schema (Prisma 7 format)
+│   ├── seed.ts                    # Initial game data seed script
 │   └── migrations/                # Database migrations
 ├── src/
 │   ├── app/
@@ -133,6 +137,12 @@ autonomous-world/
 ```
 
 ## Game Rules
+
+### Initial State
+- **1 character** (king) starts the world
+- **1 faction** with the king
+- **100 places** with roads connecting them
+- Characters, factions, and places grow over time through simulation
 
 ### World
 - Single shared world, `active = true` marks the current world

@@ -2,6 +2,7 @@
 	"$schema": "https://opencode.ai/config.json",
 	"name": "autonomous-world",
 	"description": "Autonomous World - An infinitely running autonomous simulation game",
+	"plugin": [],
 	"mcp": {
 		"godot-ai": {
 			"type": "local",

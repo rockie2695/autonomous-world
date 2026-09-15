@@ -52,6 +52,9 @@ cp .env.example .env.local
 # 執行資料庫遷移
 npx prisma migrate dev
 
+# 初始化遊戲種子資料
+npx tsx prisma/seed.ts
+
 # 啟動開發伺服器
 pnpm dev
 ```
@@ -73,6 +76,7 @@ pnpm dev
 autonomous-world/
 ├── prisma/
 │   ├── schema.prisma              # 資料庫 schema（Prisma 7 格式）
+│   ├── seed.ts                    # 遊戲初始資料種子腳本
 │   └── migrations/                # 資料庫遷移
 ├── src/
 │   ├── app/
@@ -131,6 +135,12 @@ autonomous-world/
 ```
 
 ## 遊戲規則
+
+### 初始狀態
+- **1 個角色**（國王）開始世界
+- **1 個勢力**包含該國王
+- **100 個地方**以道路相互連接
+- 角色、勢力、地方會隨模擬增長
 
 ### 世界
 - 單一共享世界，`active = true` 標記當前世界

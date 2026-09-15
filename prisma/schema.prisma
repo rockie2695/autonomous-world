@@ -1,14 +1,22 @@
 // ============================================================================
 // Autonomous World — Prisma Schema v1.1
+// 自治世界 — Prisma 資料模型 v1.1
 // ============================================================================
 // This file defines the complete data model for the autonomous world game.
+// 本檔案定義自治世界遊戲的完整資料模型。
 // All models are designed for a single shared world with round-based simulation.
+// 所有模型設計為單一共享世界，採用回合制模擬。
 //
 // Key design decisions:
+// 關鍵設計決策：
 // - World is singleton (active = true marks the current world)
+//   World 為單例（active = true 表示當前世界）
 // - Characters have speed (v1.1) for battle escape mechanics
+//   角色擁有速度屬性（v1.1）用於戰鬥逃脫機制
 // - RoundSnapshot stores compressed game state per round for replay
+//   RoundSnapshot 儲存每回合壓縮遊戲狀態用於重播
 // - Friendship/Discontent are bidirectional/unidirectional relationships
+//   Friendship/Discontent 為雙向/單向關係
 // ============================================================================
 
 generator client {
@@ -21,17 +29,20 @@ datasource db {
 
 // ─── World ─────────────────────────────────────────────────────────────────
 // The game world. Only one world should have active = true at any time.
+// 遊戲世界。任何時間只有一個世界應設為 active = true。
 // seed + rngState enable exact reproduction of any round.
+// seed + rngState 可精確重現任何回合。
 model World {
   id           String   @id @default(cuid())
   name         String
   currentRound Int      @default(0)
-  seed         String                    // RNG seed for reproducibility
-  rngState     String                    // Serialized RNG state after each round
+  seed         String                    // RNG seed for reproducibility / RNG 種子用於可重現性
+  rngState     String                    // Serialized RNG state after each round / 每回合序列化 RNG 狀態
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
   // Back-relations (required by Prisma 7+)
+  // 反向關聯（Prisma 7+ 必需）
   factions         Faction[]
   places           Place[]
   roads            Road[]
@@ -46,17 +57,19 @@ model World {
 
 // ─── Faction ───────────────────────────────────────────────────────────────
 // A faction (kingdom/nation). When the king dies, collapsing = true
+// 一個派系（王國/國家）。當國王死亡時，collapsing = true
 // and the faction gradually dissolves over subsequent rounds.
+// 派系在後續回合中逐漸解散。
 model Faction {
   id             String   @id @default(cuid())
   worldId        String
   name           String
-  color          String                    // HSL color string (e.g. "hsl(120, 70%, 50%)")
+  color          String                    // HSL color string (e.g. "hsl(120, 70%, 50%)") / HSL 顏色字串
   alive          Boolean  @default(true)
-  collapsing     Boolean  @default(false)  // King died, faction dissolving
-  createdAtRound Int                      // Round when this faction was created
-  endedAtRound   Int?                     // Round when faction fully dissolved
-  kingId         String?   @unique         // Current king (unique per faction)
+  collapsing     Boolean  @default(false)  // King died, faction dissolving / 國王死亡，派系解散中
+  createdAtRound Int                      // Round when this faction was created / 派系建立回合
+  endedAtRound   Int?                     // Round when faction fully dissolved / 派系完全解散回合
+  kingId         String?   @unique         // Current king (unique per faction) / 當前國王（每派系唯一）
 
   world  World    @relation(fields: [worldId], references: [id])
   places Place[]
@@ -65,20 +78,22 @@ model Faction {
 
 // ─── Place ─────────────────────────────────────────────────────────────────
 // A location on the map. Can be owned by a faction, with an administrator.
+// 地圖上的一個位置。可由派系擁有，並有管理者。
 // Buildings (fortress, market, barracks) affect gameplay mechanics.
+// 建築（城堡、市場、兵營）影響遊戲機制。
 model Place {
   id              String   @id @default(cuid())
   worldId         String
   name            String
-  factionId       String?                 // Owning faction (null = unowned)
-  administratorId String?   @unique       // Character who administers this place
-  garrison        Int      @default(0)    // Stationed troops (auto-recruited)
-  fortress        Int      @default(0)    // Defense bonus (0-5)
-  market          Int      @default(0)    // Income bonus (0-5)
-  barracks        Int      @default(0)    // Recruitment bonus (0-5)
-  layoutX         Float                    // Graph layout X position
-  layoutY         Float                    // Graph layout Y position
-  createdAtRound  Int                     // Round when this place was created
+  factionId       String?                 // Owning faction (null = unowned) / 擁有派系（null = 無主）
+  administratorId String?   @unique       // Character who administers this place / 管理此地的角色
+  garrison        Int      @default(0)    // Stationed troops (auto-recruited) / 駐軍（自動徵募）
+  fortress        Int      @default(0)    // Defense bonus (0-5) / 防禦加成
+  market          Int      @default(0)    // Income bonus (0-5) / 收入加成
+  barracks        Int      @default(0)    // Recruitment bonus (0-5) / 徵募加成
+  layoutX         Float                    // Graph layout X position / 圖形佈局 X 位置
+  layoutY         Float                    // Graph layout Y position / 圖形佈局 Y 位置
+  createdAtRound  Int                     // Round when this place was created / 位置建立回合
 
   world      World         @relation(fields: [worldId], references: [id])
   faction    Faction?      @relation(fields: [factionId], references: [id])
@@ -91,12 +106,14 @@ model Place {
 
 // ─── Road ──────────────────────────────────────────────────────────────────
 // A connection between two places. aId < bId for consistency.
+// 兩個位置之間的連接。為了一致性，aId < bId。
 // Characters can move 1 place per turn along roads.
+// 角色每回合可沿道路移動一個位置。
 model Road {
   id             String @id @default(cuid())
   worldId        String
-  aId            String                    // First place (aId < bId)
-  bId            String                    // Second place
+  aId            String                    // First place (aId < bId) / 第一個位置
+  bId            String                    // Second place / 第二個位置
   createdAtRound Int
 
   world  World  @relation(fields: [worldId], references: [id])
@@ -108,28 +125,30 @@ model Road {
 
 // ─── Character ─────────────────────────────────────────────────────────────
 // A character (general/leader). Has stats, troops, gold, and relationships.
+// 一個角色（將軍/領袖）。擁有屬性、兵力、金幣和關係。
 // speed (v1.1) determines battle escape probability and action order.
+// speed（v1.1）決定戰鬥逃脫機率和行動順序。
 model Character {
   id                String   @id @default(cuid())
   worldId           String
   name              String
-  factionId         String?                 // Current faction (null = unaffiliated)
-  wu                Int                       // 武力 Martial power (5-30)
-  tong              Int                       // 統領 Leadership (5-30)
-  jing              Int                       // 經濟 Economy (5-30)
-  speed             Int                       // 速度 Speed (5-30, v1.1)
-  loyalty           Loyalty                  // 忠誠 Loyalty tag (doesn't affect defection)
-  ambition          Float                    // 野心 Ambition (5-30, normal dist μ=17 σ=5)
+  factionId         String?                 // Current faction (null = unaffiliated) / 當前派系（null = 無所屬）
+  wu                Int                       // 武力 Martial power (5-30) / 武力
+  tong              Int                       // 統領 Leadership (5-30) / 統領
+  jing              Int                       // 經濟 Economy (5-30) / 經濟
+  speed             Int                       // 速度 Speed (5-30, v1.1) / 速度
+  loyalty           Loyalty                  // 忠誠 Loyalty tag (doesn't affect defection) / 忠誠標籤（不影響叛逃）
+  ambition          Float                    // 野心 Ambition (5-30, normal dist μ=17 σ=5) / 野心
   age               Int      @default(20)
-  maxAge            Int                      // Random 50-80 at creation
-  placeId           String                   // Current location
+  maxAge            Int                      // Random 50-80 at creation / 建立時隨機 50-80
+  placeId           String                   // Current location / 當前位置
   troops            Int      @default(0)
-  gold              Int      @default(0)     // Personal treasury
+  gold              Int      @default(0)     // Personal treasury / 個人金庫
   alive             Boolean  @default(true)
   isKing            Boolean  @default(false)
   diedAtRound       Int?
-  signalCooldown    Int      @default(0)     // Rounds before can send signal again
-  lastPromotedRound Int?                     // Last round when made administrator
+  signalCooldown    Int      @default(0)     // Rounds before can send signal again / 再次發送訊號的冷卻回合數
+  lastPromotedRound Int?                     // Last round when made administrator / 上次晉升為管理者回合
 
   world          World          @relation(fields: [worldId], references: [id])
   faction        Faction?       @relation(fields: [factionId], references: [id])
@@ -144,22 +163,26 @@ model Character {
 }
 
 // Loyalty is a tag only — it does NOT directly affect defection probability.
+// 忠誠僅為標籤 — 不直接影響叛逃機率。
 // Defection is driven by ambition, relationships, and faction size.
+// 叛逃由野心、關係和派系規模驅動。
 enum Loyalty {
-  SELF      // 為己 Loyal to self
-  PATH      // 為道 Loyal to a cause
-  ALTRUISM  // 為人 Loyal to others
+  SELF      // 為己 Loyal to self / 忠於自己
+  PATH      // 為道 Loyal to a cause / 忠於理想
+  ALTRUISM  // 為人 Loyal to others / 忠於他人
 }
 
 // ─── Friendship ────────────────────────────────────────────────────────────
 // Bidirectional friendship between two characters.
+// 兩個角色之間的雙向友誼。
 // If a friend defects, this character's defection chance increases.
+// 如果朋友叛逃，此角色的叛逃機率增加。
 model Friendship {
   id         String @id @default(cuid())
   worldId    String
-  aId        String                    // Character A (aId < bId for consistency)
-  bId        String                    // Character B
-  sinceRound Int                     // When this friendship formed
+  aId        String                    // Character A (aId < bId for consistency) / 角色 A
+  bId        String                    // Character B / 角色 B
+  sinceRound Int                     // When this friendship formed / 友誼形成回合
 
   world     World      @relation(fields: [worldId], references: [id])
   characterA Character @relation("FriendshipA", fields: [aId], references: [id])
@@ -170,12 +193,14 @@ model Friendship {
 
 // ─── Discontent ────────────────────────────────────────────────────────────
 // Unidirectional discontent. A feels resentment toward B.
+// 單向不滿。A 對 B 感到不滿。
 // Increases A's defection chance.
+// 增加 A 的叛逃機率。
 model Discontent {
   id         String @id @default(cuid())
   worldId    String
-  aId        String                    // Character who feels discontent
-  bId        String                    // Character who is resented
+  aId        String                    // Character who feels discontent / 感到不滿的角色
+  bId        String                    // Character who is resented / 被不滿的角色
   sinceRound Int
 
   world     World      @relation(fields: [worldId], references: [id])
@@ -187,14 +212,16 @@ model Discontent {
 
 // ─── Signal ────────────────────────────────────────────────────────────────
 // A signal sent by a king/administrator to rally troops to a target place.
+// 國王/管理者發送的訊號，用於集結兵力至目標位置。
 // All eligible characters within range will move toward the target.
+// 範圍內所有符合條件的角色將向目標移動。
 model Signal {
   id            String  @id @default(cuid())
   worldId       String
-  fromId        String                    // Character who sent the signal
-  targetPlaceId String                    // Target destination
+  fromId        String                    // Character who sent the signal / 發送訊號的角色
+  targetPlaceId String                    // Target destination / 目標目的地
   createdRound  Int
-  expireRound   Int                     // Becomes inactive after this round
+  expireRound   Int                     // Becomes inactive after this round / 此回合後失效
   active        Boolean @default(true)
 
   world  World  @relation(fields: [worldId], references: [id])
@@ -204,13 +231,16 @@ model Signal {
 
 // ─── RoundSnapshot ─────────────────────────────────────────────────────────
 // Compressed game state for a specific round. Used for replay/history.
+// 特定回合的壓縮遊戲狀態。用於重播/歷史。
 // data is gzip(JSON) — binary blob for storage efficiency.
+// data 為 gzip(JSON) — 二進位區塊以提高儲存效率。
 // TODO: Add partition by round for performance at scale.
+// TODO: 新增按回合分區以提升大規模效能。
 model RoundSnapshot {
   id      String @id @default(cuid())
   worldId String
   round   Int
-  data    Bytes                    // gzip(JSON) of full round state
+  data    Bytes                    // gzip(JSON) of full round state / 完整回合狀態的 gzip(JSON)
 
   world World @relation(fields: [worldId], references: [id])
 
@@ -219,13 +249,15 @@ model RoundSnapshot {
 
 // ─── Event ─────────────────────────────────────────────────────────────────
 // Log of game events (battles, defections, signals, etc.)
+// 遊戲事件日誌（戰鬥、叛逃、訊號等）。
 // Used for the event log UI and debugging.
+// 用於事件日誌 UI 和除錯。
 model Event {
   id        String   @id @default(cuid())
   worldId   String
   round     Int
-  type      String                    // Event type (e.g. "BATTLE", "DEFECT", "SIGNAL")
-  data      Json                      // Event-specific data
+  type      String                    // Event type (e.g. "BATTLE", "DEFECT", "SIGNAL") / 事件類型
+  data      Json                      // Event-specific data / 事件特定資料
   createdAt DateTime @default(now())
 
   world World @relation(fields: [worldId], references: [id])
@@ -235,14 +267,66 @@ model Event {
 
 // ─── AmbitionEvent ─────────────────────────────────────────────────────────
 // Tracks changes to character ambition for debugging/balancing.
+// 追蹤角色野心變化用於除錯/平衡。
 model AmbitionEvent {
   id     String @id @default(cuid())
   worldId String
   charId String
   round  Int
-  delta  Float                    // Change in ambition (+/-)
-  reason String                    // Human-readable reason
+  delta  Float                    // Change in ambition (+/-) / 野心變化（+/-）
+  reason String                    // Human-readable reason / 人類可讀原因
 
   world     World      @relation(fields: [worldId], references: [id])
   character Character @relation(fields: [charId], references: [id])
+}
+
+// ─── Auth.js Tables ──────────────────────────────────────────────────────
+// Auth.js v5 requires these tables for database sessions.
+// Auth.js v5 需要這些資料表用於資料庫 session。
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  accounts      Account[]
+  sessions      Session[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
 }

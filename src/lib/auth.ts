@@ -68,7 +68,6 @@ const { handlers, auth, signIn, signOut } = NextAuth({
    * Override default pages if needed.
    */
   pages: {
-    signIn: '/',           // 登入後導向首頁 / Redirect to homepage for login
     error: '/',            // 錯誤時導向首頁 / Redirect to homepage on error
   },
 

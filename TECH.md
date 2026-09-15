@@ -257,13 +257,22 @@ export async function isAdmin(session: Session | null): Promise<boolean> {
 
 ```typescript
 // prisma.config.ts (專案根目錄)
+import 'dotenv/config';  // 必須先載入 .env 檔案
 import path from 'node:path';
-import { defineConfig } from 'prisma/config';
+import { defineConfig, env } from 'prisma/config';
 
 export default defineConfig({
   schema: path.join(__dirname, 'prisma', 'schema.prisma'),
+  datasource: {
+    url: env('DATABASE_URL'),  // 使用 env() 助手函數
+  },
 });
 ```
+
+**重要**：
+1. 必須安裝 `dotenv` 套件：`pnpm add dotenv`
+2. 必須先 `import 'dotenv/config'` 載入環境變數
+3. 使用 `env('DATABASE_URL')` 而非 `process.env.DATABASE_URL`
 
 **schema.prisma 差異**：
 ```prisma
@@ -276,7 +285,7 @@ datasource db {
 // ✅ Prisma 7 (正確)
 datasource db {
   provider = "postgresql"
-  // url 由 prisma.config.ts 或環境變數自動處理
+  // url 由 prisma.config.ts 處理
 }
 ```
 
@@ -930,32 +939,58 @@ export function decompressSnapshot(compressed: Buffer): WorldState {
 // src/lib/gameConfig.ts
 export const CONFIG = {
   // 地點 / Places
-  PLACE_INITIAL_COUNT: 100,
-  PLACE_MAX_COUNT: 150,
-  PLACE_NEW_PER_ROUND: 3,
+  PLACE_INITIAL_COUNT: 100,      // 初始地方數量
+  PLACE_MAX_COUNT: 2000,         // 最大地方數量
+  PLACE_NEW_PER_ROUND: 1,        // 每回合新增地方
+
+  // 道路 / Roads
+  ROAD_MAX_PER_PLACE: 3,         // 每個地方最多連接道路
+  ROAD_NEW_PER_PLACE_MIN: 1,     // 新地方最少道路
+  ROAD_NEW_PER_PLACE_MAX: 3,     // 新地方最多道路
 
   // 角色 / Characters
   CHAR_START_AGE: 20,
-  CHAR_MAX_AGE_MIN: 45,
-  CHAR_MAX_AGE_MAX: 70,
-  CHAR_ABILITY_MIN: 1,
+  CHAR_MAX_AGE_MIN: 50,
+  CHAR_MAX_AGE_MAX: 80,
+  CHAR_ABILITY_MIN: 5,
   CHAR_ABILITY_MAX: 30,
+  CHAR_SPEED_MEAN: 17,           // 速度常態分佈平均值
+  CHAR_SPEED_SIGMA: 5,           // 速度常態分佈標準差
+  CHAR_AMBITION_MEAN: 17,        // 野心常態分佈平均值
+  CHAR_AMBITION_SIGMA: 5,        // 野心常態分佈標準差
 
   // 經濟 / Economy
   PLACE_BASE_INCOME: 10,
-  INCOME_KING_SHARE: 0.2,
-  INCOME_ADMIN_SHARE: 0.3,
-  INCOME_OTHER_SHARE: 0.5,
+  INCOME_KING_SHARE: 0.40,
+  INCOME_ADMIN_SHARE: 0.30,
+  INCOME_OTHER_SHARE: 0.30,
 
   // 戰鬥 / Battle
-  BATTLE_RANDOM_MIN: 0.8,
-  BATTLE_RANDOM_MAX: 1.2,
+  BATTLE_RANDOM_MIN: 0.85,
+  BATTLE_RANDOM_MAX: 1.15,
 
   // 信號 / Signals
-  SIGNAL_RANGE: 3,
+  SIGNAL_RANGE: 2,
   SIGNAL_DURATION: 5,
+  SIGNAL_COOLDOWN: 10,
 } as const;
 ```
+
+### 種子腳本 / Seed Script
+
+`prisma/seed.ts` 初始化遊戲世界：
+- 使用 `createRng()` 確保可重現性
+- 使用 `generatePlaceName()` 生成地方名稱
+- 使用 `generatePersonName()` 生成角色名稱
+- 使用 `generateFactionName()` 生成勢力名稱
+- 所有數值來自 `CONFIG`
+
+初始狀態：
+- 1 個世界
+- 100 個地方
+- 道路連接
+- 1 個角色（國王）
+- 1 個勢力
 
 ---
 
@@ -1048,7 +1083,9 @@ pnpm test
 # Prisma 操作
 pnpm prisma:generate    # 產生 Prisma Client
 pnpm prisma:migrate     # 執行遷移
-pnpm prisma:studio      # 開啟資料庫管理介面
+
+# 資庫種子
+npx tsx prisma/seed.ts  # 初始化遊戲資料
 ```
 
 ### 資料庫遷移 / Database Migrations

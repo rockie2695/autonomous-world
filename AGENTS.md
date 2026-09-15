@@ -46,13 +46,22 @@ Prisma 7 requires a `prisma.config.ts` file at the project root:
 
 ```typescript
 // prisma.config.ts
+import 'dotenv/config';  // Must load .env first
 import path from 'node:path';
-import { defineConfig } from 'prisma/config';
+import { defineConfig, env } from 'prisma/config';
 
 export default defineConfig({
   schema: path.join(__dirname, 'prisma', 'schema.prisma'),
+  datasource: {
+    url: env('DATABASE_URL'),  // Use env() helper
+  },
 });
 ```
+
+**Important**: 
+- Install `dotenv`: `pnpm add dotenv`
+- Must `import 'dotenv/config'` to load environment variables
+- Use `env('DATABASE_URL')` not `process.env.DATABASE_URL`
 
 The `datasource` block in `schema.prisma` should NOT include the `url`:
 
@@ -147,6 +156,15 @@ server/
     └── ...               # Phases 3-14
 ```
 
+### Database
+
+```
+prisma/
+├── schema.prisma          # Database schema (Prisma 7 format)
+├── seed.ts                # Initial game data seed script
+└── migrations/            # Database migrations
+```
+
 ## Development Guidelines
 
 ### Adding New Features
@@ -186,7 +204,19 @@ pnpm test:watch
 
 # Run tests with coverage
 pnpm test:coverage
+
+# Seed initial game data
+npx tsx prisma/seed.ts
 ```
+
+### Initial Game State
+
+The seed script (`prisma/seed.ts`) creates:
+- **1 world** (global, unique)
+- **100 places** with roads connecting them
+- **1 character** (king) with 1 faction
+- Uses project functions: `createRng()`, `generatePlaceName()`, `generatePersonName()`, `generateFactionName()`
+- All values from `CONFIG` in `gameConfig.ts`
 
 ## Common Patterns
 
@@ -367,3 +397,13 @@ pnpm lint
 ---
 
 *This guide is for AI agents working on the Autonomous World project. For human developers, see README.md.*
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->
