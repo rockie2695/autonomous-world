@@ -54,6 +54,19 @@ export async function factionDeath(
           endedAtRound: round,
         },
       });
+
+      // Log faction death event / 記錄勢力消滅事件
+      await prisma.event.create({
+        data: {
+          worldId,
+          round,
+          type: 'FACTION_ELIMINATED',
+          data: {
+            factionId: faction.id,
+            factionName: faction.name,
+          },
+        },
+      });
     }
   }
 }

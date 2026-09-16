@@ -102,6 +102,19 @@ export async function spawnCharacters(
       },
     });
 
+    // Log the event / 記錄事件
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'CHARACTER_SPAWNED',
+        data: {
+          charName: name,
+          placeId: place.id,
+        },
+      },
+    });
+
     spawned++;
   }
 

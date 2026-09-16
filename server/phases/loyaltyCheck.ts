@@ -166,6 +166,25 @@ export async function loyaltyCheck(
             ),
           },
         });
+
+        // Log defection event / 記錄叛變事件
+        await prisma.event.create({
+          data: {
+            worldId,
+            round,
+            type: 'DEFECTION',
+            data: {
+              charId: char.id,
+              charName: char.name,
+              oldFactionId: char.factionId,
+              newFactionId: newFaction.id,
+              newFactionName: factionName,
+              placeId: isAdministrator.id,
+              placeName: isAdministrator.name,
+              reason: 'admin_defection',
+            },
+          },
+        });
       } else {
         // Join nearby faction or create new one
         // Find adjacent places
@@ -178,8 +197,8 @@ export async function loyaltyCheck(
             ],
           },
           include: {
-            placeA: { select: { factionId: true } },
-            placeB: { select: { factionId: true } },
+            placeA: { select: { factionId: true, name: true } },
+            placeB: { select: { factionId: true, name: true } },
           },
         });
 
@@ -212,6 +231,24 @@ export async function loyaltyCheck(
                 ),
               },
             });
+
+            // Log defection event / 記錄叛變事件
+            await prisma.event.create({
+              data: {
+                worldId,
+                round,
+                type: 'DEFECTION',
+                data: {
+                  charId: char.id,
+                  charName: char.name,
+                  oldFactionId: char.factionId,
+                  newFactionId: nearbyFactionId,
+                  placeId: char.placeId,
+                  reason: 'joined_nearby',
+                },
+              },
+            });
+
             joinedFaction = true;
             break;
           }
@@ -241,6 +278,24 @@ export async function loyaltyCheck(
                 CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MIN,
                 CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MAX
               ),
+            },
+          });
+
+          // Log defection event / 記錄叛變事件
+          await prisma.event.create({
+            data: {
+              worldId,
+              round,
+              type: 'DEFECTION',
+              data: {
+                charId: char.id,
+                charName: char.name,
+                oldFactionId: char.factionId,
+                newFactionId: newFaction.id,
+                newFactionName: factionName,
+                placeId: char.placeId,
+                reason: 'created_new_faction',
+              },
             },
           });
         }

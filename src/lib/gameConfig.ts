@@ -23,6 +23,10 @@ export const CONFIG = {
   PLACE_INITIAL_COUNT: 100,       // 世界建立時有多少地點 / How many places exist at world creation
   PLACE_MAX_COUNT: 2000,          // 地點總數上限 / Hard cap on total places
   PLACE_NEW_PER_ROUND: 1,         // 每回合新增的地點數 / New places added each round
+  PLACE_INITIAL_FORTRESS: 1,      // 新地點初始堡壘等級 / Initial fortress level for new places
+  PLACE_INITIAL_MARKET: 1,        // 新地點初始市場等級 / Initial market level for new places
+  PLACE_INITIAL_BARRACKS: 1,      // 新地點初始兵營等級 / Initial barracks level for new places
+  PLACE_INITIAL_GARRISON: 10,     // 新地點初始駐軍 / Initial garrison for new places
 
   // ── 道路 / Roads ─────────────────────────────────────────────────────────
   // 每個地點連接 1-3 個其他地點。道路使移動成為可能。

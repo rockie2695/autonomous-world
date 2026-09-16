@@ -37,7 +37,7 @@ export async function build(
     },
     include: {
       administrator: {
-        select: { id: true, gold: true },
+        select: { id: true, gold: true, name: true },
       },
     },
   });
@@ -71,6 +71,24 @@ export async function build(
     await prisma.place.update({
       where: { id: place.id },
       data: { [building]: currentLevel + 1 },
+    });
+
+    // Log building upgrade event / 記錄建築升級事件
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'BUILDING_UPGRADE',
+        data: {
+          placeId: place.id,
+          placeName: place.name,
+          building,
+          oldLevel: currentLevel,
+          newLevel: currentLevel + 1,
+          adminId: place.administrator.id,
+          adminName: place.administrator.name,
+        },
+      },
     });
   }
 }

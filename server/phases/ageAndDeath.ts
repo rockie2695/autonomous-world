@@ -61,6 +61,23 @@ export async function ageAndDeath(
     },
   });
 
+  // Log death events / 記錄死亡事件
+  for (const char of elderly) {
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'DEATH',
+        data: {
+          charId: char.id,
+          charName: char.name,
+          reason: 'old_age',
+          age: char.age,
+        },
+      },
+    });
+  }
+
   // If any dead character was a king, mark their faction as collapsing
   const deadKings = elderly.filter((c) => c.isKing);
 

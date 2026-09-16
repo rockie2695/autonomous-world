@@ -45,7 +45,7 @@ export async function assignAdmins(
         alive: true,
       },
       orderBy: { tong: 'desc' },
-      select: { id: true },
+      select: { id: true, name: true },
     });
 
     if (bestCandidate) {
@@ -60,6 +60,21 @@ export async function assignAdmins(
       await prisma.character.update({
         where: { id: bestCandidate.id },
         data: { lastPromotedRound: round },
+      });
+
+      // Log admin assignment event / 記錄管理員指派事件
+      await prisma.event.create({
+        data: {
+          worldId,
+          round,
+          type: 'ADMIN_ASSIGNED',
+          data: {
+            charId: bestCandidate.id,
+            charName: bestCandidate.name,
+            placeId: place.id,
+            placeName: place.name,
+          },
+        },
       });
     }
   }

@@ -64,6 +64,7 @@ export async function spawnPlaces(
     const name = generatePlaceName(rng);
 
     // Calculate layout position (near parent with offset)
+    // 增量佈局：新節點放在母節點附近隨機偏移
     const layoutX = parent.layoutX + rng.float(-20, 20);
     const layoutY = parent.layoutY + rng.float(-20, 20);
 
@@ -75,6 +76,24 @@ export async function spawnPlaces(
         layoutX,
         layoutY,
         createdAtRound: round,
+        fortress: CONFIG.PLACE_INITIAL_FORTRESS,
+        market: CONFIG.PLACE_INITIAL_MARKET,
+        barracks: CONFIG.PLACE_INITIAL_BARRACKS,
+        garrison: CONFIG.PLACE_INITIAL_GARRISON,
+      },
+    });
+
+    // Log the event / 記錄事件
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'PLACE_CREATED',
+        data: {
+          placeId: place.id,
+          placeName: name,
+          parentId: parent.id,
+        },
       },
     });
 

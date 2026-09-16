@@ -47,6 +47,20 @@ export async function factionCollapse(
   for (const faction of collapsingFactions) {
     if (faction.characters.length === 0) continue;
 
+    // Log collapse start event / 記錄崩潰開始事件
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'FACTION_COLLAPSE',
+        data: {
+          factionId: faction.id,
+          factionName: faction.name,
+          remainingChars: faction.characters.length,
+        },
+      },
+    });
+
     // Determine how many will defect this round
     const defectCount = rng.int(
       CONFIG.COLLAPSE_DEFECT_PER_ROUND_MIN,

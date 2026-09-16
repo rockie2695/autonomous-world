@@ -14,6 +14,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth, isAdmin } from '@/lib/auth';
+import { runRound } from '../../../../../server/runRound';
 
 export async function POST(request: Request) {
   // 檢查認證 / Check authentication
@@ -45,17 +46,24 @@ export async function POST(request: Request) {
     );
   }
 
-  // 待辦：匯入並呼叫 runRound 函數
-  // TODO: Import and call runRound function
-  // import { runRound } from '@/server/runRound';
-  // const startTime = Date.now();
-  // await runRound(world.id);
-  // const duration = Date.now() - startTime;
+  // 執行回合 / Run the round
+  try {
+    const result = await runRound(world.id);
 
-  // 目前回傳佔位回應 / For now, return a placeholder response
-  return NextResponse.json({
-    success: true,
-    message: 'Round execution not yet implemented',
-    round: world.currentRound,
-  });
+    return NextResponse.json({
+      success: true,
+      round: result.round,
+      duration: result.duration,
+      charactersSpawned: result.charactersSpawned,
+      charactersDied: result.charactersDied,
+      battlesFought: result.battlesFought,
+      defections: result.defections,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json(
+      { error: `Round execution failed: ${message}` },
+      { status: 500 }
+    );
+  }
 }

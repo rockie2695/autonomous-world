@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { StatsQuerySchema } from '@/lib/validations';
+import { decompressSnapshot } from '@/lib/snapshot';
 
 export async function GET(request: NextRequest) {
   // 需要認證 / Require authentication
@@ -71,26 +72,73 @@ export async function GET(request: NextRequest) {
 
   // 解壓縮並提取統計資料 / Decompress and extract stats
   const rounds: number[] = [];
-  const territories: number[] = [];
-  const troops: number[] = [];
-  const gold: number[] = [];
-  const characters: number[] = [];
+  const factionDataMap = new Map<string, {
+    id: string;
+    name: string;
+    color: string;
+    troops: number[];
+    gold: number[];
+    territories: number[];
+  }>();
 
   for (const snapshot of snapshots) {
-    // 待辦：解壓縮快照並提取統計資料 / TODO: Decompress snapshot and extract stats
-    // 目前回傳佔位資料 / For now, return placeholder data
-    rounds.push(snapshot.round);
-    territories.push(0);
-    troops.push(0);
-    gold.push(0);
-    characters.push(0);
+    try {
+      const state = decompressSnapshot(Buffer.from(snapshot.data));
+      rounds.push(snapshot.round);
+
+      // 統計每個勢力的領地、兵力、金錢 / Count territories, troops, gold per faction
+      const factionTroops = new Map<string, number>();
+      const factionGold = new Map<string, number>();
+      const factionTerritories = new Map<string, number>();
+
+      // 計算領地數 / Count territories
+      for (const place of state.places) {
+        if (place.factionId) {
+          factionTerritories.set(
+            place.factionId,
+            (factionTerritories.get(place.factionId) ?? 0) + 1
+          );
+        }
+      }
+
+      // 計算兵力和金錢 / Count troops and gold
+      for (const char of state.characters) {
+        if (char.alive && char.factionId) {
+          factionTroops.set(
+            char.factionId,
+            (factionTroops.get(char.factionId) ?? 0) + char.troops
+          );
+          factionGold.set(
+            char.factionId,
+            (factionGold.get(char.factionId) ?? 0) + char.gold
+          );
+        }
+      }
+
+      // 記錄每個勢力的資料 / Record data for each faction
+      for (const faction of state.factions) {
+        if (!factionDataMap.has(faction.id)) {
+          factionDataMap.set(faction.id, {
+            id: faction.id,
+            name: faction.name,
+            color: faction.color,
+            troops: [],
+            gold: [],
+            territories: [],
+          });
+        }
+        const fd = factionDataMap.get(faction.id)!;
+        fd.troops.push(factionTroops.get(faction.id) ?? 0);
+        fd.gold.push(factionGold.get(faction.id) ?? 0);
+        fd.territories.push(factionTerritories.get(faction.id) ?? 0);
+      }
+    } catch {
+      // 跳過損壞的快照 / Skip corrupted snapshots
+    }
   }
 
   return NextResponse.json({
     rounds,
-    territories,
-    troops,
-    gold,
-    characters,
+    factions: Array.from(factionDataMap.values()),
   });
 }

@@ -8,6 +8,10 @@ describe('Game Configuration', () => {
       expect(CONFIG).toHaveProperty('PLACE_INITIAL_COUNT');
       expect(CONFIG).toHaveProperty('PLACE_MAX_COUNT');
       expect(CONFIG).toHaveProperty('PLACE_NEW_PER_ROUND');
+      expect(CONFIG).toHaveProperty('PLACE_INITIAL_FORTRESS');
+      expect(CONFIG).toHaveProperty('PLACE_INITIAL_MARKET');
+      expect(CONFIG).toHaveProperty('PLACE_INITIAL_BARRACKS');
+      expect(CONFIG).toHaveProperty('PLACE_INITIAL_GARRISON');
 
       // Roads
       expect(CONFIG).toHaveProperty('ROAD_MAX_PER_PLACE');

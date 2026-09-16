@@ -14,6 +14,8 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
+import Graph from 'graphology';
+import forceAtlas2 from 'graphology-layout-forceatlas2';
 import { createRng } from '@/lib/rng';
 import { CONFIG } from '@/lib/gameConfig';
 import { generatePlaceName } from '@/lib/nameGenerator/place';
@@ -53,16 +55,20 @@ async function main() {
   for (let i = 0; i < CONFIG.PLACE_INITIAL_COUNT; i++) {
     const name = generatePlaceName(rng);
 
+    // 只有國王的位置有初始建築和駐軍，其餘無主之地全部為 0
+    // Only the king's place has initial buildings and garrison, all unowned places start at 0
+    const isKingPlace = i === 0;
+
     const place = await prisma.place.create({
       data: {
         worldId: world.id,
         name,
-        garrison: rng.int(5, 20),
-        fortress: rng.int(0, 2),
-        market: rng.int(0, 2),
-        barracks: rng.int(0, 2),
-        layoutX: rng.float(0, 1000),
-        layoutY: rng.float(0, 1000),
+        garrison: isKingPlace ? CONFIG.PLACE_INITIAL_GARRISON : 0,
+        fortress: isKingPlace ? CONFIG.PLACE_INITIAL_FORTRESS : 0,
+        market: isKingPlace ? CONFIG.PLACE_INITIAL_MARKET : 0,
+        barracks: isKingPlace ? CONFIG.PLACE_INITIAL_BARRACKS : 0,
+        layoutX: 0,  // 將由 ForceAtlas2 計算 / Will be calculated by ForceAtlas2
+        layoutY: 0,  // 將由 ForceAtlas2 計算 / Will be calculated by ForceAtlas2
         createdAtRound: 0,
       },
     });
@@ -72,23 +78,32 @@ async function main() {
   console.log(`Created ${places.length} places`);
 
   // ── 3. 建立道路 / Create Roads ──────────────────────────────────────────
-  // 每個地方連接 1-3 條路到附近地方（使用 gameConfig）
-  // Each place connects 1-3 roads to nearby places (using gameConfig)
+  // 每個地方連接 1-3 條路到附近地方（每端最多 3 條路）
+  // Each place connects 1-3 roads to nearby places (max 3 roads per end)
 
   const roadSet = new Set<string>();
   const roads = [];
+  const roadCountPerPlace = new Map<string, number>(); // 計算每個地方的路數
 
   for (const place of places) {
-    // 隨機決定連接數 / Random connection count (using gameConfig)
-    const connectionCount = rng.int(
-      CONFIG.ROAD_NEW_PER_PLACE_MIN,
-      CONFIG.ROAD_NEW_PER_PLACE_MAX
+    // 該地方已有的路數 / Roads already connected to this place
+    const currentRoadCount = roadCountPerPlace.get(place.id) ?? 0;
+    if (currentRoadCount >= CONFIG.ROAD_MAX_PER_PLACE) continue;
+
+    // 可新增的路數 / How many new roads we can add
+    const maxNew = Math.min(
+      CONFIG.ROAD_MAX_PER_PLACE - currentRoadCount,
+      rng.int(CONFIG.ROAD_NEW_PER_PLACE_MIN, CONFIG.ROAD_NEW_PER_PLACE_MAX)
     );
 
     // 隨機選擇其他地方連接 / Randomly select other places to connect
     const otherPlaces = rng.shuffle(
-      places.filter((p) => p.id !== place.id)
-    ).slice(0, connectionCount);
+      places.filter((p) => {
+        if (p.id === place.id) return false;
+        const otherCount = roadCountPerPlace.get(p.id) ?? 0;
+        return otherCount < CONFIG.ROAD_MAX_PER_PLACE; // 對方也未滿
+      })
+    ).slice(0, maxNew);
 
     for (const other of otherPlaces) {
       // 確保 aId < bId / Ensure aId < bId
@@ -100,6 +115,11 @@ async function main() {
 
       if (!roadSet.has(roadKey)) {
         roadSet.add(roadKey);
+
+        // 更新計數 / Update counts
+        roadCountPerPlace.set(aId, (roadCountPerPlace.get(aId) ?? 0) + 1);
+        roadCountPerPlace.set(bId, (roadCountPerPlace.get(bId) ?? 0) + 1);
+
         const road = await prisma.road.create({
           data: {
             worldId: world.id,
@@ -114,6 +134,59 @@ async function main() {
   }
 
   console.log(`Created ${roads.length} roads`);
+
+  // ── 3.5 計算初始佈局 / Calculate Initial Layout ─────────────────────────
+  // 使用 ForceAtlas2 根據道路網路計算位置，讓連接的地方更近
+  // Use ForceAtlas2 to calculate positions based on road network,
+  // so connected places are naturally closer together
+
+  console.log('Calculating initial layout with ForceAtlas2...');
+
+  // 建立 graphology 圖形 / Create graphology graph
+  const layoutGraph = new Graph();
+
+  // 新增所有地方為節點 / Add all places as nodes
+  for (const place of places) {
+    layoutGraph.addNode(place.id, {
+      x: rng.float(-100, 100), // 隨機初始位置 / Random initial position
+      y: rng.float(-100, 100),
+    });
+  }
+
+  // 新增道路為邊緣 / Add roads as edges
+  for (const road of roads) {
+    if (layoutGraph.hasNode(road.aId) && layoutGraph.hasNode(road.bId)) {
+      if (!layoutGraph.hasEdge(road.aId, road.bId)) {
+        layoutGraph.addEdge(road.aId, road.bId);
+      }
+    }
+  }
+
+  // 運行 ForceAtlas2 / Run ForceAtlas2
+  const settings = forceAtlas2.inferSettings(layoutGraph);
+  const positions = forceAtlas2(layoutGraph, {
+    iterations: 100,
+    settings: {
+      ...settings,
+      slowDown: 1,
+    },
+  });
+
+  // 更新所有地方的位置 / Update all places with calculated positions
+  for (const place of places) {
+    const pos = positions[place.id];
+    if (pos) {
+      await prisma.place.update({
+        where: { id: place.id },
+        data: {
+          layoutX: pos.x,
+          layoutY: pos.y,
+        },
+      });
+    }
+  }
+
+  console.log('Initial layout calculated');
 
   // ── 4. 建立 1 個角色 / Create 1 Character ──────────────────────────────
   // 只有 1 個角色（國王），放在第一個地方

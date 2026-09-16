@@ -42,10 +42,35 @@ export async function battle(
     include: {
       characters: {
         where: { alive: true },
-        select: { id: true, factionId: true, wu: true, tong: true, speed: true, troops: true },
+        select: { id: true, factionId: true, wu: true, tong: true, speed: true, troops: true, name: true },
       },
     },
   });
+
+  // Get all roads for escape pathfinding
+  const roads = await prisma.road.findMany({
+    where: { worldId },
+    select: { aId: true, bId: true },
+  });
+
+  // Build adjacency map for escape movement
+  const adjacent = new Map<string, string[]>();
+  for (const road of roads) {
+    if (!adjacent.has(road.aId)) adjacent.set(road.aId, []);
+    if (!adjacent.has(road.bId)) adjacent.set(road.bId, []);
+    adjacent.get(road.aId)!.push(road.bId);
+    adjacent.get(road.bId)!.push(road.aId);
+  }
+
+  // Get all places with faction info for escape destination
+  const allPlaces = await prisma.place.findMany({
+    where: { worldId },
+    select: { id: true, factionId: true },
+  });
+  const placeFactionMap = new Map<string, string | null>();
+  for (const p of allPlaces) {
+    placeFactionMap.set(p.id, p.factionId);
+  }
 
   let battleCount = 0;
 
@@ -117,10 +142,46 @@ export async function battle(
 
           if (rng.chance(escapeChance)) {
             // Escape successful — move to nearby friendly place
-            // TODO: Implement escape movement
-            await prisma.character.update({
-              where: { id: defender.id },
-              data: { troops: 0 },
+            const neighbors = adjacent.get(place.id) ?? [];
+            const currentFaction = defender.factionId;
+
+            // Find friendly place (same faction or unowned)
+            let escapePlaceId: string | null = null;
+            for (const neighbor of neighbors) {
+              const neighborFaction = placeFactionMap.get(neighbor);
+              if (neighborFaction === currentFaction || neighborFaction === null) {
+                escapePlaceId = neighbor;
+                break;
+              }
+            }
+
+            // If no friendly place, just stay at current place (lose troops)
+            if (escapePlaceId) {
+              await prisma.character.update({
+                where: { id: defender.id },
+                data: { troops: 0, placeId: escapePlaceId },
+              });
+            } else {
+              await prisma.character.update({
+                where: { id: defender.id },
+                data: { troops: 0 },
+              });
+            }
+
+            // Log escape event / 記錄逃脫事件
+            await prisma.event.create({
+              data: {
+                worldId,
+                round,
+                type: 'ESCAPE_SUCCESS',
+                data: {
+                  charId: defender.id,
+                  charName: defender.name,
+                  placeId: place.id,
+                  placeName: place.name,
+                  speedDiff,
+                },
+              },
             });
           } else {
             // Escape failed — death
@@ -129,6 +190,23 @@ export async function battle(
               data: {
                 alive: false,
                 diedAtRound: round,
+              },
+            });
+
+            // Log death event / 記錄死亡事件
+            await prisma.event.create({
+              data: {
+                worldId,
+                round,
+                type: 'BATTLE_DEATH',
+                data: {
+                  charId: defender.id,
+                  charName: defender.name,
+                  placeId: place.id,
+                  placeName: place.name,
+                  attackerId: attacker.id,
+                  attackerName: attacker.name,
+                },
               },
             });
           }
@@ -157,10 +235,47 @@ export async function battle(
           );
 
           if (rng.chance(escapeChance)) {
-            // Escape successful — move back
-            await prisma.character.update({
-              where: { id: attacker.id },
-              data: { troops: 0 },
+            // Escape successful — move back to friendly place
+            const neighbors = adjacent.get(place.id) ?? [];
+            const currentFaction = attacker.factionId;
+
+            // Find friendly place (same faction or unowned)
+            let escapePlaceId: string | null = null;
+            for (const neighbor of neighbors) {
+              const neighborFaction = placeFactionMap.get(neighbor);
+              if (neighborFaction === currentFaction || neighborFaction === null) {
+                escapePlaceId = neighbor;
+                break;
+              }
+            }
+
+            // If no friendly place, just stay at current place (lose troops)
+            if (escapePlaceId) {
+              await prisma.character.update({
+                where: { id: attacker.id },
+                data: { troops: 0, placeId: escapePlaceId },
+              });
+            } else {
+              await prisma.character.update({
+                where: { id: attacker.id },
+                data: { troops: 0 },
+              });
+            }
+
+            // Log escape event / 記錄逃脫事件
+            await prisma.event.create({
+              data: {
+                worldId,
+                round,
+                type: 'ESCAPE_SUCCESS',
+                data: {
+                  charId: attacker.id,
+                  charName: attacker.name,
+                  placeId: place.id,
+                  placeName: place.name,
+                  speedDiff,
+                },
+              },
             });
           } else {
             // Escape failed — death
@@ -169,6 +284,23 @@ export async function battle(
               data: {
                 alive: false,
                 diedAtRound: round,
+              },
+            });
+
+            // Log death event / 記錄死亡事件
+            await prisma.event.create({
+              data: {
+                worldId,
+                round,
+                type: 'BATTLE_DEATH',
+                data: {
+                  charId: attacker.id,
+                  charName: attacker.name,
+                  placeId: place.id,
+                  placeName: place.name,
+                  defenderId: defender.id,
+                  defenderName: defender.name,
+                },
               },
             });
           }
