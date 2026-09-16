@@ -76,7 +76,7 @@ export async function economy(
 
       // Distribute remaining to other characters equally
       const otherChars = place.characters.filter(
-        (c) => c.id !== kingId && c.id !== adminId
+        (c: { id: string }) => c.id !== kingId && c.id !== adminId
       );
       if (otherChars.length > 0) {
         const perChar = Math.floor(remaining / otherChars.length);

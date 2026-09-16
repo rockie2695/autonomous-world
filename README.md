@@ -78,7 +78,7 @@ pnpm dev
 autonomous-world/
 ├── prisma/
 │   ├── schema.prisma              # Database schema (Prisma 7 format)
-│   ├── seed.ts                    # Initial game data seed script
+│   ├── seed.ts                    # Initial game data seed script (with ForceAtlas2 layout)
 │   └── migrations/                # Database migrations
 ├── src/
 │   ├── app/
@@ -95,27 +95,36 @@ autonomous-world/
 │   │   │       ├── run-round/     # POST /api/admin/run-round
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
 │   │   │       └── assign-admin/  # POST /api/admin/assign-admin
-│   │   ├── game/                  # Main game page
+│   │   ├── game/                  # Main game page (with SigmaMap, EventLog, StatsCharts)
 │   │   ├── layout.tsx             # Root layout (with QueryProvider)
 │   │   ├── page.tsx               # Homepage
 │   │   └── globals.css            # Global styles
 │   └── lib/                       # Shared utilities (imported via @/*)
 │       ├── auth.ts                # Auth.js v5 configuration & helpers
-│       ├── prisma.ts              # Prisma client singleton
+│       ├── prisma.ts              # Prisma client singleton (with PrismaPg adapter)
 │       ├── queryClient.tsx        # TanStack Query provider
 │       ├── validations.ts         # Zod validation schemas
 │       ├── gameConfig.ts          # All tunable game values
 │       ├── rng.ts                 # Seeded RNG (mulberry32)
-│       ├── snapshot.ts            # Snapshot compression/decompression
+│       ├── snapshot.ts            # Snapshot compression/decompression (gzip)
 │       ├── i18n/                  # Internationalization (zh/en)
+│       │   ├── index.ts           # Locale management
+│       │   ├── zh.ts              # Traditional Chinese translations
+│       │   └── en.ts              # English translations
 │       └── nameGenerator/         # Name generation utilities
 │           ├── person.ts          # Character names
 │           ├── place.ts           # Place names
 │           └── faction.ts         # Faction names
+├── src/components/
+│   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
+│   ├── EventLog.tsx               # Bilingual event log with i18n
+│   └── StatsCharts.tsx            # SVG line charts for faction stats
 ├── server/
-│   ├── runRound.ts                # Main game loop orchestrator
+│   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
+│   ├── graph/
+│   │   └── layout.ts              # ForceAtlas2 layout calculation
 │   └── phases/                    # Individual game phases
-│       ├── spawnPlaces.ts         # Phase 1: Create new places
+│       ├── spawnPlaces.ts         # Phase 1: Create new places (incremental layout)
 │       ├── spawnCharacters.ts     # Phase 2: Spawn characters
 │       ├── ageAndDeath.ts         # Phase 3: Age + death check
 │       ├── economy.ts             # Phase 4: Income + recruitment
@@ -123,8 +132,8 @@ autonomous-world/
 │       ├── relationships.ts       # Phase 6: Friendships/discontent
 │       ├── ambitionEvents.ts      # Phase 7: Ambition changes
 │       ├── loyaltyCheck.ts        # Phase 8: Defection check
-│       ├── aiMove.ts              # Phase 9: Character movement
-│       ├── battle.ts              # Phase 10: Battle resolution
+│       ├── aiMove.ts              # Phase 9: Character movement (signal + enemy targeting)
+│       ├── battle.ts              # Phase 10: Battle resolution (with escape movement)
 │       ├── build.ts               # Phase 11: Building upgrades
 │       ├── assignAdmins.ts        # Phase 12: Auto-assign admins
 │       ├── factionCollapse.ts     # Phase 13: Faction collapse
@@ -133,7 +142,7 @@ autonomous-world/
 ├── next.config.ts                 # Next.js configuration (React Compiler enabled)
 ├── tsconfig.json                  # TypeScript configuration
 ├── vitest.config.ts               # Vitest test configuration
-└── package.json                   # Dependencies and scripts
+└── package.json                   # Dependencies and scripts (build: prisma generate && next build)
 ```
 
 ## Game Rules
@@ -159,11 +168,22 @@ autonomous-world/
 - Each faction has a king, color, and set of territories
 - When a king dies, the faction enters "collapsing" state and dissolves
 
+### Map Visualization
+
+The game features an interactive force-directed graph map using Sigma.js:
+
+- **Nodes** = Places (colored by faction, sized by garrison + troops)
+- **Edges** = Roads connecting places
+- **ForceAtlas2** layout keeps connected places close together
+- **Incremental layout** — new places spawn near their parent
+- **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
+- Node size: `baseSize(5) + min(12, totalTroops / 15)`
+
 ### Battles
 - Characters move 1 territory per turn
 - When enemy characters meet, they battle
 - Battle outcome depends on troops, martial/leadership stats, and fortress level
-- Losers may escape (based on speed difference) or die
+- Losers may escape to a nearby friendly place (based on speed difference) or die
 
 ### Economy
 - Each territory generates income based on market level
@@ -228,7 +248,12 @@ For detailed technology documentation, see [TECH.md](TECH.md).
 
 ### Vercel (Recommended)
 
+The build script automatically runs `prisma generate` before `next build`:
+
 ```bash
+# Build command (configured in package.json)
+prisma generate && next build
+
 # Install Vercel CLI
 pnpm i -g vercel
 

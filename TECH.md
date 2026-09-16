@@ -18,8 +18,9 @@ This document details all technologies used in the Autonomous World project and 
 9. [React Compiler](#react-compiler)
 10. [Vitest (測試框架)](#vitest-測試框架)
 11. [遊戲核心系統 / Game Core Systems](#遊戲核心系統--game-core-systems)
-12. [國際化 / Internationalization (i18n)](#國際化--internationalization-i18n)
-13. [部署與環境 / Deployment & Environment](#部署與環境--deployment--environment)
+12. [地圖視覺化 / Map Visualization](#地圖視覺化--map-visualization)
+13. [國際化 / Internationalization (i18n)](#國際化--internationalization-i18n)
+14. [部署與環境 / Deployment & Environment](#部署與環境--deployment--environment)
 
 ---
 
@@ -994,6 +995,150 @@ export const CONFIG = {
 
 ---
 
+## 地圖視覺化 / Map Visualization
+
+### 版本資訊 / Version Info
+- **sigma**: 3.x
+- **graphology**: 0.26.x
+- **graphology-layout-forceatlas2**: 0.10.x
+
+### 概述 / Overview
+
+遊戲使用 Sigma.js 與 graphology 建構互動式力導向圖地圖，視覺化地方、道路與勢力關係。
+
+### 架構 / Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     SigmaMap (Client Component)                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐ │
+│  │  graphology  │  │  ForceAtlas2 │  │      Sigma.js          │ │
+│  │  (Graph)     │  │  (Layout)    │  │      (Renderer)        │ │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 節點屬性 / Node Properties
+
+```typescript
+// 每個地方節點 / Each place node
+graph.addNode(place.id, {
+  x: place.layoutX,           // ForceAtlas2 計算的位置
+  y: place.layoutY,
+  size: baseSize + troopBonus, // 5 + min(12, totalTroops / 15)
+  color: hslToHex(faction.color), // HSL → Hex 轉換（WebGL 需要）
+  label: place.name,
+  // 儲存額外資料 / Store extra data for tooltips
+  placeData: place,
+  factionData: faction,
+  characterCount: charCount,
+  totalTroops,
+});
+```
+
+### 顏色轉換 / Color Conversion
+
+Sigma.js/WebGL 不支援 HSL 格式，需轉換為 hex：
+
+```typescript
+// src/components/SigmaMap.tsx
+function hslToHex(hsl: string): string {
+  // 解析 "hsl(120, 70%, 50%)" 格式
+  const match = hsl.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
+  if (!match) return '#666666';
+
+  const h = parseInt(match[1]) / 360;
+  const s = parseInt(match[2]) / 100;
+  const l = parseInt(match[3]) / 100;
+
+  // HSL → RGB → Hex 轉換
+  // ...
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+```
+
+### ForceAtlas2 佈局 / ForceAtlas2 Layout
+
+#### 初始佈局（種子腳本）
+```typescript
+// prisma/seed.ts
+const layoutGraph = new Graph();
+
+// 新增所有地方為節點
+for (const place of places) {
+  layoutGraph.addNode(place.id, {
+    x: rng.float(-100, 100), // 隨機初始位置
+    y: rng.float(-100, 100),
+  });
+}
+
+// 新增道路為邊緣
+for (const road of roads) {
+  layoutGraph.addEdge(road.aId, road.bId);
+}
+
+// 運行 ForceAtlas2
+const positions = forceAtlas2(layoutGraph, {
+  iterations: 100,
+  settings: { ...settings, slowDown: 1 },
+});
+
+// 更新所有地方的位置
+for (const place of places) {
+  const pos = positions[place.id];
+  if (pos) {
+    await prisma.place.update({
+      where: { id: place.id },
+      data: { layoutX: pos.x, layoutY: pos.y },
+    });
+  }
+}
+```
+
+#### 增量佈局（新地方）
+```typescript
+// server/phases/spawnPlaces.ts
+// 新節點放在母節點附近隨機偏移
+const layoutX = parent.layoutX + rng.float(-20, 20);
+const layoutY = parent.layoutY + rng.float(-20, 20);
+```
+
+#### 全域重算（每 100 回合）
+```typescript
+// server/graph/layout.ts
+export function shouldRecalculate(currentRound: number): boolean {
+  return currentRound % CONFIG.LAYOUT_RECALC_INTERVAL === 0;
+}
+
+export async function recalculateLayout(worldId: string): Promise<void> {
+  // 從資料庫讀取所有地方和道路
+  // 建立 graphology 圖形
+  // 運行 ForceAtlas2
+  // 更新所有地方的位置
+}
+```
+
+### 使用方式 / Usage
+
+```typescript
+// src/app/game/page.tsx
+'use client';
+
+import dynamic from 'next/dynamic';
+
+// Sigma.js 需要 WebGL，必須禁用 SSR
+const SigmaMap = dynamic(() => import('@/components/SigmaMap'), {
+  ssr: false,
+  loading: () => <div>載入地圖中...</div>,
+});
+
+export default function GamePage() {
+  return <SigmaMap worldId={worldId} round={round} />;
+}
+```
+
+---
+
 ## 國際化 / Internationalization (i18n)
 
 ### 支援語言 / Supported Languages
@@ -1065,8 +1210,8 @@ pnpm install
 # 開發伺服器
 pnpm dev
 
-# 建構
-pnpm build
+# 建構（自動執行 prisma generate）
+pnpm build  # Runs: prisma generate && next build
 
 # 啟動
 pnpm start
@@ -1085,7 +1230,7 @@ pnpm prisma:generate    # 產生 Prisma Client
 pnpm prisma:migrate     # 執行遷移
 
 # 資庫種子
-npx tsx prisma/seed.ts  # 初始化遊戲資料
+npx tsx prisma/seed.ts  # 初始化遊戲資料（含 ForceAtlas2 佈局）
 ```
 
 ### 資料庫遷移 / Database Migrations
@@ -1109,10 +1254,14 @@ Autonomous World 使用現代化的技術棧：
 
 1. **Next.js 16** — 提供 SSR、API Routes、Server Components
 2. **Auth.js v5** — 處理 Google OAuth 認證
-3. **Prisma 7** — 型別安全的資料庫 ORM
+3. **Prisma 7** — 型別安全的資料庫 ORM（使用 PrismaPg driver adapter）
 4. **TypeScript** — 嚴格型別檢查
 5. **TailwindCSS 4** — 實用優先的 CSS 框架
-6. **Vitest** — 快速的單元測試框架
+6. **Sigma.js + graphology** — 互動式力導向圖地圖
+7. **ForceAtlas2** — 自動佈局演算法
+8. **TanStack Query** — 客戶端資料取得與快取
+9. **Zod** — API 輸入驗證
+10. **Vitest** — 快速的單元測試框架
 
 這些技術共同提供：
 - ✅ 型別安全 (Type Safety)
@@ -1120,7 +1269,9 @@ Autonomous World 使用現代化的技術棧：
 - ✅ 可維護性 (Maintainability)
 - ✅ 開發者體驗 (Developer Experience)
 - ✅ 國際化支援 (i18n Support)
+- ✅ 互動式地圖 (Interactive Map)
+- ✅ 自動佈局 (Automatic Layout)
 
 ---
 
-*最後更新 / Last Updated: 2026-09-14*
+*最後更新 / Last Updated: 2026-09-17*

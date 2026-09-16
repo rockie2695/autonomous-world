@@ -12,7 +12,7 @@
 // ============================================================================
 
 import { gzipSync, gunzipSync } from 'zlib';
-import type { PrismaClient } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
 
 // ─── 型別 / Types ─────────────────────────────────────────────────────────
 
@@ -103,12 +103,10 @@ export function decompressSnapshot(compressed: Buffer): WorldState {
  * Create a snapshot from the current database state.
  *
  * @param worldId - 要快照的世界 ID / The world ID to snapshot
- * @param prisma - Prisma client 實例 / Prisma client instance
  * @returns 壓縮的快照緩衝區 / Compressed snapshot buffer
  */
 export async function createSnapshot(
-  worldId: string,
-  prisma: PrismaClient
+  worldId: string
 ): Promise<Buffer> {
   // 取得所有世界資料 / Fetch all world data
   const [world, places, factions, characters, roads] = await Promise.all([

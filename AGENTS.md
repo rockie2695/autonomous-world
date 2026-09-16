@@ -149,11 +149,25 @@ src/
 
 ```
 server/
-├── runRound.ts            # Main game loop orchestrator
+├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
+├── graph/
+│   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
-    ├── spawnPlaces.ts     # Phase 1
+    ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent)
     ├── spawnCharacters.ts # Phase 2
     └── ...               # Phases 3-14
+```
+
+### Components
+
+```
+src/components/
+├── SigmaMap.tsx           # Interactive graph map (Sigma.js + graphology)
+│                          # - Nodes: faction-colored (HSL→hex), sized by troops
+│                          # - Edges: semi-transparent roads
+│                          # - Dynamic labels with faction-colored backgrounds
+├── EventLog.tsx           # Bilingual event log (i18n t() with parameter substitution)
+└── StatsCharts.tsx        # SVG line charts for faction stats over time
 ```
 
 ### Database
@@ -217,6 +231,9 @@ The seed script (`prisma/seed.ts`) creates:
 - **1 character** (king) with 1 faction
 - Uses project functions: `createRng()`, `generatePlaceName()`, `generatePersonName()`, `generateFactionName()`
 - All values from `CONFIG` in `gameConfig.ts`
+- **ForceAtlas2 layout** calculates initial positions based on road network
+- **Unowned places** have building level 0 and garrison 0
+- **King's place** gets initial buildings/garrison from CONFIG
 
 ## Common Patterns
 
@@ -380,7 +397,7 @@ pnpm prisma:studio
 
 # Development
 pnpm dev
-pnpm build
+pnpm build  # Runs: prisma generate && next build
 pnpm lint
 ```
 

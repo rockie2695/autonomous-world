@@ -16,7 +16,7 @@
 // Never import @prisma/client directly elsewhere.
 // ============================================================================
 
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 
 // ─── 單例模式 / Singleton Pattern ─────────────────────────────────────────

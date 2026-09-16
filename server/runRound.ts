@@ -154,7 +154,7 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   }
 
   // ── 階段 16：快照 / Phase 16: Snapshot ─────────────────────────────────
-  const snapshotBuffer = await createSnapshot(worldId, prisma);
+  const snapshotBuffer = await createSnapshot(worldId);
   await prisma.roundSnapshot.create({
     data: {
       worldId,

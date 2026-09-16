@@ -214,7 +214,7 @@ export async function loyaltyCheck(
             nearbyFactionId &&
             nearbyFactionId !== char.factionId &&
             !adjacentPlaces.some(
-              (r) =>
+              (r: { placeA: { factionId: string | null }; placeB: { factionId: string | null } }) =>
                 (r.placeA.factionId === nearbyFactionId ||
                   r.placeB.factionId === nearbyFactionId) &&
                 r !== road

@@ -37,7 +37,7 @@ export async function GET() {
     orderBy: { round: "desc" },
   });
 
-  const rounds = snapshots.map((s) => s.round);
+  const rounds = snapshots.map((s: { round: number }) => s.round);
 
   return NextResponse.json({
     rounds,

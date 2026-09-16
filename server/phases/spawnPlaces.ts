@@ -57,7 +57,7 @@ export async function spawnPlaces(
 
     if (parentPlaces.length === 0) continue;
 
-    const parent = rng.pick(parentPlaces);
+    const parent = rng.pick(parentPlaces) as { id: string; layoutX: number; layoutY: number } | undefined;
     if (!parent) continue;
 
     // Generate a unique name
@@ -103,7 +103,7 @@ export async function spawnPlaces(
       CONFIG.ROAD_NEW_PER_PLACE_MAX
     );
 
-    const existingPlaces = parentPlaces.filter((p) => p.id !== place.id);
+    const existingPlaces = parentPlaces.filter((p: { id: string }) => p.id !== place.id);
     const targetPlaces = rng.shuffle(existingPlaces).slice(0, roadCount);
 
     for (const target of targetPlaces) {

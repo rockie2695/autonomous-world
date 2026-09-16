@@ -76,7 +76,7 @@ pnpm dev
 autonomous-world/
 ├── prisma/
 │   ├── schema.prisma              # 資料庫 schema（Prisma 7 格式）
-│   ├── seed.ts                    # 遊戲初始資料種子腳本
+│   ├── seed.ts                    # 遊戲初始資料種子腳本（含 ForceAtlas2 佈局）
 │   └── migrations/                # 資料庫遷移
 ├── src/
 │   ├── app/
@@ -93,27 +93,36 @@ autonomous-world/
 │   │   │       ├── run-round/     # POST /api/admin/run-round
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
 │   │   │       └── assign-admin/  # POST /api/admin/assign-admin
-│   │   ├── game/                  # 主遊戲頁面
+│   │   ├── game/                  # 主遊戲頁面（含 SigmaMap、EventLog、StatsCharts）
 │   │   ├── layout.tsx             # 根佈局（含 QueryProvider）
 │   │   ├── page.tsx               # 首頁
 │   │   └── globals.css            # 全域樣式
 │   └── lib/                       # 共用工具（透過 @/* 引入）
 │       ├── auth.ts                # Auth.js v5 設定與輔助函數
-│       ├── prisma.ts              # Prisma client 單例
+│       ├── prisma.ts              # Prisma client 單例（使用 PrismaPg adapter）
 │       ├── queryClient.tsx        # TanStack Query provider
 │       ├── validations.ts         # Zod 驗證模式
 │       ├── gameConfig.ts          # 所有可調整的遊戲數值
 │       ├── rng.ts                 # 可複製的隨機數生成器 (mulberry32)
-│       ├── snapshot.ts            # 快照壓縮/解壓縮
+│       ├── snapshot.ts            # 快照壓縮/解壓縮（gzip）
 │       ├── i18n/                  # 國際化（中/英）
+│       │   ├── index.ts           # 語言管理
+│       │   ├── zh.ts              # 繁體中文翻譯
+│       │   └── en.ts              # 英文翻譯
 │       └── nameGenerator/         # 名稱生成工具
 │           ├── person.ts          # 角色名稱
 │           ├── place.ts           # 地點名稱
 │           └── faction.ts         # 勢力名稱
+├── src/components/
+│   ├── SigmaMap.tsx               # 互動式圖形地圖（Sigma.js + graphology）
+│   ├── EventLog.tsx               # 雙語事件日誌（含 i18n）
+│   └── StatsCharts.tsx            # SVG 折線圖（勢力統計）
 ├── server/
-│   ├── runRound.ts                # 主遊戲迴圈協調器
+│   ├── runRound.ts                # 主遊戲迴圈協調器（14 階段 + 佈局 + 快照）
+│   ├── graph/
+│   │   └── layout.ts              # ForceAtlas2 佈局計算
 │   └── phases/                    # 個別遊戲階段
-│       ├── spawnPlaces.ts         # 階段 1：建立新地點
+│       ├── spawnPlaces.ts         # 階段 1：建立新地點（增量佈局）
 │       ├── spawnCharacters.ts     # 階段 2：生成角色
 │       ├── ageAndDeath.ts         # 階段 3：老化 + 死亡檢查
 │       ├── economy.ts             # 階段 4：收入 + 徵兵
@@ -121,8 +130,8 @@ autonomous-world/
 │       ├── relationships.ts       # 階段 6：友誼/不滿
 │       ├── ambitionEvents.ts      # 階段 7：野心變化
 │       ├── loyaltyCheck.ts        # 階段 8：叛變檢查
-│       ├── aiMove.ts              # 階段 9：角色移動
-│       ├── battle.ts              # 階段 10：戰鬥解決
+│       ├── aiMove.ts              # 階段 9：角色移動（信號 + 敵方目標）
+│       ├── battle.ts              # 階段 10：戰鬥解決（含逃脫移動）
 │       ├── build.ts               # 階段 11：建築升級
 │       ├── assignAdmins.ts        # 階段 12：自動指派行政官
 │       ├── factionCollapse.ts     # 階段 13：勢力瓦解
@@ -131,7 +140,7 @@ autonomous-world/
 ├── next.config.ts                 # Next.js 設定（React Compiler 已啟用）
 ├── tsconfig.json                  # TypeScript 設定
 ├── vitest.config.ts               # Vitest 測試設定
-└── package.json                   # 依賴與腳本
+└── package.json                   # 依賴與腳本（build: prisma generate && next build）
 ```
 
 ## 遊戲規則
@@ -157,11 +166,22 @@ autonomous-world/
 - 每個勢力有國王、顏色、領地
 - 當國王死亡，勢力進入「瓦解中」狀態並逐漸解散
 
+### 地圖視覺化
+
+遊戲使用 Sigma.js 提供互動式力導向圖地圖：
+
+- **節點** = 地方（按勢力著色，按駐軍 + 兵力調整大小）
+- **邊** = 連接地方的道路
+- **ForceAtlas2** 佈局讓連接的地方自然靠近
+- **增量佈局** — 新地方在母節點附近生成
+- **HSL → Hex 轉換**（WebGL 需要 hex/rgb 格式）
+- 節點大小：`baseSize(5) + min(12, totalTroops / 15)`
+
 ### 戰鬥
 - 角色每回合移動 1 個領地
 - 當敵方角色相遇時，會進行戰鬥
 - 戰鬥結果取決於兵力、武力/統領屬性、堡壘等級
-- 敗者可能逃脫（基於速度差異）或死亡
+- 敗者可能逃脫到附近友方地點（基於速度差異）或死亡
 
 ### 經濟
 - 每個領地根據市場等級產生收入
@@ -226,7 +246,12 @@ pnpm typecheck
 
 ### Vercel（推薦）
 
+建構腳本會自動在 `next build` 前執行 `prisma generate`：
+
 ```bash
+# 建構指令（在 package.json 中設定）
+prisma generate && next build
+
 # 安裝 Vercel CLI
 pnpm i -g vercel
 
