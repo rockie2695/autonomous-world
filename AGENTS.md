@@ -153,7 +153,7 @@ server/
 ├── graph/
 │   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
-    ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent)
+    ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent, road limit enforced)
     ├── spawnCharacters.ts # Phase 2
     └── ...               # Phases 3-14
 ```
@@ -187,6 +187,14 @@ prisma/
 2. **UI components**: Create in `src/app/` or as shared components
 3. **API routes**: Add to `src/app/api/` following existing patterns
 4. **Config values**: Always add tunable values to `src/lib/gameConfig.ts`
+
+### Road Creation Rules
+
+When creating roads between places, always enforce the `ROAD_MAX_PER_PLACE` limit:
+- Query existing road counts per place before selecting targets
+- Filter out places that already have `ROAD_MAX_PER_PLACE` (3) roads
+- Apply this check in both seed scripts and runtime phases
+- Prevents any place from exceeding the road capacity limit
 
 ### Type Safety
 

@@ -106,7 +106,23 @@ export async function spawnPlaces(
     );
 
     const existingPlaces = parentPlaces.filter((p: { id: string }) => p.id !== parent.id);
-    const targetPlaces = rng.shuffle(existingPlaces).slice(0, roadCount);
+
+    // Count current roads for each existing place to exclude those at max capacity
+    const roadCounts = new Map<string, number>();
+    const roads = await prisma.road.findMany({
+      where: { worldId },
+      select: { aId: true, bId: true },
+    });
+    for (const road of roads) {
+      roadCounts.set(road.aId, (roadCounts.get(road.aId) ?? 0) + 1);
+      roadCounts.set(road.bId, (roadCounts.get(road.bId) ?? 0) + 1);
+    }
+
+    // Filter to places that haven't reached the road limit
+    const availablePlaces = existingPlaces.filter(
+      (p: { id: string }) => (roadCounts.get(p.id) ?? 0) < CONFIG.ROAD_MAX_PER_PLACE
+    );
+    const targetPlaces = rng.shuffle(availablePlaces).slice(0, roadCount);
 
     // 鄰居包含所有會連接的節點
     for (const target of targetPlaces) {
