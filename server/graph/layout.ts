@@ -15,7 +15,43 @@
 import Graph from 'graphology';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
 import { prisma } from '@/lib/prisma';
-import { CONFIG } from '@/lib/gameConfig';
+import { CONFIG, getScalingRatio } from '@/lib/gameConfig';
+
+/**
+ * 根據節點數量動態計算 gravity。
+ * Dynamic gravity based on node count.
+ * 節點少時 0.5，多時 0.3 — 避免炸開
+ * Low node count: 0.5, high: 0.3 — prevent explosion
+ */
+function getGravity(nodeCount: number): number {
+  const minGravity = 0.3;
+  const maxGravity = 0.5;
+  const minNodes = 100;
+  const maxNodes = 2000;
+  if (nodeCount <= minNodes) return maxGravity;
+  if (nodeCount >= maxNodes) return minGravity;
+  return maxGravity - ((nodeCount - minNodes) / (maxNodes - minNodes)) * (maxGravity - minGravity);
+}
+
+/**
+ * 建立 ForceAtlas2 設定 / Create ForceAtlas2 settings
+ * 根據節點數量動態調整 gravity 和 scalingRatio
+ * Dynamically adjusts gravity and scalingRatio based on node count
+ */
+function createFA2Settings(nodeCount: number) {
+  return {
+    gravity: getGravity(nodeCount),
+    scalingRatio: getScalingRatio(nodeCount),
+    barnesHutOptimize: CONFIG.FA2_BARNES_HUT,
+    barnesHutTheta: CONFIG.FA2_BARNES_HUT_THETA,
+    adjustSizes: CONFIG.FA2_ADJUST_SIZES,
+    linLogMode: CONFIG.FA2_LIN_LOG_MODE,
+    edgeWeightInfluence: CONFIG.FA2_EDGE_WEIGHT_INFLUENCE,
+    outboundAttractionDistribution: CONFIG.FA2_OUTBOUND_ATTRACTION_DISTRIBUTION,
+    strongGravityMode: CONFIG.FA2_STRONG_GRAVITY_MODE,
+    slowDown: 1,
+  };
+}
 
 /**
  * 執行 ForceAtlas2 佈局計算。
@@ -67,16 +103,10 @@ export async function recalculateLayout(worldId: string): Promise<void> {
     }
   }
 
-  // 推斷設定 / Infer settings
-  const settings = forceAtlas2.inferSettings(graph);
-
   // 運行 ForceAtlas2 / Run ForceAtlas2
   const positions = forceAtlas2(graph, {
-    iterations: 100,
-    settings: {
-      ...settings,
-      slowDown: 1,
-    },
+    iterations: CONFIG.FA2_ITERATIONS,
+    settings: createFA2Settings(places.length),
   });
 
   // 將結果寫回資料庫 / Write results back to database

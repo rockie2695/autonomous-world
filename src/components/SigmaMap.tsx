@@ -37,17 +37,17 @@ function hslToHex(hsl: string): string {
     const hue2rgb = (p: number, q: number, t: number) => {
       if (t < 0) t += 1;
       if (t > 1) t -= 1;
-      if (t < 1/6) return p + (q - p) * 6 * t;
-      if (t < 1/2) return q;
-      if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
       return p;
     };
 
     const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
     const p = 2 * l - q;
-    r = hue2rgb(p, q, h + 1/3);
+    r = hue2rgb(p, q, h + 1 / 3);
     g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1/3);
+    b = hue2rgb(p, q, h - 1 / 3);
   }
 
   const toHex = (x: number) => {
@@ -125,6 +125,7 @@ export function SigmaMap({
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
+  const hoveredNodeRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -165,15 +166,14 @@ export function SigmaMap({
       const charCount = charsPerPlace.get(place.id) ?? 0;
       const totalTroops = (troopsPerPlace.get(place.id) ?? 0) + place.garrison;
 
-      // 節點大小：基本大小 + 兵力加成，讓勢力顏色作為背景顯示
-      // Node size: base size + troops bonus, faction color as prominent background
-      const baseSize = 5; // 基本大小 / Base size for visibility
-      const troopBonus = Math.min(12, totalTroops / 15); // 兵力加成上限 / Troop bonus cap
-      const nodeSize = baseSize + troopBonus;
+      // 節點大小：使用 log 刻度避免少數巨點吃掉畫面
+      // Node size: use log scale to prevent a few huge nodes from dominating
+      // size = 4 + log(troops + 1) × 2
+      const nodeSize = 4 + Math.log(totalTroops + 1) * 2;
 
       // 有勢力的地方用勢力色（轉換為 hex），無主之地用深灰色
       // Owned places use faction color (converted to hex), unowned use dark gray
-      const color = faction ? hslToHex(faction.color) : '#444';
+      const color = faction ? hslToHex(faction.color) : '#696969';
 
       graph.addNode(place.id, {
         x: place.layoutX,
@@ -195,7 +195,7 @@ export function SigmaMap({
         if (!graph.hasEdge(road.aId, road.bId)) {
           graph.addEdge(road.aId, road.bId, {
             size: 1,
-            color: '#33333380', // 半透明 / Semi-transparent
+            color: '#696969',
           });
         }
       }
@@ -204,25 +204,36 @@ export function SigmaMap({
     // 建立 Sigma 實例 / Create Sigma instance
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
-      defaultEdgeColor: '#33333380',
+      defaultEdgeColor: '#ffffff26', // 半透明白色 / Semi-transparent white
       defaultNodeColor: '#666',
       labelFont: 'monospace',
       labelSize: 14,
-      labelColor: { color: '#fff' },
+      labelColor: { attribute: 'labelColor' }, // 從節點屬性讀取標籤顏色 / Read label color from node attribute
       labelWeight: 'bold',
       renderLabels: true,
       nodeReducer: (node, data) => {
         const res = { ...data };
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(12, Math.min(16, data.size / 2));
+
+        // hover 時標籤變黑色 / Label turns black on hover
+        if (hoveredNodeRef.current === node) {
+          res.labelColor = '#000000'; // 純字串，非物件 / Plain string, not object
+          res.zIndex = 1; // hover 節點在最上層 / Hovered node on top
+        } else {
+          res.labelColor = '#ffffff'; // 預設白色 / Default white
+        }
+
         return res;
       },
     });
 
     // ── Hover 事件 / Hover Events ──────────────────────────────────────────
 
-    sigma.on('enterNode', (event: { node: string }) => {
-      const node = event.node;
+    sigma.on('enterNode', ({ node }) => {
+      hoveredNodeRef.current = node;
+      sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
+
       const attrs = graph.getNodeAttributes(node);
 
       // 顯示工具提示 / Show tooltip
@@ -239,10 +250,20 @@ export function SigmaMap({
         faction: attrs.factionData,
         characterCount: attrs.characterCount,
       });
+
+      if (containerRef.current) {
+        containerRef.current.style.cursor = 'pointer';
+      }
     });
 
     sigma.on('leaveNode', () => {
+      hoveredNodeRef.current = null;
+      sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
       setTooltip(null);
+
+      if (containerRef.current) {
+        containerRef.current.style.cursor = '';
+      }
     });
 
     // ── 點擊事件 / Click Event ─────────────────────────────────────────────
