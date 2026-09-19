@@ -274,6 +274,7 @@ export default function GamePage() {
               roads={worldState?.roads ?? []}
               characters={worldState?.characters ?? []}
               onPlaceClick={(place) => setSelectedPlace(place)}
+              selectedPlaceId={selectedPlace?.id}
             />
           </div>
 
@@ -934,12 +935,14 @@ function GameGraph({
   roads,
   characters,
   onPlaceClick,
+  selectedPlaceId,
 }: {
   places: WorldState['places'];
   factions: WorldState['factions'];
   roads: WorldState['roads'];
   characters: WorldState['characters'];
   onPlaceClick?: (place: WorldState['places'][0]) => void;
+  selectedPlaceId?: string | null;
 }) {
   return (
     <div className="w-full h-full bg-gray-900 relative">
@@ -949,6 +952,7 @@ function GameGraph({
         roads={roads}
         characters={characters}
         onPlaceClick={onPlaceClick}
+        selectedPlaceId={selectedPlaceId}
       />
       {/* 圖例 / Legend */}
       <div className="absolute bottom-4 left-4 bg-gray-800/90 rounded p-3 text-xs space-y-1">

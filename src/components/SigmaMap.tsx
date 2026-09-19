@@ -100,6 +100,7 @@ interface SigmaMapProps {
   roads: Road[];
   characters: Character[];
   onPlaceClick?: (place: Place) => void;
+  selectedPlaceId?: string | null;
 }
 
 interface Tooltip {
@@ -120,6 +121,7 @@ export function SigmaMap({
   roads,
   characters,
   onPlaceClick,
+  selectedPlaceId,
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -217,10 +219,13 @@ export function SigmaMap({
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(12, Math.min(16, data.size / 2));
 
-        // hover 時標籤變黑色，連接節點也高亮 / Label turns black on hover, connected nodes also highlighted
+        // hover / 選中 時標籤變黑色，連接節點也高亮 / Label turns black on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
           res.labelColor = '#000000'; // 純字串，非物件 / Plain string, not object
           res.zIndex = 1; // hover 節點在最上層 / Hovered node on top
+          res.highlighted = true;
+        } else if (selectedPlaceId === node) {
+          res.labelColor = '#000000';
           res.highlighted = true;
         } else if (hoveredNeighborsRef.current.has(node)) {
           res.labelColor = '#000000';
@@ -290,7 +295,7 @@ export function SigmaMap({
       sigma.kill();
       sigmaRef.current = null;
     };
-  }, [places, factions, roads, characters, onPlaceClick]);
+  }, [places, factions, roads, characters, onPlaceClick, selectedPlaceId]);
 
   return (
     <div ref={containerRef} className="w-full h-full relative">
