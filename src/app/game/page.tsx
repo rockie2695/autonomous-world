@@ -850,8 +850,14 @@ function PlaceDetail({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-      <div className="card max-w-md w-full mx-4 animate-slide-in">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+    >
+      <div
+        className="card max-w-md w-full mx-4 animate-slide-in"
+        onClick={(e) => e.stopPropagation()}
+      >
         {/* 標頭 / Header */}
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold">{place.name}</h3>

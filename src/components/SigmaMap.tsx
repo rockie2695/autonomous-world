@@ -126,6 +126,7 @@ export function SigmaMap({
   const graphRef = useRef<Graph | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hoveredNodeRef = useRef<string | null>(null);
+  const hoveredNeighborsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -216,10 +217,14 @@ export function SigmaMap({
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(12, Math.min(16, data.size / 2));
 
-        // hover 時標籤變黑色 / Label turns black on hover
+        // hover 時標籤變黑色，連接節點也高亮 / Label turns black on hover, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
           res.labelColor = '#000000'; // 純字串，非物件 / Plain string, not object
           res.zIndex = 1; // hover 節點在最上層 / Hovered node on top
+          res.highlighted = true;
+        } else if (hoveredNeighborsRef.current.has(node)) {
+          res.labelColor = '#000000';
+          res.highlighted = true;
         } else {
           res.labelColor = '#ffffff'; // 預設白色 / Default white
         }
@@ -232,6 +237,8 @@ export function SigmaMap({
 
     sigma.on('enterNode', ({ node }) => {
       hoveredNodeRef.current = node;
+      // 找出所有連接的鄰居 / Find all connected neighbors
+      hoveredNeighborsRef.current = new Set(graph.neighbors(node));
       sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
 
       const attrs = graph.getNodeAttributes(node);
@@ -258,6 +265,7 @@ export function SigmaMap({
 
     sigma.on('leaveNode', () => {
       hoveredNodeRef.current = null;
+      hoveredNeighborsRef.current = new Set();
       sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
       setTooltip(null);
 
