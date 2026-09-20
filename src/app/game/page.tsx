@@ -863,11 +863,7 @@ function StatsCharts({
 /**
  * 地方詳情面板 — 點擊地圖節點時顯示。 / Place Detail Panel — Shows when map node clicked.
  */
-/**
- * 地方詳情彈窗。 / Place detail panel.
- * 顯示地方資訊、相連地點與駐紮將領。 / Shows place info, linked places, and stationed characters.
- */
-export function PlaceDetail({
+function PlaceDetail({
   place,
   factions,
   characters,

@@ -15,6 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
+import { drawDiscNodeHover } from 'sigma/rendering';
 
 /**
  * 將 HSL 字串轉換為 hex 格式 / Convert HSL string to hex format
@@ -171,6 +172,25 @@ export function SigmaMap({
       labelColor: { attribute: 'labelColor' }, // 從節點屬性讀取標籤顏色 / Read label color from node attribute
       labelWeight: 'bold',
       renderLabels: true,
+      // 自訂 hover 渲染：只在節點「目前」hover / 選中 / 相連時畫白色底框，
+      // 過濾掉 sigma 內部殘留的 hoveredNode / highlightedNodes 狀態。
+      // 這兩個內部狀態沒有公開清除 API，只靠 mousemove 轉移更新；彈窗
+      // 關閉後若不過濾會殘留空白標籤底框。
+      // Custom hover renderer: only draw the white pill for nodes that are
+      // CURRENTLY hovered / selected / neighbor — filter out sigma's sticky
+      // internal hoveredNode / highlightedNodes (no public clear API; they
+      // are only updated by mousemove transitions, so after the popup closes
+      // a stale blank pill would otherwise remain).
+      defaultDrawNodeHover: (context, data, settings) => {
+        const nodeId = (data as { key?: string }).key;
+        const isActive =
+          !!nodeId &&
+          (nodeId === hoveredNodeRef.current ||
+            nodeId === selectedPlaceIdRef.current ||
+            hoveredNeighborsRef.current.has(nodeId));
+        if (!isActive) return;
+        drawDiscNodeHover(context, data, settings);
+      },
       nodeReducer: (node, data) => {
         const res = { ...data };
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
@@ -345,27 +365,12 @@ export function SigmaMap({
   //     fires — clear stale highlights here or nodes keep a white pill) ────
 
   useEffect(() => {
+    // 清除 hover refs 並重繪。sigma 內部的 hoveredNode / highlightedNodes
+    // 殘留由自訂 defaultDrawNodeHover 過濾，因此這裡只需清除 refs。
+    // Clear hover refs and redraw. Residual sigma internal hover state is
+    // filtered out by the custom defaultDrawNodeHover, so only refs need clearing.
     hoveredNodeRef.current = null;
     hoveredNeighborsRef.current = new Set();
-    // 派發合成的 mousemove 到角落空白位置，讓 sigma 的內部 hover 狀態
-    // （白色標籤底框的來源）走正常的轉移邏輯清除：sigma 只在 mousemove
-    // 時更新內部 hoveredNode，mouseleave 不會清除它（彈窗 overlay 攔截
-    // 滑鼠事件時 leaveNode 不會自然觸發）。
-    // Dispatch a synthetic mousemove to an empty corner so sigma's INTERNAL
-    // hover state (source of the white pill) clears through its normal
-    // transition logic: sigma only updates its internal hoveredNode on
-    // mousemove — mouseleave never clears it (while the popup overlay
-    // intercepts mouse events, leaveNode never fires naturally).
-    if (containerRef.current) {
-      const rect = containerRef.current.getBoundingClientRect();
-      containerRef.current.dispatchEvent(
-        new MouseEvent('mousemove', {
-          clientX: rect.left + 10,
-          clientY: rect.top + 10,
-          bubbles: true,
-        })
-      );
-    }
     sigmaRef.current?.refresh();
   }, [selectedPlaceId]);
 
