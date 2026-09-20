@@ -44,3 +44,4 @@ next-env.d.ts
 .omo
 .codegraph
 .opencode
+.playwright-mcp

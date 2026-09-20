@@ -60,6 +60,7 @@ export const en = {
     barracks: 'Barracks',
     garrison: 'Garrison',
     administrator: 'Administrator',
+    linkedPlaces: 'Linked Places',
   },
 
   // ── Faction ─────────────────────────────────────────────────────────────

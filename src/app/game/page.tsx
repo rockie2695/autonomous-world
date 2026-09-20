@@ -18,11 +18,12 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
-import { t, setLocale, getLocale } from '@/lib/i18n';
+import { t, setLocale, getLocale, DEFAULT_LOCALE } from '@/lib/i18n';
 import type { Locale } from '@/lib/i18n';
+import { apiFetch } from '@/lib/api';
 
 // 動態載入 Sigma 地圖（需要 WebGL，僅客戶端）
 // Dynamic import Sigma map (requires WebGL, client-only)
@@ -86,6 +87,27 @@ interface GameEvent {
   round: number;
 }
 
+// ─── 語言訂閱 / Locale Subscription ─────────────────────────────────────────
+
+/** 伺服器端渲染時的語言快照 / Locale snapshot used during server-side rendering */
+function getServerLocale(): Locale {
+  return DEFAULT_LOCALE;
+}
+
+/**
+ * 訂閱 locale 變更（storage 事件）。
+ * Subscribe to locale changes (storage event).
+ * 同分頁的語言切換會呼叫 setLocale() 觸發頁面重載，因此無需即時通知；
+ * Same-tab locale switches call setLocale() which reloads the page, so no
+ * 跨分頁的變更則由 storage 事件通知。
+ * live notification is needed; cross-tab changes arrive via the storage event.
+ */
+function subscribeLocale(callback: () => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+  window.addEventListener('storage', callback);
+  return () => window.removeEventListener('storage', callback);
+}
+
 // ─── 頁面元件 / Page Component ────────────────────────────────────────────────
 
 /**
@@ -94,20 +116,25 @@ interface GameEvent {
  */
 export default function GamePage() {
   const [selectedRound, setSelectedRound] = useState<number>(0);
-  const [locale, setLocaleState] = useState<Locale>('zh');
   const [selectedPlace, setSelectedPlace] = useState<WorldState['places'][0] | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // 初始化語言 / Initialize locale
-  useEffect(() => {
-    setLocaleState(getLocale());
-  }, []);
+  // 語言 — 透過 useSyncExternalStore 讀取 localStorage。
+  // Locale — read from localStorage via useSyncExternalStore.
+  // 伺服器渲染使用預設語言，水合後自動切換至實際語言，避免水合不一致。
+  // Server renders the default locale; switches to the real locale after
+  // hydration, avoiding hydration mismatches.
+  const locale = useSyncExternalStore(
+    subscribeLocale,
+    getLocale,
+    getServerLocale
+  );
 
   // 語言切換 / Language toggle
+  // setLocale 會觸發頁面重載，重載後由 getLocale() 讀取新語言。
+  // setLocale triggers a page reload; the new locale is read by getLocale() after it.
   const handleLocaleToggle = useCallback(() => {
-    const newLocale: Locale = locale === 'zh' ? 'en' : 'zh';
-    setLocale(newLocale);
-    setLocaleState(newLocale);
+    setLocale(locale === 'zh' ? 'en' : 'zh');
   }, [locale]);
 
   // ── 資料取得 — 使用 TanStack Query / Data Fetching — Using TanStack Query ──
@@ -125,7 +152,7 @@ export default function GamePage() {
   } = useQuery<WorldState>({
     queryKey: ['worldState', selectedRound],
     queryFn: async () => {
-      const response = await fetch(`/api/world/state?round=${selectedRound}`);
+      const response = await apiFetch(`/api/world/state?round=${selectedRound}`);
       if (!response.ok) {
         throw new Error('Failed to fetch world state');
       }
@@ -313,6 +340,8 @@ export default function GamePage() {
           place={selectedPlace}
           factions={worldState?.factions ?? []}
           characters={worldState?.characters ?? []}
+          roads={worldState?.roads ?? []}
+          places={worldState?.places ?? []}
           onClose={() => setSelectedPlace(null)}
         />
       )}
@@ -366,7 +395,7 @@ function NextRoundButton({
     setError(null);
 
     try {
-      const res = await fetch('/api/admin/run-round', {
+      const res = await apiFetch('/api/admin/run-round', {
         method: 'POST',
       });
       const data = await res.json();
@@ -591,7 +620,7 @@ function EventLog({
   const { data, isLoading } = useQuery<{ events: GameEvent[] }>({
     queryKey: ['events', round],
     queryFn: async () => {
-      const res = await fetch(`/api/world/events?round=${round}`);
+      const res = await apiFetch(`/api/world/events?round=${round}`);
       if (!res.ok) return { events: [] };
       return res.json();
     },
@@ -711,7 +740,7 @@ function StatsCharts({
 
     async function fetchStats() {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `/api/world/stats?from=0&to=${currentRound}`
         );
         if (res.ok) {
@@ -834,21 +863,36 @@ function StatsCharts({
 /**
  * 地方詳情面板 — 點擊地圖節點時顯示。 / Place Detail Panel — Shows when map node clicked.
  */
-function PlaceDetail({
+/**
+ * 地方詳情彈窗。 / Place detail panel.
+ * 顯示地方資訊、相連地點與駐紮將領。 / Shows place info, linked places, and stationed characters.
+ */
+export function PlaceDetail({
   place,
   factions,
   characters,
+  roads,
+  places,
   onClose,
 }: {
   place: WorldState['places'][0];
   factions: WorldState['factions'];
   characters: WorldState['characters'];
+  roads: WorldState['roads'];
+  places: WorldState['places'];
   onClose: () => void;
 }) {
   const faction = factions.find((f) => f.id === place.factionId);
   const placeChars = characters.filter(
     (c) => c.placeId === place.id && c.alive
   );
+
+  // 相連地點（依道路） / Linked places (via roads)
+  const linkedPlaceNames = roads
+    .filter((road) => road.aId === place.id || road.bId === place.id)
+    .map((road) => (road.aId === place.id ? road.bId : road.aId))
+    .map((id) => places.find((p) => p.id === id)?.name ?? null)
+    .filter((name): name is string => name !== null);
 
   return (
     <div
@@ -880,6 +924,22 @@ function PlaceDetail({
             {faction ? faction.name : t('place.unowned')}
           </span>
         </div>
+
+        {/* 相連地點 / Linked Places */}
+        {linkedPlaceNames.length > 0 && (
+          <div className="mb-3">
+            <div className="text-sm text-gray-400 mb-1">
+              🛣️ {t('map.linkedPlaces')}
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {linkedPlaceNames.map((name) => (
+                <span key={name} className="text-xs bg-gray-800 rounded px-2 py-1">
+                  {name}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* 建築資訊 / Building Info */}
         <div className="grid grid-cols-3 gap-3 mb-4 text-center">

@@ -36,7 +36,7 @@ const { handlers, auth, signIn, signOut } = NextAuth({
    * 將 accounts, sessions, users 儲存在資料庫中。
    * Stores accounts, sessions, users in the database.
    */
-  adapter: PrismaAdapter(prisma) as any,
+  adapter: PrismaAdapter(prisma),
 
   /**
    * 認證提供者。

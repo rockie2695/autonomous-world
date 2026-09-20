@@ -60,6 +60,7 @@ export const zh = {
     barracks: '兵營',
     garrison: '駐軍',
     administrator: '行政官',
+    linkedPlaces: '相連地點',
   },
 
   // ── Faction ─────────────────────────────────────────────────────────────

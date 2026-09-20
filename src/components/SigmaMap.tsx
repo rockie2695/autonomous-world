@@ -109,6 +109,7 @@ interface Tooltip {
   place: Place;
   faction: Faction | null;
   characterCount: number;
+  linkedPlaces: string[];
 }
 
 /**
@@ -129,22 +130,148 @@ export function SigmaMap({
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hoveredNodeRef = useRef<string | null>(null);
   const hoveredNeighborsRef = useRef<Set<string>>(new Set());
+  const selectedPlaceIdRef = useRef(selectedPlaceId);
+  const onPlaceClickRef = useRef(onPlaceClick);
+
+  // 選中地點變更時（開啟或關閉彈窗）立即清除殘留的 tooltip。
+  // Clear the lingering tooltip immediately when the selected place changes
+  // (popup opened or closed). 使用 React 建議的「render 期間調整 state」模式。
+  // Uses React's recommended "adjust state during render" pattern.
+  const [prevSelectedPlaceId, setPrevSelectedPlaceId] = useState(selectedPlaceId);
+  if (prevSelectedPlaceId !== selectedPlaceId) {
+    setPrevSelectedPlaceId(selectedPlaceId);
+    setTooltip(null);
+  }
+
+  // 同步最新 props 到 refs，讓一次性建立的事件處理器與 nodeReducer
+  // 讀取最新值，Sigma 實例不需重建（地圖視角因此不會被重設）。
+  // Sync latest props into refs so the once-created handlers and nodeReducer
+  // read fresh values without re-creating the Sigma instance (the camera
+  // position is therefore never reset).
+  useEffect(() => {
+    selectedPlaceIdRef.current = selectedPlaceId;
+    onPlaceClickRef.current = onPlaceClick;
+  }, [selectedPlaceId, onPlaceClick]);
+
+  // ── 建立 Sigma 實例（僅一次）/ Create the Sigma instance (once) ──────────
 
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // 清理舊圖形 / Clean up old graph
-    if (sigmaRef.current) {
-      sigmaRef.current.kill();
-      sigmaRef.current = null;
-    }
-    if (graphRef.current) {
-      graphRef.current.clear();
-    }
-
-    // 建立新圖形 / Create new graph
     const graph = new Graph();
     graphRef.current = graph;
+
+    // 建立 Sigma 實例 / Create Sigma instance
+    const sigma = new Sigma(graph, containerRef.current, {
+      renderEdgeLabels: false,
+      defaultEdgeColor: '#ffffff26', // 半透明白色 / Semi-transparent white
+      defaultNodeColor: '#666',
+      labelFont: 'monospace',
+      labelSize: 14,
+      labelColor: { attribute: 'labelColor' }, // 從節點屬性讀取標籤顏色 / Read label color from node attribute
+      labelWeight: 'bold',
+      renderLabels: true,
+      nodeReducer: (node, data) => {
+        const res = { ...data };
+        // 節點越大，標籤越清晰 / Larger nodes get clearer labels
+        res.labelSize = Math.max(12, Math.min(16, data.size / 2));
+
+        // hover / 選中 時標籤變黑色，連接節點也高亮 / Label turns black on hover/select, connected nodes also highlighted
+        if (hoveredNodeRef.current === node) {
+          res.labelColor = '#000000'; // 純字串，非物件 / Plain string, not object
+          res.zIndex = 1; // hover 節點在最上層 / Hovered node on top
+          res.highlighted = true;
+        } else if (selectedPlaceIdRef.current === node) {
+          res.labelColor = '#000000';
+          res.highlighted = true;
+        } else if (hoveredNeighborsRef.current.has(node)) {
+          res.labelColor = '#000000';
+          res.highlighted = true;
+        } else {
+          res.labelColor = '#ffffff'; // 預設白色 / Default white
+        }
+
+        return res;
+      },
+    });
+
+    // ── Hover 事件 / Hover Events ──────────────────────────────────────────
+
+    sigma.on('enterNode', ({ node }) => {
+      hoveredNodeRef.current = node;
+      // 找出所有連接的鄰居 / Find all connected neighbors
+      const neighborIds = graph.neighbors(node);
+      hoveredNeighborsRef.current = new Set(neighborIds);
+      sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
+
+      const attrs = graph.getNodeAttributes(node);
+      const viewportPos = sigma.graphToViewport({
+        x: attrs.x,
+        y: attrs.y,
+      });
+
+      // 相連地點名稱 / Linked place names
+      const linkedPlaceNames = neighborIds
+        .map((id) => {
+          const attrs = graph.getNodeAttributes(id);
+          return typeof attrs.label === 'string' ? attrs.label : null;
+        })
+        .filter((name): name is string => name !== null);
+
+      setTooltip({
+        x: viewportPos.x,
+        y: viewportPos.y,
+        place: attrs.placeData,
+        faction: attrs.factionData,
+        characterCount: attrs.characterCount,
+        linkedPlaces: linkedPlaceNames,
+      });
+
+      if (containerRef.current) {
+        containerRef.current.style.cursor = 'pointer';
+      }
+    });
+
+    sigma.on('leaveNode', () => {
+      hoveredNodeRef.current = null;
+      hoveredNeighborsRef.current = new Set();
+      sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
+      setTooltip(null);
+
+      if (containerRef.current) {
+        containerRef.current.style.cursor = '';
+      }
+    });
+
+    // ── 點擊事件 / Click Event ─────────────────────────────────────────────
+
+    sigma.on('clickNode', (event: { node: string }) => {
+      const attrs = graph.getNodeAttributes(event.node);
+      onPlaceClickRef.current?.(attrs.placeData);
+    });
+
+    sigmaRef.current = sigma;
+
+    return () => {
+      sigma.kill();
+      sigmaRef.current = null;
+      // 清除 hover 狀態，避免殘留舊的高亮標籤
+      // Clear hover state to avoid stale highlighted labels
+      hoveredNodeRef.current = null;
+      hoveredNeighborsRef.current = new Set();
+    };
+  }, []);
+
+  // ── 資料變更時重建圖形（不重建 Sigma 實例，保留地圖視角）
+  // ── Rebuild the graph on data changes (without re-creating the Sigma
+  //    instance, preserving the camera position) ────────────────────────────
+
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    const graph = graphRef.current;
+    if (!sigma || !graph) return;
+
+    graph.clear();
 
     // 建立勢力顏色對照 / Create faction color map
     const factionMap = new Map<string, Faction>();
@@ -204,101 +331,52 @@ export function SigmaMap({
       }
     }
 
-    // 建立 Sigma 實例 / Create Sigma instance
-    const sigma = new Sigma(graph, containerRef.current, {
-      renderEdgeLabels: false,
-      defaultEdgeColor: '#ffffff26', // 半透明白色 / Semi-transparent white
-      defaultNodeColor: '#666',
-      labelFont: 'monospace',
-      labelSize: 14,
-      labelColor: { attribute: 'labelColor' }, // 從節點屬性讀取標籤顏色 / Read label color from node attribute
-      labelWeight: 'bold',
-      renderLabels: true,
-      nodeReducer: (node, data) => {
-        const res = { ...data };
-        // 節點越大，標籤越清晰 / Larger nodes get clearer labels
-        res.labelSize = Math.max(12, Math.min(16, data.size / 2));
+    // 資料重建後清除 hover 狀態並重繪 / Clear hover state and redraw after rebuild
+    hoveredNodeRef.current = null;
+    hoveredNeighborsRef.current = new Set();
+    sigma.refresh();
+  }, [places, factions, roads, characters]);
 
-        // hover / 選中 時標籤變黑色，連接節點也高亮 / Label turns black on hover/select, connected nodes also highlighted
-        if (hoveredNodeRef.current === node) {
-          res.labelColor = '#000000'; // 純字串，非物件 / Plain string, not object
-          res.zIndex = 1; // hover 節點在最上層 / Hovered node on top
-          res.highlighted = true;
-        } else if (selectedPlaceId === node) {
-          res.labelColor = '#000000';
-          res.highlighted = true;
-        } else if (hoveredNeighborsRef.current.has(node)) {
-          res.labelColor = '#000000';
-          res.highlighted = true;
-        } else {
-          res.labelColor = '#ffffff'; // 預設白色 / Default white
-        }
+  // ── 選中地點變更時清除 hover 狀態並重繪標籤
+  // ── Clear hover state and redraw labels when the selected place changes
+  //    （彈窗開啟或關閉時，overlay 攔截了滑鼠事件，leaveNode 不會觸發，
+  //      必須在此清除殘留的高亮，否則節點會殘留白色標籤底框）
+  //    (while the popup overlay intercepts mouse events, leaveNode never
+  //     fires — clear stale highlights here or nodes keep a white pill) ────
 
-        return res;
-      },
-    });
-
-    // ── Hover 事件 / Hover Events ──────────────────────────────────────────
-
-    sigma.on('enterNode', ({ node }) => {
-      hoveredNodeRef.current = node;
-      // 找出所有連接的鄰居 / Find all connected neighbors
-      hoveredNeighborsRef.current = new Set(graph.neighbors(node));
-      sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
-
-      const attrs = graph.getNodeAttributes(node);
-
-      // 顯示工具提示 / Show tooltip
-      const nodePos = graph.getNodeAttributes(node);
-      const viewportPos = sigma.graphToViewport({
-        x: nodePos.x,
-        y: nodePos.y,
-      });
-
-      setTooltip({
-        x: viewportPos.x,
-        y: viewportPos.y,
-        place: attrs.placeData,
-        faction: attrs.factionData,
-        characterCount: attrs.characterCount,
-      });
-
-      if (containerRef.current) {
-        containerRef.current.style.cursor = 'pointer';
-      }
-    });
-
-    sigma.on('leaveNode', () => {
-      hoveredNodeRef.current = null;
-      hoveredNeighborsRef.current = new Set();
-      sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
-      setTooltip(null);
-
-      if (containerRef.current) {
-        containerRef.current.style.cursor = '';
-      }
-    });
-
-    // ── 點擊事件 / Click Event ─────────────────────────────────────────────
-
-    sigma.on('clickNode', (event: { node: string }) => {
-      const node = event.node;
-      const attrs = graph.getNodeAttributes(node);
-      if (onPlaceClick) {
-        onPlaceClick(attrs.placeData);
-      }
-    });
-
-    sigmaRef.current = sigma;
-
-    return () => {
-      sigma.kill();
-      sigmaRef.current = null;
-    };
-  }, [places, factions, roads, characters, onPlaceClick, selectedPlaceId]);
+  useEffect(() => {
+    hoveredNodeRef.current = null;
+    hoveredNeighborsRef.current = new Set();
+    // 派發合成的 mousemove 到角落空白位置，讓 sigma 的內部 hover 狀態
+    // （白色標籤底框的來源）走正常的轉移邏輯清除：sigma 只在 mousemove
+    // 時更新內部 hoveredNode，mouseleave 不會清除它（彈窗 overlay 攔截
+    // 滑鼠事件時 leaveNode 不會自然觸發）。
+    // Dispatch a synthetic mousemove to an empty corner so sigma's INTERNAL
+    // hover state (source of the white pill) clears through its normal
+    // transition logic: sigma only updates its internal hoveredNode on
+    // mousemove — mouseleave never clears it (while the popup overlay
+    // intercepts mouse events, leaveNode never fires naturally).
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      containerRef.current.dispatchEvent(
+        new MouseEvent('mousemove', {
+          clientX: rect.left + 10,
+          clientY: rect.top + 10,
+          bubbles: true,
+        })
+      );
+    }
+    sigmaRef.current?.refresh();
+  }, [selectedPlaceId]);
 
   return (
-    <div ref={containerRef} className="w-full h-full relative">
+    // Sigma 的 kill() 會清空整個 container，因此 tooltip 必須放在
+    // sigma container 的兄弟節點，避免 React 移除已被刪除的節點而拋錯。
+    // Sigma's kill() empties the whole container, so the tooltip must be a
+    // SIBLING of the sigma container — otherwise React later tries to remove
+    // an already-deleted node and throws 'removeChild' errors.
+    <div className="w-full h-full relative">
+      <div ref={containerRef} className="absolute inset-0" />
       {/* 工具提示 / Tooltip */}
       {tooltip && (
         <div
@@ -328,6 +406,11 @@ export function SigmaMap({
             <div>🏯 兵營: {tooltip.place.barracks}</div>
             <div>👥 將領: {tooltip.characterCount}</div>
           </div>
+          {tooltip.linkedPlaces.length > 0 && (
+            <div className="mt-1 pt-1 border-t border-gray-700 text-gray-300">
+              🛣️ 相連地點 / Linked places: {tooltip.linkedPlaces.join('、')}
+            </div>
+          )}
         </div>
       )}
     </div>
