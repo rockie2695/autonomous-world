@@ -1,19 +1,7 @@
 // ============================================================================
 // 遊戲頁面 — 主要遊戲介面 / Game Page — Main Game Interface
 // ============================================================================
-// 主要遊戲視圖，包含：
-// The primary game view with:
-// - Sigma.js 圖形地圖（互動式）/ Sigma.js graph map (interactive)
-// - 回合時間軸和自動播放 / Round timeline with auto-play
-// - 勢力排行側邊欄 / Faction ranking sidebar
-// - 將領列表 / Character list
-// - 事件日誌 / Event log
-// - 統計圖表 / Statistics charts
-// - 語言切換 / Language switch
-// - 下一回合按鈕（管理員）/ Next round button (admin only)
-//
-// 這是客戶端元件，因為需要互動性。 / This is a client component because it requires interactivity.
-// 資料在伺服器端取得並作為 props 傳遞。 / Data is fetched on the server and passed as props.
+// 深空科幻主題 / Deep Space Sci-Fi Theme
 // ============================================================================
 
 'use client';
@@ -25,8 +13,6 @@ import { t, setLocale, getLocale, DEFAULT_LOCALE } from '@/lib/i18n';
 import type { Locale } from '@/lib/i18n';
 import { apiFetch } from '@/lib/api';
 
-// 動態載入 Sigma 地圖（需要 WebGL，僅客戶端）
-// Dynamic import Sigma map (requires WebGL, client-only)
 const SigmaMap = dynamic(
   () => import('@/components/SigmaMap').then((mod) => mod.SigmaMap),
   { ssr: false }
@@ -89,19 +75,10 @@ interface GameEvent {
 
 // ─── 語言訂閱 / Locale Subscription ─────────────────────────────────────────
 
-/** 伺服器端渲染時的語言快照 / Locale snapshot used during server-side rendering */
 function getServerLocale(): Locale {
   return DEFAULT_LOCALE;
 }
 
-/**
- * 訂閱 locale 變更（storage 事件）。
- * Subscribe to locale changes (storage event).
- * 同分頁的語言切換會呼叫 setLocale() 觸發頁面重載，因此無需即時通知；
- * Same-tab locale switches call setLocale() which reloads the page, so no
- * 跨分頁的變更則由 storage 事件通知。
- * live notification is needed; cross-tab changes arrive via the storage event.
- */
 function subscribeLocale(callback: () => void): () => void {
   if (typeof window === 'undefined') return () => {};
   window.addEventListener('storage', callback);
@@ -110,40 +87,21 @@ function subscribeLocale(callback: () => void): () => void {
 
 // ─── 頁面元件 / Page Component ────────────────────────────────────────────────
 
-/**
- * 遊戲頁面元件。 / Game page component.
- * 取得世界狀態並渲染所有遊戲 UI 元件。 / Fetches world state and renders all game UI components.
- */
 export default function GamePage() {
   const [selectedRound, setSelectedRound] = useState<number>(0);
   const [selectedPlace, setSelectedPlace] = useState<WorldState['places'][0] | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
 
-  // 語言 — 透過 useSyncExternalStore 讀取 localStorage。
-  // Locale — read from localStorage via useSyncExternalStore.
-  // 伺服器渲染使用預設語言，水合後自動切換至實際語言，避免水合不一致。
-  // Server renders the default locale; switches to the real locale after
-  // hydration, avoiding hydration mismatches.
   const locale = useSyncExternalStore(
     subscribeLocale,
     getLocale,
     getServerLocale
   );
 
-  // 語言切換 / Language toggle
-  // setLocale 會觸發頁面重載，重載後由 getLocale() 讀取新語言。
-  // setLocale triggers a page reload; the new locale is read by getLocale() after it.
   const handleLocaleToggle = useCallback(() => {
     setLocale(locale === 'zh' ? 'en' : 'zh');
   }, [locale]);
 
-  // ── 資料取得 — 使用 TanStack Query / Data Fetching — Using TanStack Query ──
-
-  /**
-   * 取得選定回合的世界狀態。 / Fetch world state for the selected round.
-   * 使用 TanStack Query 自動管理載入狀態、錯誤和快取。
-   * Uses TanStack Query to automatically manage loading state, errors, and caching.
-   */
   const {
     data: worldState,
     isLoading,
@@ -153,27 +111,20 @@ export default function GamePage() {
     queryKey: ['worldState', selectedRound],
     queryFn: async () => {
       const response = await apiFetch(`/api/world/state?round=${selectedRound}`);
-      if (!response.ok) {
-        throw new Error('Failed to fetch world state');
-      }
+      if (!response.ok) throw new Error('Failed to fetch world state');
       return response.json();
     },
-    staleTime: 30 * 1000, // 30 秒內認為資料是新鮮的 / Data is fresh for 30 seconds
+    staleTime: 30 * 1000,
   });
 
-  // 將 error 轉換為字串格式 / Convert error to string format
   const errorMessage = error instanceof Error ? error.message : null;
-
-  // ── 檢查管理員 / Check Admin ─────────────────────────────────────────────
 
   useEffect(() => {
     async function checkAdmin() {
       try {
         const res = await fetch('/api/auth/session');
-        const session = await res.json();
-        // 簡易管理員檢查 — 實際應由後端 session 回傳 isAdmin 欄位
-        // Simple admin check — ideally backend session returns isAdmin field
-        setIsAdmin(false); // 預設非管理員 / Default non-admin
+        await res.json();
+        setIsAdmin(false);
       } catch {
         setIsAdmin(false);
       }
@@ -181,24 +132,17 @@ export default function GamePage() {
     checkAdmin();
   }, []);
 
-  // ── 事件處理器 / Event Handlers ─────────────────────────────────────────────
-
-  /**
-   * 處理時間軸的回合選擇。 / Handle round selection from timeline.
-   */
   const handleRoundSelect = (round: number) => {
     setSelectedRound(round);
   };
 
-  /**
-   * 處理自動播放切換。 / Handle auto-play toggle.
-   */
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playSpeed, setPlaySpeed] = useState(1000); // 每回合毫秒數 / ms per round
+  const [playSpeed, setPlaySpeed] = useState(1000);
+  const [leftSidebarOpen, setLeftSidebarOpen] = useState(false);
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (!isPlaying) return;
-
     const timer = setInterval(() => {
       setSelectedRound((prev) => {
         const next = prev + 1;
@@ -209,54 +153,90 @@ export default function GamePage() {
         return next;
       });
     }, playSpeed);
-
     return () => clearInterval(timer);
   }, [isPlaying, playSpeed, worldState?.world.currentRound]);
 
-  // ── 渲染 / Render ─────────────────────────────────────────────────────────
+  // ── 載入狀態 / Loading State ──────────────────────────────────────────────
 
   if (isLoading && !worldState) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-[#020617]">
         <div className="text-center">
-          <div className="animate-pulse-subtle text-2xl mb-2">⏳</div>
-          <p className="text-gray-400">{t('general.loading')}</p>
+          <div className="relative w-16 h-16 mx-auto mb-4">
+            <div className="absolute inset-0 rounded-full border-2 border-cyan-500/20" />
+            <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-cyan-400 animate-spin" />
+            <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-blue-500 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }} />
+          </div>
+          <p className="font-orbitron text-sm text-cyan-400/70 tracking-wider">{t('general.loading')}</p>
         </div>
       </div>
     );
   }
 
+  // ── 錯誤狀態 / Error State ─────────────────────────────────────────────────
+
   if (errorMessage) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="card text-center max-w-md">
-          <div className="text-4xl mb-4">❌</div>
-          <h2 className="text-xl font-bold mb-2">{t('general.error')}</h2>
-          <p className="text-gray-400 mb-4">{errorMessage}</p>
+      <div className="min-h-screen flex items-center justify-center bg-[#020617]">
+        <div className="text-center max-w-md p-8 rounded-xl border border-red-500/20 bg-gray-900/60 backdrop-blur-sm">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center">
+            <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+          </div>
+          <h2 className="font-orbitron text-lg font-bold text-white mb-2">{t('general.error')}</h2>
+          <p className="text-gray-400 text-sm mb-6">{errorMessage}</p>
           <button
             onClick={() => fetchWorldState()}
-            className="btn btn-secondary"
+            className="px-6 py-2.5 rounded-lg font-medium text-sm text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50 transition-all duration-300"
           >
-            Retry
+            重試
           </button>
         </div>
       </div>
     );
   }
 
+  // ── 主要渲染 / Main Render ─────────────────────────────────────────────────
+
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col bg-[#020617]">
       {/* ── 標頭 / Header ──────────────────────────────────────────────────────── */}
-      <header className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+      <header className="relative flex items-center justify-between px-5 py-3 border-b border-gray-800/60 bg-gray-950/80 backdrop-blur-md">
+        {/* 頂部發光線 / Top glow line */}
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+
         <div className="flex items-center gap-3">
-          <div className="w-6 h-6 rounded bg-gradient-to-br from-cyan-400 to-blue-500" />
-          <span className="font-bold">{t('general.title')}</span>
-          <span className="text-gray-500 text-sm">
-            {t('game.round')} {selectedRound}
+          <div className="relative w-7 h-7">
+            <div className="absolute inset-0 rounded-md bg-gradient-to-br from-cyan-400 to-blue-600 blur-sm opacity-50" />
+            <div className="relative w-full h-full rounded-md bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center">
+              <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+              </svg>
+            </div>
+          </div>
+          <span className="font-orbitron font-bold text-sm tracking-wider text-white">
+            {t('general.title')}
+          </span>
+          <span className="text-cyan-400/60 text-xs font-orbitron tracking-wider">
+            RND {String(selectedRound).padStart(4, '0')}
           </span>
         </div>
+
         <div className="flex items-center gap-2">
-          <span className="text-gray-400 text-sm">
+          {/* 左側邊欄切換按鈕（手機版）/ Left sidebar toggle (mobile) */}
+          <button
+            onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
+            className="md:hidden w-8 h-8 rounded-lg border border-gray-700/60 bg-gray-900/50 text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200"
+            title="時間軸 & 排行"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25H12" />
+            </svg>
+          </button>
+
+          <span className="text-gray-500 text-xs font-orbitron tracking-wider hidden sm:block">
             {worldState?.world.name ?? '—'}
           </span>
           <NextRoundButton
@@ -265,14 +245,24 @@ export default function GamePage() {
             onSuccess={() => fetchWorldState()}
           />
           <LanguageSwitch locale={locale} onToggle={handleLocaleToggle} />
+
+          {/* 右側邊欄切換按鈕（手機版）/ Right sidebar toggle (mobile) */}
+          <button
+            onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+            className="lg:hidden w-8 h-8 rounded-lg border border-gray-700/60 bg-gray-900/50 text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200"
+            title="將領 & 事件"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 12.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5ZM12 18.75a.75.75 0 1 1 0-1.5.75.75 0 0 1 0 1.5Z" />
+            </svg>
+          </button>
         </div>
       </header>
 
       {/* ── 主要內容 / Main Content ────────────────────────────────────────── */}
-      <div className="flex-1 flex">
-        {/* ── 左側邊欄 / Left Sidebar ────────────────────────────────────────────── */}
-        <aside className="w-64 border-r border-gray-800 p-4 space-y-4 overflow-y-auto">
-          {/* 回合時間軸 / Round Timeline */}
+      <div className="flex-1 flex min-h-0 relative">
+        {/* ── 左側邊欄（桌面版）/ Left Sidebar (desktop) ──────────────────────── */}
+        <aside className="hidden md:block w-64 border-r border-gray-800/60 bg-gray-950/50 p-3 space-y-3 overflow-y-auto shrink-0">
           <RoundTimeline
             currentRound={selectedRound}
             maxRound={worldState?.world.currentRound ?? 0}
@@ -282,8 +272,6 @@ export default function GamePage() {
             onPlayToggle={() => setIsPlaying(!isPlaying)}
             onSpeedChange={setPlaySpeed}
           />
-
-          {/* 勢力排行 / Faction Ranking */}
           <FactionRanking
             factions={worldState?.factions ?? []}
             characters={worldState?.characters ?? []}
@@ -291,9 +279,35 @@ export default function GamePage() {
           />
         </aside>
 
+        {/* ── 左側邊欄（手機版覆蓋）/ Left Sidebar (mobile overlay) ──────────── */}
+        {leftSidebarOpen && (
+          <div className="md:hidden fixed inset-0 z-40 flex">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setLeftSidebarOpen(false)} />
+            <div className="relative w-72 bg-gray-950 border-r border-gray-800/60 p-3 space-y-3 overflow-y-auto animate-slide-in-left">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-orbitron text-xs text-gray-500 tracking-wider">控制面板</span>
+                <button onClick={() => setLeftSidebarOpen(false)} className="text-gray-500 hover:text-white">✕</button>
+              </div>
+              <RoundTimeline
+                currentRound={selectedRound}
+                maxRound={worldState?.world.currentRound ?? 0}
+                isPlaying={isPlaying}
+                playSpeed={playSpeed}
+                onSelect={(r) => { handleRoundSelect(r); setLeftSidebarOpen(false); }}
+                onPlayToggle={() => setIsPlaying(!isPlaying)}
+                onSpeedChange={setPlaySpeed}
+              />
+              <FactionRanking
+                factions={worldState?.factions ?? []}
+                characters={worldState?.characters ?? []}
+                places={worldState?.places ?? []}
+              />
+            </div>
+          </div>
+        )}
+
         {/* ── 中央（圖形）/ Center (Graph) ───────────────────────────────────── */}
-        <main className="flex-1 relative">
-          {/* 圖形容器 / Graph container */}
+        <main className="flex-1 relative min-w-0">
           <div className="absolute inset-0">
             <GameGraph
               places={worldState?.places ?? []}
@@ -307,31 +321,55 @@ export default function GamePage() {
 
           {/* 浮動控制項 / Floating controls */}
           <div className="absolute bottom-4 right-4 flex gap-2">
-            <button className="btn btn-secondary btn-sm">+</button>
-            <button className="btn btn-secondary btn-sm">−</button>
+            <button className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm">
+              +
+            </button>
+            <button className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm">
+              −
+            </button>
           </div>
         </main>
 
-        {/* ── 右側邊欄 / Right Sidebar ────────────────────────────────────────────── */}
-        <aside className="w-80 border-l border-gray-800 p-4 space-y-4 overflow-y-auto">
-          {/* 將領列表 / Character List */}
+        {/* ── 右側邊欄（桌面版）/ Right Sidebar (desktop) ──────────────────────── */}
+        <aside className="hidden lg:block w-80 border-l border-gray-800/60 bg-gray-950/50 p-3 space-y-3 overflow-y-auto shrink-0">
           <CharacterList
             characters={worldState?.characters ?? []}
             places={worldState?.places ?? []}
           />
-
-          {/* 事件日誌 / Event Log */}
           <EventLog
             round={selectedRound}
             worldId={worldState?.world.id ?? ''}
           />
-
-          {/* 統計圖表 / Stats Charts */}
           <StatsCharts
             worldId={worldState?.world.id ?? ''}
             currentRound={worldState?.world.currentRound ?? 0}
           />
         </aside>
+
+        {/* ── 右側邊欄（手機版覆蓋）/ Right Sidebar (mobile overlay) ──────────── */}
+        {rightSidebarOpen && (
+          <div className="lg:hidden fixed inset-0 z-40 flex justify-end">
+            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setRightSidebarOpen(false)} />
+            <div className="relative w-80 bg-gray-950 border-l border-gray-800/60 p-3 space-y-3 overflow-y-auto animate-slide-in-right">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-orbitron text-xs text-gray-500 tracking-wider">資訊面板</span>
+                <button onClick={() => setRightSidebarOpen(false)} className="text-gray-500 hover:text-white">✕</button>
+              </div>
+              <CharacterList
+                characters={worldState?.characters ?? []}
+                places={worldState?.places ?? []}
+              />
+              <EventLog
+                round={selectedRound}
+                worldId={worldState?.world.id ?? ''}
+              />
+              <StatsCharts
+                worldId={worldState?.world.id ?? ''}
+                currentRound={worldState?.world.currentRound ?? 0}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── 地方詳情彈窗 / Place Detail Panel ───────────────────────────────── */}
@@ -351,10 +389,6 @@ export default function GamePage() {
 
 // ─── 子元件 / Sub-Components ────────────────────────────────────────────────────
 
-/**
- * 語言切換按鈕。 / Language switch button.
- * 在中文和英文之間切換。 / Toggles between Chinese and English.
- */
 function LanguageSwitch({
   locale,
   onToggle,
@@ -365,7 +399,7 @@ function LanguageSwitch({
   return (
     <button
       onClick={onToggle}
-      className="btn btn-secondary btn-sm text-xs"
+      className="px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider text-cyan-400/70 border border-gray-700/60 bg-gray-900/50 hover:bg-cyan-500/10 hover:border-cyan-500/30 hover:text-cyan-300 transition-all duration-200"
       title={t('general.language')}
     >
       {locale === 'zh' ? 'EN' : '中'}
@@ -373,10 +407,6 @@ function LanguageSwitch({
   );
 }
 
-/**
- * 下一回合按鈕 — 僅管理員可點。 / Next Round Button — Admin only.
- * 非管理員時按鈕灰掉。 / Greyed out for non-admin.
- */
 function NextRoundButton({
   isAdmin,
   currentRound,
@@ -393,20 +423,15 @@ function NextRoundButton({
     if (!isAdmin || loading) return;
     setLoading(true);
     setError(null);
-
     try {
-      const res = await apiFetch('/api/admin/run-round', {
-        method: 'POST',
-      });
+      const res = await apiFetch('/api/admin/run-round', { method: 'POST' });
       const data = await res.json();
-
       if (!res.ok) {
         setError(data.error ?? 'Failed');
         return;
       }
-
       onSuccess();
-    } catch (err) {
+    } catch {
       setError('Network error');
     } finally {
       setLoading(false);
@@ -418,17 +443,17 @@ function NextRoundButton({
       <button
         onClick={handleRun}
         disabled={!isAdmin || loading}
-        className={`btn btn-sm text-xs ${
+        className={`px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider transition-all duration-200 ${
           isAdmin
-            ? 'btn-primary'
-            : 'bg-gray-800 text-gray-500 cursor-not-allowed'
+            ? 'text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50'
+            : 'text-gray-600 border border-gray-800 bg-gray-900/50 cursor-not-allowed'
         }`}
         title={isAdmin ? t('admin.runRound') : t('game.adminOnly')}
       >
         {loading ? '⏳' : '▶'} {t('game.nextRound')}
       </button>
       {error && (
-        <div className="absolute top-full mt-1 right-0 text-xs text-red-400 whitespace-nowrap">
+        <div className="absolute top-full mt-1 right-0 text-xs text-red-400 whitespace-nowrap bg-gray-900/90 px-2 py-1 rounded border border-red-500/20">
           {error}
         </div>
       )}
@@ -436,9 +461,6 @@ function NextRoundButton({
   );
 }
 
-/**
- * 回合時間軸 — 顯示回合並控制自動播放。 / Round Timeline — Shows rounds and controls auto-play.
- */
 function RoundTimeline({
   currentRound,
   maxRound,
@@ -457,12 +479,14 @@ function RoundTimeline({
   onSpeedChange: (speed: number) => void;
 }) {
   return (
-    <div className="card">
-      <h3 className="font-semibold mb-3">{t('game.selectRound')}</h3>
+    <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
+      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+        {t('game.selectRound')}
+      </h3>
       <div className="flex items-center gap-2 mb-3">
         <button
           onClick={onPlayToggle}
-          className="btn btn-secondary btn-sm"
+          className="px-3 py-1.5 rounded-md text-xs font-medium text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 transition-all duration-200"
         >
           {isPlaying ? `⏸ ${t('game.pause')}` : `▶ ${t('game.play')}`}
         </button>
@@ -473,23 +497,23 @@ function RoundTimeline({
           step={500}
           value={playSpeed}
           onChange={(e) => onSpeedChange(Number(e.target.value))}
-          className="flex-1"
+          className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
         />
-        <span className="text-xs text-gray-400">{playSpeed}ms</span>
+        <span className="text-[10px] text-gray-600 font-orbitron">{playSpeed}ms</span>
       </div>
-      <div className="space-y-1 max-h-40 overflow-y-auto">
+      <div className="space-y-0.5 max-h-40 overflow-y-auto">
         {Array.from({ length: Math.min(maxRound + 1, 20) }, (_, i) => maxRound - i).map(
           (round) => (
             <button
               key={round}
               onClick={() => onSelect(round)}
-              className={`w-full text-left px-2 py-1 rounded text-sm ${
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-all duration-200 ${
                 round === currentRound
-                  ? 'bg-cyan-900/30 text-cyan-400'
-                  : 'hover:bg-gray-800'
+                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
               }`}
             >
-              {t('game.round')} {round}
+              <span className="font-orbitron tracking-wider">{t('game.round')} {String(round).padStart(4, '0')}</span>
             </button>
           )
         )}
@@ -498,9 +522,6 @@ function RoundTimeline({
   );
 }
 
-/**
- * 勢力排行 — 顯示勢力統計。 / Faction Ranking — Shows faction statistics.
- */
 function FactionRanking({
   factions,
   characters,
@@ -511,13 +532,15 @@ function FactionRanking({
   places: WorldState['places'];
 }) {
   return (
-    <div className="card">
-      <h3 className="font-semibold mb-3">{t('ranking.title')}</h3>
-      <div className="space-y-2">
+    <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
+      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+        {t('ranking.title')}
+      </h3>
+      <div className="space-y-1.5">
         {factions
           .filter((f) => f.alive)
           .slice(0, 10)
-          .map((faction) => {
+          .map((faction, idx) => {
             const factionChars = characters.filter(
               (c) => c.factionId === faction.id && c.alive
             );
@@ -534,15 +557,15 @@ function FactionRanking({
             );
 
             return (
-              <div key={faction.id} className="flex items-center gap-2 text-sm">
+              <div key={faction.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/30 transition-colors duration-150">
+                <span className="font-orbitron text-[10px] text-gray-600 w-4">{idx + 1}</span>
                 <div
-                  className="w-3 h-3 rounded-full"
+                  className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: faction.color }}
                 />
-                <span className="flex-1 truncate">{faction.name}</span>
-                <span className="text-gray-400">{factionPlaces.length}{t('ranking.territories')}</span>
-                <span className="text-gray-400">{totalTroops}{t('ranking.troops')}</span>
-                <span className="text-gray-400">💰{totalGold}</span>
+                <span className="flex-1 text-xs text-gray-300 truncate">{faction.name}</span>
+                <span className="text-[10px] text-gray-600 font-orbitron">{factionPlaces.length}{t('ranking.territories')}</span>
+                <span className="text-[10px] text-gray-600 font-orbitron">{totalTroops}{t('ranking.troops')}</span>
               </div>
             );
           })}
@@ -551,9 +574,6 @@ function FactionRanking({
   );
 }
 
-/**
- * 將領列表 — 顯示所有將領詳細資料。 / Character List — Shows all characters with full details.
- */
 function CharacterList({
   characters,
   places,
@@ -562,17 +582,17 @@ function CharacterList({
   places: WorldState['places'];
 }) {
   const [selectedChar, setSelectedChar] = useState<string | null>(null);
-
-  // 建立地點名稱對照 / Create place name map
   const placeMap = new Map<string, string>();
   for (const place of places) {
     placeMap.set(place.id, place.name);
   }
 
   return (
-    <div className="card">
-      <h3 className="font-semibold mb-3">{t('faction.characters')}</h3>
-      <div className="space-y-1 max-h-60 overflow-y-auto">
+    <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
+      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+        {t('faction.characters')}
+      </h3>
+      <div className="space-y-0.5 max-h-60 overflow-y-auto">
         {characters
           .filter((c) => c.alive)
           .sort((a, b) => b.troops - a.troops)
@@ -580,22 +600,22 @@ function CharacterList({
             <button
               key={char.id}
               onClick={() => setSelectedChar(selectedChar === char.id ? null : char.id)}
-              className={`w-full text-left px-2 py-1 rounded text-sm ${
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-all duration-150 ${
                 selectedChar === char.id
-                  ? 'bg-cyan-900/30 text-cyan-400'
-                  : 'hover:bg-gray-800'
+                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
               }`}
             >
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
-                {char.isKing && <span className="text-amber-400">👑</span>}
+                {char.isKing && <span className="text-amber-400 text-[10px]">👑</span>}
+                <span className="ml-auto text-[10px] text-gray-600 font-orbitron">⚔{char.troops}</span>
               </div>
-              {/* 展開的詳細資料 / Expanded details */}
               {selectedChar === char.id && (
-                <div className="mt-1 text-xs text-gray-400 space-y-0.5">
-                  <div>{t('character.wu')}: {char.wu} | {t('character.tong')}: {char.tong} | {t('character.jing')}: {char.jing}</div>
-                  <div>{t('character.speed')}: {char.speed} | {t('character.ambition')}: {char.ambition}</div>
-                  <div>{t('character.troops')}: {char.troops} | 💰 {char.gold}</div>
+                <div className="mt-1.5 pl-3 text-[10px] text-gray-500 space-y-0.5 border-l border-gray-800">
+                  <div>{t('character.wu')}: {char.wu} · {t('character.tong')}: {char.tong} · {t('character.jing')}: {char.jing}</div>
+                  <div>{t('character.speed')}: {char.speed} · {t('character.ambition')}: {char.ambition}</div>
+                  <div>{t('character.troops')}: {char.troops} · 💰 {char.gold}</div>
                   <div>{t('character.place')}: {placeMap.get(char.placeId) ?? '—'}</div>
                 </div>
               )}
@@ -606,10 +626,6 @@ function CharacterList({
   );
 }
 
-/**
- * 事件日誌 — 從 API 取得並顯示。 / Event Log — Fetches from API and displays.
- * 使用 i18n 渲染雙語事件。 / Renders bilingual events using i18n.
- */
 function EventLog({
   round,
   worldId,
@@ -629,7 +645,6 @@ function EventLog({
 
   const events = data?.events ?? [];
 
-  // 事件圖示對照 / Event icon map
   const eventIcons: Record<string, string> = {
     PLACE_CREATED: '🏘️',
     CHARACTER_SPAWNED: '👤',
@@ -643,19 +658,15 @@ function EventLog({
     ADMIN_ASSIGNED: '👤',
   };
 
-  // 格式化事件描述 / Format event description
   function formatEvent(event: GameEvent): string {
     const p = event.payload;
     switch (event.type) {
       case 'PLACE_CREATED':
-        return t('events.newPlaceDesc')
-          .replace('{place}', p.placeName as string);
+        return t('events.newPlaceDesc').replace('{place}', p.placeName as string);
       case 'CHARACTER_SPAWNED':
-        return t('events.spawnDesc')
-          .replace('{character}', p.charName as string);
+        return t('events.spawnDesc').replace('{character}', p.charName as string);
       case 'DEATH':
-        return t('events.deathDesc')
-          .replace('{character}', p.charName as string);
+        return t('events.deathDesc').replace('{character}', p.charName as string);
       case 'BATTLE_DEATH':
         return t('events.battleDeathDesc')
           .replace('{character}', p.charName as string)
@@ -665,14 +676,11 @@ function EventLog({
           .replace('{character}', p.charName as string)
           .replace('{place}', p.placeName as string);
       case 'DEFECTION':
-        return t('events.defectionDesc')
-          .replace('{character}', p.charName as string);
+        return t('events.defectionDesc').replace('{character}', p.charName as string);
       case 'FACTION_COLLAPSE':
-        return t('events.collapseDesc')
-          .replace('{faction}', p.factionName as string);
+        return t('events.collapseDesc').replace('{faction}', p.factionName as string);
       case 'FACTION_ELIMINATED':
-        return t('events.eliminationDesc')
-          .replace('{faction}', p.factionName as string);
+        return t('events.eliminationDesc').replace('{faction}', p.factionName as string);
       case 'BUILDING_UPGRADE':
         return t('events.buildingDesc')
           .replace('{place}', p.placeName as string)
@@ -688,21 +696,21 @@ function EventLog({
   }
 
   return (
-    <div className="card">
-      <h3 className="font-semibold mb-3">{t('events.title')}</h3>
-      <div className="space-y-1 max-h-40 overflow-y-auto text-sm">
+    <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
+      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+        {t('events.title')}
+      </h3>
+      <div className="space-y-0.5 max-h-40 overflow-y-auto">
         {isLoading && (
-          <p className="text-gray-500">{t('general.loading')}</p>
+          <p className="text-gray-600 text-xs">{t('general.loading')}</p>
         )}
         {!isLoading && events.length === 0 && (
-          <p className="text-gray-500">{t('game.noData')}</p>
+          <p className="text-gray-600 text-xs">{t('game.noData')}</p>
         )}
         {events.map((event) => (
-          <div key={event.id} className="flex items-start gap-2 py-1 border-b border-gray-800 last:border-0">
-            <span>{eventIcons[event.type] ?? '📌'}</span>
-            <div className="flex-1">
-              <span className="text-gray-300">{formatEvent(event)}</span>
-            </div>
+          <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/20 transition-colors duration-150">
+            <span className="text-xs shrink-0 mt-0.5">{eventIcons[event.type] ?? '📌'}</span>
+            <span className="text-[11px] text-gray-400 leading-relaxed">{formatEvent(event)}</span>
           </div>
         ))}
       </div>
@@ -710,11 +718,6 @@ function EventLog({
   );
 }
 
-/**
- * 統計圖表 — SVG 折線圖。 / Stats Charts — SVG line chart.
- * 顯示兵力、金錢、領地數隨回合變化。 / Shows troops, gold, territories over rounds.
- * 使用各勢力顏色繪製折線。 / Uses faction colors for lines.
- */
 function StatsCharts({
   worldId,
   currentRound,
@@ -734,33 +737,29 @@ function StatsCharts({
     rounds: number[];
   } | null>(null);
 
-  // 從 API 取得統計資料 / Fetch stats from API
   useEffect(() => {
     if (currentRound < 1) return;
-
     async function fetchStats() {
       try {
-        const res = await apiFetch(
-          `/api/world/stats?from=0&to=${currentRound}`
-        );
+        const res = await apiFetch(`/api/world/stats?from=0&to=${currentRound}`);
         if (res.ok) {
           const data = await res.json();
           setChartData(data);
         }
       } catch {
-        // 靜默失敗 / Silent fail
+        // 靜默失敗
       }
     }
-
     fetchStats();
   }, [currentRound, worldId]);
 
-  // 只在有足夠回合時顯示 / Only show when enough rounds exist
   if (currentRound < 1 || !chartData || chartData.factions.length === 0) {
     return (
-      <div className="card">
-        <h3 className="font-semibold mb-3">{t('stats.title')}</h3>
-        <p className="text-gray-500 text-sm">{t('game.noData')}</p>
+      <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
+        <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+          {t('stats.title')}
+        </h3>
+        <p className="text-gray-600 text-xs">{t('game.noData')}</p>
       </div>
     );
   }
@@ -770,7 +769,6 @@ function StatsCharts({
   const height = 120;
   const padding = 30;
 
-  // 繪製折線圖 / Render line chart
   function renderLineChart(
     data: number[][],
     colors: string[],
@@ -780,17 +778,15 @@ function StatsCharts({
     const allValues = data.flat();
     const maxVal = Math.max(...allValues, 1);
     const minVal = 0;
-
     const xScale = (i: number) =>
       padding + (i / Math.max(rounds.length - 1, 1)) * (width - 2 * padding);
     const yScale = (v: number) =>
       height - padding - ((v - minVal) / (maxVal - minVal)) * (height - 2 * padding);
 
     return (
-      <div className="mb-4">
-        <div className="text-xs text-gray-400 mb-1">{title}</div>
+      <div className="mb-3">
+        <div className="text-[10px] text-gray-500 font-orbitron tracking-wider mb-1.5 uppercase">{title}</div>
         <svg width={width} height={height} className="w-full">
-          {/* 網格線 / Grid lines */}
           {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
             <line
               key={pct}
@@ -798,42 +794,24 @@ function StatsCharts({
               y1={height - padding - pct * (height - 2 * padding)}
               x2={width - padding}
               y2={height - padding - pct * (height - 2 * padding)}
-              stroke="#333"
+              stroke="#1e293b"
               strokeWidth={0.5}
             />
           ))}
-
-          {/* 折線 / Lines */}
           {data.map((series, si) => (
             <polyline
               key={si}
-              points={series
-                .map((v, i) => `${xScale(i)},${yScale(v)}`)
-                .join(' ')}
+              points={series.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
               fill="none"
               stroke={colors[si]}
               strokeWidth={1.5}
               strokeLinejoin="round"
             />
           ))}
-
-          {/* 圖例 / Legend */}
           {labels.map((label, i) => (
             <g key={i}>
-              <rect
-                x={padding + i * 70}
-                y={4}
-                width={8}
-                height={8}
-                fill={colors[i]}
-                rx={1}
-              />
-              <text
-                x={padding + i * 70 + 12}
-                y={12}
-                fill="#888"
-                fontSize={8}
-              >
+              <rect x={padding + i * 70} y={4} width={8} height={8} fill={colors[i]} rx={1} />
+              <text x={padding + i * 70 + 12} y={12} fill="#4b5563" fontSize={8} fontFamily="monospace">
                 {label}
               </text>
             </g>
@@ -843,7 +821,6 @@ function StatsCharts({
     );
   }
 
-  // 準備資料 / Prepare data
   const troopData = factions.map((f) => f.troops);
   const goldData = factions.map((f) => f.gold);
   const territoryData = factions.map((f) => f.territories);
@@ -851,8 +828,10 @@ function StatsCharts({
   const factionNames = factions.map((f) => f.name);
 
   return (
-    <div className="card">
-      <h3 className="font-semibold mb-3">{t('stats.title')}</h3>
+    <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
+      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+        {t('stats.title')}
+      </h3>
       {renderLineChart(troopData, factionColors, factionNames, t('stats.troopsOverTime'))}
       {renderLineChart(goldData, factionColors, factionNames, t('stats.goldOverTime'))}
       {renderLineChart(territoryData, factionColors, factionNames, t('stats.territoriesOverTime'))}
@@ -860,9 +839,6 @@ function StatsCharts({
   );
 }
 
-/**
- * 地方詳情面板 — 點擊地圖節點時顯示。 / Place Detail Panel — Shows when map node clicked.
- */
 function PlaceDetail({
   place,
   factions,
@@ -883,7 +859,6 @@ function PlaceDetail({
     (c) => c.placeId === place.id && c.alive
   );
 
-  // 相連地點（依道路） / Linked places (via roads)
   const linkedPlaceNames = roads
     .filter((road) => road.aId === place.id || road.bId === place.id)
     .map((road) => (road.aId === place.id ? road.bId : road.aId))
@@ -892,87 +867,85 @@ function PlaceDetail({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="card max-w-md w-full mx-4 animate-slide-in"
+        className="relative max-w-md w-full mx-4 rounded-xl border border-gray-700/60 bg-gray-900/95 backdrop-blur-md shadow-2xl shadow-black/50 animate-slide-in"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* 頂部發光線 / Top glow line */}
+        <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent" />
+
         {/* 標頭 / Header */}
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold">{place.name}</h3>
+        <div className="flex items-center justify-between p-4 border-b border-gray-800/60">
+          <div>
+            <h3 className="font-orbitron font-bold text-base text-white tracking-wide">{place.name}</h3>
+            {faction && (
+              <div className="flex items-center gap-1.5 mt-1">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: faction.color }} />
+                <span className="text-xs text-gray-400">{faction.name}</span>
+              </div>
+            )}
+            {!faction && (
+              <span className="text-xs text-gray-600">{t('place.unowned')}</span>
+            )}
+          </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white text-xl"
+            className="w-8 h-8 rounded-lg border border-gray-700/60 bg-gray-800/50 text-gray-500 hover:text-white hover:border-gray-600 flex items-center justify-center transition-all duration-200"
           >
             ✕
           </button>
         </div>
 
-        {/* 勢力 / Faction */}
-        <div className="flex items-center gap-2 mb-3">
-          <div
-            className="w-3 h-3 rounded-full"
-            style={{ backgroundColor: faction?.color ?? '#444' }}
-          />
-          <span className="text-sm">
-            {faction ? faction.name : t('place.unowned')}
-          </span>
-        </div>
-
-        {/* 相連地點 / Linked Places */}
-        {linkedPlaceNames.length > 0 && (
-          <div className="mb-3">
-            <div className="text-sm text-gray-400 mb-1">
-              🛣️ {t('map.linkedPlaces')}
+        <div className="p-4 space-y-4">
+          {/* 相連地點 / Linked Places */}
+          {linkedPlaceNames.length > 0 && (
+            <div>
+              <div className="text-[10px] text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+                🛣️ {t('map.linkedPlaces')}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {linkedPlaceNames.map((name) => (
+                  <span key={name} className="text-[10px] bg-gray-800/60 border border-gray-700/40 rounded px-2 py-0.5 text-gray-400">
+                    {name}
+                  </span>
+                ))}
+              </div>
             </div>
-            <div className="flex flex-wrap gap-1">
-              {linkedPlaceNames.map((name) => (
-                <span key={name} className="text-xs bg-gray-800 rounded px-2 py-1">
-                  {name}
-                </span>
+          )}
+
+          {/* 建築資訊 / Building Info */}
+          <div className="grid grid-cols-3 gap-2">
+            <BuildingStat icon="🏰" label={t('place.fortress')} value={place.fortress} />
+            <BuildingStat icon="🏪" label={t('place.market')} value={place.market} />
+            <BuildingStat icon="🏯" label={t('place.barracks')} value={place.barracks} />
+          </div>
+
+          {/* 駐軍 / Garrison */}
+          <div className="flex items-center justify-between p-2.5 rounded-lg bg-gray-800/30 border border-gray-800/40">
+            <span className="text-xs text-gray-500">{t('place.garrison')}</span>
+            <span className="font-orbitron font-bold text-sm text-cyan-400">⚔ {place.garrison}</span>
+          </div>
+
+          {/* 駐紮將領 / Stationed Characters */}
+          <div>
+            <div className="text-[10px] text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+              {t('place.characters')}
+            </div>
+            <div className="space-y-0.5 max-h-28 overflow-y-auto">
+              {placeChars.length === 0 && (
+                <p className="text-gray-700 text-xs">—</p>
+              )}
+              {placeChars.map((char) => (
+                <div key={char.id} className="flex items-center gap-2 px-2 py-1 rounded-md text-xs text-gray-400">
+                  <span className="font-medium text-gray-300">{char.name}</span>
+                  {char.isKing && <span className="text-amber-400 text-[10px]">👑</span>}
+                  <span className="ml-auto text-[10px] font-orbitron text-gray-600">⚔{char.troops}</span>
+                </div>
               ))}
             </div>
-          </div>
-        )}
-
-        {/* 建築資訊 / Building Info */}
-        <div className="grid grid-cols-3 gap-3 mb-4 text-center">
-          <div className="bg-gray-800 rounded p-2">
-            <div className="text-lg font-bold">{place.fortress}</div>
-            <div className="text-xs text-gray-400">🏰 {t('place.fortress')}</div>
-          </div>
-          <div className="bg-gray-800 rounded p-2">
-            <div className="text-lg font-bold">{place.market}</div>
-            <div className="text-xs text-gray-400">🏪 {t('place.market')}</div>
-          </div>
-          <div className="bg-gray-800 rounded p-2">
-            <div className="text-lg font-bold">{place.barracks}</div>
-            <div className="text-xs text-gray-400">🏯 {t('place.barracks')}</div>
-          </div>
-        </div>
-
-        {/* 駐軍 / Garrison */}
-        <div className="mb-4">
-          <div className="text-sm text-gray-400">{t('place.garrison')}</div>
-          <div className="text-lg font-bold">⚔️ {place.garrison}</div>
-        </div>
-
-        {/* 駐紮將領 / Stationed Characters */}
-        <div>
-          <div className="text-sm text-gray-400 mb-2">{t('place.characters')}</div>
-          <div className="space-y-1 max-h-32 overflow-y-auto">
-            {placeChars.length === 0 && (
-              <p className="text-gray-500 text-sm">—</p>
-            )}
-            {placeChars.map((char) => (
-              <div key={char.id} className="flex items-center gap-2 text-sm">
-                <span className="font-medium">{char.name}</span>
-                {char.isKing && <span className="text-amber-400">👑</span>}
-                <span className="text-gray-400">⚔️{char.troops}</span>
-              </div>
-            ))}
           </div>
         </div>
       </div>
@@ -980,11 +953,24 @@ function PlaceDetail({
   );
 }
 
-/**
- * 遊戲圖形 — Sigma.js 圖形視覺化。 / GameGraph — Sigma.js graph visualization.
- * 使用 Sigma.js + graphology 渲染互動式地圖。
- * Uses Sigma.js + graphology to render interactive map.
- */
+function BuildingStat({
+  icon,
+  label,
+  value,
+}: {
+  icon: string;
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="text-center p-2 rounded-lg bg-gray-800/30 border border-gray-800/40">
+      <div className="text-xs mb-0.5">{icon}</div>
+      <div className="font-orbitron font-bold text-sm text-white">{value}</div>
+      <div className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</div>
+    </div>
+  );
+}
+
 function GameGraph({
   places,
   factions,
@@ -1001,7 +987,7 @@ function GameGraph({
   selectedPlaceId?: string | null;
 }) {
   return (
-    <div className="w-full h-full bg-gray-900 relative">
+    <div className="w-full h-full bg-[#020617] relative">
       <SigmaMap
         places={places}
         factions={factions}
@@ -1011,17 +997,19 @@ function GameGraph({
         selectedPlaceId={selectedPlaceId}
       />
       {/* 圖例 / Legend */}
-      <div className="absolute bottom-4 left-4 bg-gray-800/90 rounded p-3 text-xs space-y-1">
-        <div className="font-semibold text-gray-300 mb-2">{t('map.faction')}</div>
+      <div className="absolute bottom-4 left-4 bg-gray-900/90 backdrop-blur-sm border border-gray-800/60 rounded-lg p-3 text-xs space-y-1">
+        <div className="font-orbitron text-[10px] font-semibold tracking-wider text-gray-500 uppercase mb-2">
+          {t('map.faction')}
+        </div>
         {factions.filter(f => f.alive).slice(0, 5).map(f => (
           <div key={f.id} className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: f.color }} />
-            <span className="text-gray-400">{f.name}</span>
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }} />
+            <span className="text-[10px] text-gray-500">{f.name}</span>
           </div>
         ))}
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-gray-600" />
-          <span className="text-gray-400">{t('place.unowned')}</span>
+          <div className="w-2.5 h-2.5 rounded-full bg-gray-600" />
+          <span className="text-[10px] text-gray-500">{t('place.unowned')}</span>
         </div>
       </div>
     </div>

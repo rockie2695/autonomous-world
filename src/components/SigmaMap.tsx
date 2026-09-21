@@ -24,7 +24,7 @@ import { drawDiscNodeHover } from 'sigma/rendering';
 function hslToHex(hsl: string): string {
   // 解析 "hsl(120, 70%, 50%)" 格式 / Parse "hsl(120, 70%, 50%)" format
   const match = hsl.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
-  if (!match) return '#666666'; // 預設灰色 / Default gray
+  if (!match) return '#4a5568'; // 預設灰色 / Default gray
 
   const h = parseInt(match[1]) / 360;
   const s = parseInt(match[2]) / 100;
@@ -165,11 +165,11 @@ export function SigmaMap({
     // 建立 Sigma 實例 / Create Sigma instance
     const sigma = new Sigma(graph, containerRef.current, {
       renderEdgeLabels: false,
-      defaultEdgeColor: '#ffffff26', // 半透明白色 / Semi-transparent white
-      defaultNodeColor: '#666',
+      defaultEdgeColor: '#1e3a5f', // 深藍色道路 / Deep blue roads
+      defaultNodeColor: '#4a5568',
       labelFont: 'monospace',
-      labelSize: 14,
-      labelColor: { attribute: 'labelColor' }, // 從節點屬性讀取標籤顏色 / Read label color from node attribute
+      labelSize: 12,
+      labelColor: { attribute: 'labelColor' },
       labelWeight: 'bold',
       renderLabels: true,
       // 自訂 hover 渲染：只在節點「目前」hover / 選中 / 相連時畫白色底框，
@@ -196,19 +196,19 @@ export function SigmaMap({
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(12, Math.min(16, data.size / 2));
 
-        // hover / 選中 時標籤變黑色，連接節點也高亮 / Label turns black on hover/select, connected nodes also highlighted
+        // hover / 選中 時標籤變青色，連接節點也高亮 / Label turns cyan on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
-          res.labelColor = '#000000'; // 純字串，非物件 / Plain string, not object
-          res.zIndex = 1; // hover 節點在最上層 / Hovered node on top
+          res.labelColor = '#22d3ee'; // 霓虹青綠 / Neon cyan
+          res.zIndex = 1;
           res.highlighted = true;
         } else if (selectedPlaceIdRef.current === node) {
-          res.labelColor = '#000000';
+          res.labelColor = '#22d3ee';
           res.highlighted = true;
         } else if (hoveredNeighborsRef.current.has(node)) {
-          res.labelColor = '#000000';
+          res.labelColor = '#22d3ee';
           res.highlighted = true;
         } else {
-          res.labelColor = '#ffffff'; // 預設白色 / Default white
+          res.labelColor = '#e2e8f0'; // 預設淺灰 / Default light gray
         }
 
         return res;
@@ -323,7 +323,7 @@ export function SigmaMap({
 
       // 有勢力的地方用勢力色（轉換為 hex），無主之地用深灰色
       // Owned places use faction color (converted to hex), unowned use dark gray
-      const color = faction ? hslToHex(faction.color) : '#696969';
+      const color = faction ? hslToHex(faction.color) : '#374151';
 
       graph.addNode(place.id, {
         x: place.layoutX,
@@ -345,7 +345,7 @@ export function SigmaMap({
         if (!graph.hasEdge(road.aId, road.bId)) {
           graph.addEdge(road.aId, road.bId, {
             size: 1,
-            color: '#696969',
+            color: '#1e3a5f',
           });
         }
       }
@@ -385,35 +385,38 @@ export function SigmaMap({
       {/* 工具提示 / Tooltip */}
       {tooltip && (
         <div
-          className="absolute pointer-events-none z-50 bg-gray-800/95 rounded-lg p-3 text-xs shadow-xl border border-gray-700"
+          className="absolute pointer-events-none z-50 bg-gray-900/95 backdrop-blur-md rounded-xl p-3 text-xs shadow-2xl shadow-black/50 border border-gray-700/60"
           style={{
             left: tooltip.x + 15,
             top: tooltip.y - 10,
             transform: 'translateY(-100%)',
           }}
         >
-          <div className="font-bold text-white text-sm mb-1">
+          {/* 頂部發光線 / Top glow line */}
+          <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
+
+          <div className="font-orbitron font-bold text-sm text-white mb-1 tracking-wide">
             {tooltip.place.name}
           </div>
           {tooltip.faction && (
-            <div className="flex items-center gap-1 mb-1">
+            <div className="flex items-center gap-1.5 mb-1.5">
               <div
-                className="w-2 h-2 rounded-full"
+                className="w-2.5 h-2.5 rounded-full"
                 style={{ backgroundColor: tooltip.faction.color }}
               />
-              <span className="text-gray-300">{tooltip.faction.name}</span>
+              <span className="text-gray-300 text-[11px]">{tooltip.faction.name}</span>
             </div>
           )}
-          <div className="space-y-0.5 text-gray-400">
-            <div>⚔️ 兵力: {tooltip.place.garrison} (+ {tooltip.characterCount} 將領)</div>
-            <div>🏰 堡壘: {tooltip.place.fortress}</div>
-            <div>🏪 市場: {tooltip.place.market}</div>
-            <div>🏯 兵營: {tooltip.place.barracks}</div>
-            <div>👥 將領: {tooltip.characterCount}</div>
+          <div className="space-y-0.5 text-gray-500 text-[10px]">
+            <div>⚔️ 兵力: <span className="text-cyan-400 font-orbitron">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
+            <div>🏰 堡壘: <span className="text-gray-400 font-orbitron">{tooltip.place.fortress}</span></div>
+            <div>🏪 市場: <span className="text-gray-400 font-orbitron">{tooltip.place.market}</span></div>
+            <div>🏯 兵營: <span className="text-gray-400 font-orbitron">{tooltip.place.barracks}</span></div>
+            <div>👥 將領: <span className="text-gray-400 font-orbitron">{tooltip.characterCount}</span></div>
           </div>
           {tooltip.linkedPlaces.length > 0 && (
-            <div className="mt-1 pt-1 border-t border-gray-700 text-gray-300">
-              🛣️ 相連地點 / Linked places: {tooltip.linkedPlaces.join('、')}
+            <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-500 text-[10px]">
+              🛣️ {tooltip.linkedPlaces.join('、')}
             </div>
           )}
         </div>

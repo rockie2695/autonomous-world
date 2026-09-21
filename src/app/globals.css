@@ -1,36 +1,28 @@
 @import 'tailwindcss';
 
 /* ============================================================================
-   Global Styles — Autonomous World Dark Tech Theme
-   ============================================================================
-   A minimalist, modern dark theme with subtle tech accents.
-   Uses Tailwind CSS v4 with CSS-first configuration.
+   Global Styles — Autonomous World Deep Space Sci-Fi Theme
    ============================================================================ */
 
 /* ─── Base Styles ─────────────────────────────────────────────────────────── */
 
 :root {
-  /* Dark theme color palette */
-  --color-bg-primary: #030712;
-  --color-bg-secondary: #111827;
-  --color-bg-tertiary: #1f2937;
-  --color-bg-elevated: #374151;
+  --color-bg-primary: #020617;
+  --color-bg-secondary: #0f172a;
+  --color-bg-tertiary: #1e293b;
+  --color-bg-elevated: #334155;
 
-  --color-text-primary: #f9fafb;
-  --color-text-secondary: #d1d5db;
-  --color-text-muted: #9ca3af;
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #cbd5e1;
+  --color-text-muted: #64748b;
 
   --color-accent-cyan: #22d3ee;
   --color-accent-blue: #3b82f6;
   --color-accent-purple: #a855f7;
-  --color-accent-green: #10b981;
-  --color-accent-amber: #f59e0b;
-  --color-accent-red: #ef4444;
 
-  --color-border: #1f2937;
-  --color-border-hover: #374151;
+  --color-border: #1e293b;
+  --color-border-hover: #334155;
 
-  /* Spacing and sizing */
   --radius-sm: 0.375rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.75rem;
@@ -40,29 +32,180 @@
 /* ─── Body ────────────────────────────────────────────────────────────────── */
 
 body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-inter, 'Inter'), system-ui, -apple-system, sans-serif;
   background-color: var(--color-bg-primary);
   color: var(--color-text-primary);
+}
+
+.font-orbitron {
+  font-family: var(--font-orbitron, 'Orbitron'), monospace;
+}
+
+/* ─── Starfield Background ────────────────────────────────────────────────── */
+
+.stars, .stars2 {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at 10% 20%, rgba(255,255,255,0.8) 0%, transparent 100%),
+    radial-gradient(1px 1px at 30% 60%, rgba(255,255,255,0.6) 0%, transparent 100%),
+    radial-gradient(1px 1px at 50% 10%, rgba(255,255,255,0.7) 0%, transparent 100%),
+    radial-gradient(1px 1px at 70% 80%, rgba(255,255,255,0.5) 0%, transparent 100%),
+    radial-gradient(1px 1px at 90% 40%, rgba(255,255,255,0.6) 0%, transparent 100%),
+    radial-gradient(1px 1px at 15% 85%, rgba(255,255,255,0.4) 0%, transparent 100%),
+    radial-gradient(1px 1px at 45% 35%, rgba(255,255,255,0.5) 0%, transparent 100%),
+    radial-gradient(1px 1px at 65% 55%, rgba(255,255,255,0.3) 0%, transparent 100%),
+    radial-gradient(1px 1px at 85% 15%, rgba(255,255,255,0.6) 0%, transparent 100%),
+    radial-gradient(1px 1px at 25% 45%, rgba(255,255,255,0.4) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 5% 50%, rgba(34,211,238,0.6) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 55% 25%, rgba(168,85,247,0.5) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 95% 70%, rgba(59,130,246,0.5) 0%, transparent 100%);
+  background-size: 200px 200px;
+  animation: twinkle 8s ease-in-out infinite alternate;
+}
+
+.stars2 {
+  background-size: 300px 300px;
+  animation: twinkle 12s ease-in-out infinite alternate-reverse;
+  opacity: 0.7;
+}
+
+.nebula {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 20% 50%, rgba(34,211,238,0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 30%, rgba(168,85,247,0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 80%, rgba(59,130,246,0.02) 0%, transparent 50%);
+}
+
+@keyframes twinkle {
+  0% { opacity: 0.6; }
+  100% { opacity: 1; }
+}
+
+/* ─── Shooting Stars / Meteors ────────────────────────────────────────────── */
+
+.shooting-stars {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.shooting-star {
+  position: absolute;
+  width: 120px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(34,211,238,0.8), transparent);
+  border-radius: 50%;
+  animation: shoot linear infinite;
+  opacity: 0;
+}
+
+.shooting-star::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #22d3ee;
+  box-shadow: 0 0 8px 2px rgba(34,211,238,0.6);
+  top: -1.5px;
+}
+
+.shooting-star:nth-child(1) {
+  top: 15%;
+  left: -120px;
+  animation-duration: 3s;
+  animation-delay: 0s;
+}
+.shooting-star:nth-child(2) {
+  top: 45%;
+  left: -120px;
+  animation-duration: 4s;
+  animation-delay: 2s;
+}
+.shooting-star:nth-child(3) {
+  top: 70%;
+  left: -120px;
+  animation-duration: 3.5s;
+  animation-delay: 4s;
+}
+.shooting-star:nth-child(4) {
+  top: 30%;
+  left: -120px;
+  animation-duration: 2.8s;
+  animation-delay: 6s;
+}
+.shooting-star:nth-child(5) {
+  top: 85%;
+  left: -120px;
+  animation-duration: 3.2s;
+  animation-delay: 8s;
+}
+
+@keyframes shoot {
+  0% {
+    transform: translateX(0) translateY(0) rotate(-15deg);
+    opacity: 0;
+  }
+  5% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(calc(100vw + 200px)) translateY(100px) rotate(-15deg);
+    opacity: 0;
+  }
+}
+
+/* ─── Scanline Effect (subtle) ────────────────────────────────────────────── */
+
+.scanline::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+}
+
+/* ─── Gradient Text ───────────────────────────────────────────────────────── */
+
+.gradient-text-hero {
+  background: linear-gradient(135deg, #22d3ee 0%, #3b82f6 50%, #a855f7 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────────────────────── */
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-bg-secondary);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-bg-elevated);
-  border-radius: 4px;
+  background: #1e293b;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-muted);
+  background: #334155;
 }
 
 /* ─── Selection ───────────────────────────────────────────────────────────── */
@@ -79,48 +222,39 @@ body {
   outline-offset: 2px;
 }
 
-/* ─── Utility Classes ─────────────────────────────────────────────────────── */
+/* ─── Animations ──────────────────────────────────────────────────────────── */
 
-/* Glass morphism effect for cards */
-.glass {
-  background: rgba(17, 24, 39, 0.8);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--color-border);
-}
-
-/* Subtle glow effect for interactive elements */
-.glow-cyan {
-  box-shadow: 0 0 20px rgba(34, 211, 238, 0.15);
-}
-
-.glow-blue {
-  box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
-}
-
-/* Gradient text */
-.gradient-text {
-  background: linear-gradient(135deg, var(--color-accent-cyan), var(--color-accent-purple));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* Pulse animation for loading states */
-@keyframes pulse-subtle {
-  0%, 100% {
+@keyframes slide-in {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
     opacity: 1;
   }
-  50% {
-    opacity: 0.7;
+}
+
+.animate-slide-in {
+  animation: slide-in 0.25s ease-out;
+}
+
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
   }
 }
 
-.animate-pulse-subtle {
-  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+.animate-slide-in-left {
+  animation: slide-in-left 0.25s ease-out;
 }
 
-/* Slide-in animation for panels */
-@keyframes slide-in {
+@keyframes slide-in-right {
   from {
     transform: translateX(100%);
     opacity: 0;
@@ -131,107 +265,15 @@ body {
   }
 }
 
-.animate-slide-in {
-  animation: slide-in 0.3s ease-out;
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
 }
 
-/* ─── Component Styles ────────────────────────────────────────────────────── */
-
-/* Card component */
-.card {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 1rem;
-  transition: border-color 0.2s ease;
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
 }
 
-.card:hover {
-  border-color: var(--color-border-hover);
-}
-
-/* Button base */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
-  border-radius: var(--radius-md);
-  font-weight: 500;
-  transition: all 0.2s ease;
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, var(--color-accent-cyan), var(--color-accent-blue));
-  color: white;
-}
-
-.btn-primary:hover {
-  opacity: 0.9;
-  transform: translateY(-1px);
-}
-
-.btn-secondary {
-  background: var(--color-bg-tertiary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border);
-}
-
-.btn-secondary:hover {
-  background: var(--color-bg-elevated);
-  border-color: var(--color-border-hover);
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-  transform: none;
-}
-
-.btn-sm {
-  padding: 0.25rem 0.5rem;
-  font-size: 0.875rem;
-}
-
-/* ─── Game-specific Styles ────────────────────────────────────────────────── */
-
-/* Faction colors (applied dynamically via style attribute) */
-.faction-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
-  font-size: 0.75rem;
-  font-weight: 500;
-}
-
-/* Timeline marker */
-.timeline-marker {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--color-accent-cyan);
-  border: 2px solid var(--color-bg-primary);
-  transition: transform 0.2s ease;
-}
-
-.timeline-marker.active {
-  transform: scale(1.3);
-  box-shadow: 0 0 12px rgba(34, 211, 238, 0.5);
-}
-
-/* Stat value display */
-.stat-value {
-  font-size: 1.5rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.stat-label {
-  font-size: 0.75rem;
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
