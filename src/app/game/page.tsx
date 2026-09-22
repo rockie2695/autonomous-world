@@ -140,6 +140,7 @@ export default function GamePage() {
   const [playSpeed, setPlaySpeed] = useState(1000);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats'>('characters');
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -167,7 +168,7 @@ export default function GamePage() {
             <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-cyan-400 animate-spin" />
             <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-blue-500 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }} />
           </div>
-          <p className="font-orbitron text-sm text-cyan-400/70 tracking-wider">{t('general.loading')}</p>
+          <p className="font-orbitron text-base text-cyan-400/70 tracking-wider">{t('general.loading')}</p>
         </div>
       </div>
     );
@@ -185,10 +186,10 @@ export default function GamePage() {
             </svg>
           </div>
           <h2 className="font-orbitron text-lg font-bold text-white mb-2">{t('general.error')}</h2>
-          <p className="text-gray-400 text-sm mb-6">{errorMessage}</p>
+          <p className="text-gray-400 text-base mb-6">{errorMessage}</p>
           <button
             onClick={() => fetchWorldState()}
-            className="px-6 py-2.5 rounded-lg font-medium text-sm text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50 transition-all duration-300"
+            className="px-6 py-2.5 rounded-lg font-medium text-base text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50 transition-all duration-300"
           >
             重試
           </button>
@@ -331,42 +332,66 @@ export default function GamePage() {
         </main>
 
         {/* ── 右側邊欄（桌面版）/ Right Sidebar (desktop) ──────────────────────── */}
-        <aside className="hidden lg:block w-80 border-l border-gray-800/60 bg-gray-950/50 p-3 space-y-3 overflow-y-auto shrink-0">
-          <CharacterList
-            characters={worldState?.characters ?? []}
-            places={worldState?.places ?? []}
+        <aside className="hidden lg:flex flex-col w-80 border-l border-gray-800/60 bg-gray-950/50 shrink-0 overflow-hidden">
+          <RightSidebarTabs
+            activeTab={rightTab}
+            onTabChange={setRightTab}
           />
-          <EventLog
-            round={selectedRound}
-            worldId={worldState?.world.id ?? ''}
-          />
-          <StatsCharts
-            worldId={worldState?.world.id ?? ''}
-            currentRound={worldState?.world.currentRound ?? 0}
-          />
+          <div className="flex-1 overflow-y-auto p-3">
+            {rightTab === 'characters' && (
+              <CharacterList
+                characters={worldState?.characters ?? []}
+                places={worldState?.places ?? []}
+              />
+            )}
+            {rightTab === 'events' && (
+              <EventLog
+                round={selectedRound}
+                worldId={worldState?.world.id ?? ''}
+              />
+            )}
+            {rightTab === 'stats' && (
+              <StatsCharts
+                worldId={worldState?.world.id ?? ''}
+                currentRound={worldState?.world.currentRound ?? 0}
+              />
+            )}
+          </div>
         </aside>
 
         {/* ── 右側邊欄（手機版覆蓋）/ Right Sidebar (mobile overlay) ──────────── */}
         {rightSidebarOpen && (
           <div className="lg:hidden fixed inset-0 z-40 flex justify-end">
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setRightSidebarOpen(false)} />
-            <div className="relative w-80 bg-gray-950 border-l border-gray-800/60 p-3 space-y-3 overflow-y-auto animate-slide-in-right">
-              <div className="flex items-center justify-between mb-2">
+            <div className="relative w-80 bg-gray-950 border-l border-gray-800/60 flex flex-col overflow-hidden animate-slide-in-right">
+              <div className="flex items-center justify-between px-3 pt-3 pb-0">
                 <span className="font-orbitron text-xs text-gray-500 tracking-wider">資訊面板</span>
                 <button onClick={() => setRightSidebarOpen(false)} className="text-gray-500 hover:text-white">✕</button>
               </div>
-              <CharacterList
-                characters={worldState?.characters ?? []}
-                places={worldState?.places ?? []}
+              <RightSidebarTabs
+                activeTab={rightTab}
+                onTabChange={setRightTab}
               />
-              <EventLog
-                round={selectedRound}
-                worldId={worldState?.world.id ?? ''}
-              />
-              <StatsCharts
-                worldId={worldState?.world.id ?? ''}
-                currentRound={worldState?.world.currentRound ?? 0}
-              />
+              <div className="flex-1 overflow-y-auto p-3">
+                {rightTab === 'characters' && (
+                  <CharacterList
+                    characters={worldState?.characters ?? []}
+                    places={worldState?.places ?? []}
+                  />
+                )}
+                {rightTab === 'events' && (
+                  <EventLog
+                    round={selectedRound}
+                    worldId={worldState?.world.id ?? ''}
+                  />
+                )}
+                {rightTab === 'stats' && (
+                  <StatsCharts
+                    worldId={worldState?.world.id ?? ''}
+                    currentRound={worldState?.world.currentRound ?? 0}
+                  />
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -404,6 +429,41 @@ function LanguageSwitch({
     >
       {locale === 'zh' ? 'EN' : '中'}
     </button>
+  );
+}
+
+// ─── 右側邊欄分頁 / Right Sidebar Tabs ────────────────────────────────────────────
+
+function RightSidebarTabs({
+  activeTab,
+  onTabChange,
+}: {
+  activeTab: 'characters' | 'events' | 'stats';
+  onTabChange: (tab: 'characters' | 'events' | 'stats') => void;
+}) {
+  const tabs = [
+    { key: 'characters' as const, label: t('faction.tab'), icon: '👤' },
+    { key: 'events' as const, label: t('events.tab'), icon: '📜' },
+    { key: 'stats' as const, label: t('stats.tab'), icon: '📊' },
+  ];
+
+  return (
+    <div className="flex border-b border-gray-800/60">
+      {tabs.map((tab) => (
+        <button
+          key={tab.key}
+          onClick={() => onTabChange(tab.key)}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-orbitron tracking-wider transition-all duration-200 border-b-2 ${
+            activeTab === tab.key
+              ? 'text-cyan-400 border-cyan-400 bg-cyan-500/5'
+              : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/30'
+          }`}
+        >
+          <span>{tab.icon}</span>
+          <span>{tab.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -480,13 +540,13 @@ function RoundTimeline({
 }) {
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
         {t('game.selectRound')}
       </h3>
       <div className="flex items-center gap-2 mb-3">
         <button
           onClick={onPlayToggle}
-          className="px-3 py-1.5 rounded-md text-xs font-medium text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 transition-all duration-200"
+          className="px-3 py-1.5 rounded-md text-sm font-medium text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 transition-all duration-200"
         >
           {isPlaying ? `⏸ ${t('game.pause')}` : `▶ ${t('game.play')}`}
         </button>
@@ -499,7 +559,7 @@ function RoundTimeline({
           onChange={(e) => onSpeedChange(Number(e.target.value))}
           className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
         />
-        <span className="text-[10px] text-gray-600 font-orbitron">{playSpeed}ms</span>
+        <span className="text-xs text-gray-600 font-orbitron">{playSpeed}ms</span>
       </div>
       <div className="space-y-0.5 max-h-40 overflow-y-auto">
         {Array.from({ length: Math.min(maxRound + 1, 20) }, (_, i) => maxRound - i).map(
@@ -507,7 +567,7 @@ function RoundTimeline({
             <button
               key={round}
               onClick={() => onSelect(round)}
-              className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-all duration-200 ${
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-200 ${
                 round === currentRound
                   ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
                   : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
@@ -533,7 +593,7 @@ function FactionRanking({
 }) {
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
         {t('ranking.title')}
       </h3>
       <div className="space-y-1.5">
@@ -558,14 +618,14 @@ function FactionRanking({
 
             return (
               <div key={faction.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/30 transition-colors duration-150">
-                <span className="font-orbitron text-[10px] text-gray-600 w-4">{idx + 1}</span>
+                <span className="font-orbitron text-xs text-gray-600 w-4">{idx + 1}</span>
                 <div
                   className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: faction.color }}
                 />
-                <span className="flex-1 text-xs text-gray-300 truncate">{faction.name}</span>
-                <span className="text-[10px] text-gray-600 font-orbitron">{factionPlaces.length}{t('ranking.territories')}</span>
-                <span className="text-[10px] text-gray-600 font-orbitron">{totalTroops}{t('ranking.troops')}</span>
+                <span className="flex-1 text-sm text-gray-300 truncate">{faction.name}</span>
+                <span className="text-xs text-gray-600 font-orbitron">{factionPlaces.length}{t('ranking.territories')}</span>
+                <span className="text-xs text-gray-600 font-orbitron">{totalTroops}{t('ranking.troops')}</span>
               </div>
             );
           })}
@@ -589,7 +649,7 @@ function CharacterList({
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
         {t('faction.characters')}
       </h3>
       <div className="space-y-0.5 max-h-60 overflow-y-auto">
@@ -600,7 +660,7 @@ function CharacterList({
             <button
               key={char.id}
               onClick={() => setSelectedChar(selectedChar === char.id ? null : char.id)}
-              className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs transition-all duration-150 ${
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-150 ${
                 selectedChar === char.id
                   ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
@@ -608,11 +668,11 @@ function CharacterList({
             >
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
-                {char.isKing && <span className="text-amber-400 text-[10px]">👑</span>}
-                <span className="ml-auto text-[10px] text-gray-600 font-orbitron">⚔{char.troops}</span>
+                {char.isKing && <span className="text-amber-400 text-xs">👑</span>}
+                <span className="ml-auto text-xs text-gray-600 font-orbitron">⚔{char.troops}</span>
               </div>
               {selectedChar === char.id && (
-                <div className="mt-1.5 pl-3 text-[10px] text-gray-500 space-y-0.5 border-l border-gray-800">
+                <div className="mt-1.5 pl-3 text-xs text-gray-500 space-y-0.5 border-l border-gray-800">
                   <div>{t('character.wu')}: {char.wu} · {t('character.tong')}: {char.tong} · {t('character.jing')}: {char.jing}</div>
                   <div>{t('character.speed')}: {char.speed} · {t('character.ambition')}: {char.ambition}</div>
                   <div>{t('character.troops')}: {char.troops} · 💰 {char.gold}</div>
@@ -697,7 +757,7 @@ function EventLog({
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
         {t('events.title')}
       </h3>
       <div className="space-y-0.5 max-h-40 overflow-y-auto">
@@ -709,8 +769,8 @@ function EventLog({
         )}
         {events.map((event) => (
           <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/20 transition-colors duration-150">
-            <span className="text-xs shrink-0 mt-0.5">{eventIcons[event.type] ?? '📌'}</span>
-            <span className="text-[11px] text-gray-400 leading-relaxed">{formatEvent(event)}</span>
+            <span className="text-sm shrink-0 mt-0.5">{eventIcons[event.type] ?? '📌'}</span>
+            <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
           </div>
         ))}
       </div>
@@ -756,7 +816,7 @@ function StatsCharts({
   if (currentRound < 1 || !chartData || chartData.factions.length === 0) {
     return (
       <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-        <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+        <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
           {t('stats.title')}
         </h3>
         <p className="text-gray-600 text-xs">{t('game.noData')}</p>
@@ -785,7 +845,7 @@ function StatsCharts({
 
     return (
       <div className="mb-3">
-        <div className="text-[10px] text-gray-500 font-orbitron tracking-wider mb-1.5 uppercase">{title}</div>
+        <div className="text-xs text-gray-500 font-orbitron tracking-wider mb-1.5 uppercase">{title}</div>
         <svg width={width} height={height} className="w-full">
           {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
             <line
@@ -829,7 +889,7 @@ function StatsCharts({
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-xs font-semibold tracking-wider text-gray-400 mb-3 uppercase">
+      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
         {t('stats.title')}
       </h3>
       {renderLineChart(troopData, factionColors, factionNames, t('stats.troopsOverTime'))}
@@ -884,7 +944,7 @@ function PlaceDetail({
             {faction && (
               <div className="flex items-center gap-1.5 mt-1">
                 <div className="w-2 h-2 rounded-full" style={{ backgroundColor: faction.color }} />
-                <span className="text-xs text-gray-400">{faction.name}</span>
+                <span className="text-sm text-gray-400">{faction.name}</span>
               </div>
             )}
             {!faction && (
@@ -903,12 +963,12 @@ function PlaceDetail({
           {/* 相連地點 / Linked Places */}
           {linkedPlaceNames.length > 0 && (
             <div>
-              <div className="text-[10px] text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+              <div className="text-xs text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
                 🛣️ {t('map.linkedPlaces')}
               </div>
               <div className="flex flex-wrap gap-1">
                 {linkedPlaceNames.map((name) => (
-                  <span key={name} className="text-[10px] bg-gray-800/60 border border-gray-700/40 rounded px-2 py-0.5 text-gray-400">
+                  <span key={name} className="text-xs bg-gray-800/60 border border-gray-700/40 rounded px-2 py-0.5 text-gray-400">
                     {name}
                   </span>
                 ))}
@@ -925,13 +985,13 @@ function PlaceDetail({
 
           {/* 駐軍 / Garrison */}
           <div className="flex items-center justify-between p-2.5 rounded-lg bg-gray-800/30 border border-gray-800/40">
-            <span className="text-xs text-gray-500">{t('place.garrison')}</span>
-            <span className="font-orbitron font-bold text-sm text-cyan-400">⚔ {place.garrison}</span>
+            <span className="text-sm text-gray-500">{t('place.garrison')}</span>
+            <span className="font-orbitron font-bold text-base text-cyan-400">⚔ {place.garrison}</span>
           </div>
 
           {/* 駐紮將領 / Stationed Characters */}
           <div>
-            <div className="text-[10px] text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+            <div className="text-xs text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
               {t('place.characters')}
             </div>
             <div className="space-y-0.5 max-h-28 overflow-y-auto">
@@ -939,10 +999,10 @@ function PlaceDetail({
                 <p className="text-gray-700 text-xs">—</p>
               )}
               {placeChars.map((char) => (
-                <div key={char.id} className="flex items-center gap-2 px-2 py-1 rounded-md text-xs text-gray-400">
+                <div key={char.id} className="flex items-center gap-2 px-2 py-1 rounded-md text-sm text-gray-400">
                   <span className="font-medium text-gray-300">{char.name}</span>
-                  {char.isKing && <span className="text-amber-400 text-[10px]">👑</span>}
-                  <span className="ml-auto text-[10px] font-orbitron text-gray-600">⚔{char.troops}</span>
+                  {char.isKing && <span className="text-amber-400 text-xs">👑</span>}
+                  <span className="ml-auto text-xs font-orbitron text-gray-600">⚔{char.troops}</span>
                 </div>
               ))}
             </div>
@@ -964,9 +1024,9 @@ function BuildingStat({
 }) {
   return (
     <div className="text-center p-2 rounded-lg bg-gray-800/30 border border-gray-800/40">
-      <div className="text-xs mb-0.5">{icon}</div>
-      <div className="font-orbitron font-bold text-sm text-white">{value}</div>
-      <div className="text-[9px] text-gray-600 uppercase tracking-wider">{label}</div>
+      <div className="text-sm mb-0.5">{icon}</div>
+      <div className="font-orbitron font-bold text-base text-white">{value}</div>
+      <div className="text-xs text-gray-600 uppercase tracking-wider">{label}</div>
     </div>
   );
 }
@@ -997,19 +1057,19 @@ function GameGraph({
         selectedPlaceId={selectedPlaceId}
       />
       {/* 圖例 / Legend */}
-      <div className="absolute bottom-4 left-4 bg-gray-900/90 backdrop-blur-sm border border-gray-800/60 rounded-lg p-3 text-xs space-y-1">
-        <div className="font-orbitron text-[10px] font-semibold tracking-wider text-gray-500 uppercase mb-2">
+      <div className="absolute bottom-4 left-4 bg-gray-900/90 backdrop-blur-sm border border-gray-800/60 rounded-lg p-3 text-sm space-y-1">
+        <div className="font-orbitron text-xs font-semibold tracking-wider text-gray-500 uppercase mb-2">
           {t('map.faction')}
         </div>
         {factions.filter(f => f.alive).slice(0, 5).map(f => (
           <div key={f.id} className="flex items-center gap-2">
             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }} />
-            <span className="text-[10px] text-gray-500">{f.name}</span>
+            <span className="text-xs text-gray-500">{f.name}</span>
           </div>
         ))}
         <div className="flex items-center gap-2">
           <div className="w-2.5 h-2.5 rounded-full bg-gray-600" />
-          <span className="text-[10px] text-gray-500">{t('place.unowned')}</span>
+          <span className="text-xs text-gray-500">{t('place.unowned')}</span>
         </div>
       </div>
     </div>

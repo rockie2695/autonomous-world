@@ -168,7 +168,7 @@ export function SigmaMap({
       defaultEdgeColor: '#1e3a5f', // 深藍色道路 / Deep blue roads
       defaultNodeColor: '#4a5568',
       labelFont: 'monospace',
-      labelSize: 12,
+      labelSize: 14,
       labelColor: { attribute: 'labelColor' },
       labelWeight: 'bold',
       renderLabels: true,
@@ -194,7 +194,7 @@ export function SigmaMap({
       nodeReducer: (node, data) => {
         const res = { ...data };
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
-        res.labelSize = Math.max(12, Math.min(16, data.size / 2));
+        res.labelSize = Math.max(14, Math.min(20, data.size / 2));
 
         // hover / 選中 時標籤變青色，連接節點也高亮 / Label turns cyan on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
@@ -385,7 +385,7 @@ export function SigmaMap({
       {/* 工具提示 / Tooltip */}
       {tooltip && (
         <div
-          className="absolute pointer-events-none z-50 bg-gray-900/95 backdrop-blur-md rounded-xl p-3 text-xs shadow-2xl shadow-black/50 border border-gray-700/60"
+          className="absolute pointer-events-none z-50 bg-gray-900/95 backdrop-blur-md rounded-xl p-3 text-sm shadow-2xl shadow-black/50 border border-gray-700/60"
           style={{
             left: tooltip.x + 15,
             top: tooltip.y - 10,
@@ -395,7 +395,7 @@ export function SigmaMap({
           {/* 頂部發光線 / Top glow line */}
           <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
 
-          <div className="font-orbitron font-bold text-sm text-white mb-1 tracking-wide">
+          <div className="font-orbitron font-bold text-base text-white mb-1 tracking-wide">
             {tooltip.place.name}
           </div>
           {tooltip.faction && (
@@ -404,10 +404,10 @@ export function SigmaMap({
                 className="w-2.5 h-2.5 rounded-full"
                 style={{ backgroundColor: tooltip.faction.color }}
               />
-              <span className="text-gray-300 text-[11px]">{tooltip.faction.name}</span>
+              <span className="text-gray-300 text-xs">{tooltip.faction.name}</span>
             </div>
           )}
-          <div className="space-y-0.5 text-gray-500 text-[10px]">
+          <div className="space-y-0.5 text-gray-500 text-xs">
             <div>⚔️ 兵力: <span className="text-cyan-400 font-orbitron">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
             <div>🏰 堡壘: <span className="text-gray-400 font-orbitron">{tooltip.place.fortress}</span></div>
             <div>🏪 市場: <span className="text-gray-400 font-orbitron">{tooltip.place.market}</span></div>
@@ -415,7 +415,7 @@ export function SigmaMap({
             <div>👥 將領: <span className="text-gray-400 font-orbitron">{tooltip.characterCount}</span></div>
           </div>
           {tooltip.linkedPlaces.length > 0 && (
-            <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-500 text-[10px]">
+            <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-500 text-xs">
               🛣️ {tooltip.linkedPlaces.join('、')}
             </div>
           )}

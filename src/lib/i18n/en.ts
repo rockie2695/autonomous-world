@@ -26,10 +26,32 @@ export const en = {
     description: 'Watch hundreds of AI characters build factions, conquer, ally, and betray on a dynamic map.',
     features: {
       autonomous: 'Fully Autonomous',
+      autonomousDesc: 'The world evolves without human intervention. AI characters make decisions, conquer, and form alliances on their own.',
       realtime: 'Real-time Simulation',
+      realtimeDesc: 'Every round calculates all events automatically, including battles, economy, diplomacy, and defections.',
       infinite: 'Infinite World',
+      infiniteDesc: 'No endpoint, only continuous change. Factions rise and fall, history is constantly rewritten.',
+      noVictory: 'No Victory Conditions',
+      noVictoryDesc: 'Purely observational experience. Watch AIs write their own legends.',
+    },
+    howItWorks: {
+      title: 'How It Works',
+      step1: 'Observe the World',
+      step1Desc: 'Watch hundreds of AI characters build factions, conquer territories, form alliances, and betray each other.',
+      step2: 'Analyze the Situation',
+      step2Desc: 'Track faction dynamics, character strengths, and economic development to洞察 the flow of history.',
+      step3: 'Witness Evolution',
+      step3Desc: 'Observe hundreds of rounds of evolution, witnessing the rise and fall of civilizations and the birth of legends.',
+    },
+    stats: {
+      title: 'World Overview',
+      characters: 'Active Characters',
+      factions: 'Active Factions',
+      places: 'Territories',
+      rounds: 'Rounds Executed',
     },
     startButton: 'Enter World',
+    learnMore: 'Learn More',
   },
 
   // ── Game ────────────────────────────────────────────────────────────────
@@ -66,6 +88,7 @@ export const en = {
   // ── Faction ─────────────────────────────────────────────────────────────
   faction: {
     name: 'Faction Name',
+    tab: 'Characters',
     color: 'Color',
     alive: 'Alive',
     collapsed: 'Collapsed',
@@ -121,6 +144,7 @@ export const en = {
   // ── Events ──────────────────────────────────────────────────────────────
   events: {
     title: 'Event Log',
+    tab: 'Events',
     battle: 'Battle',
     battleDesc: '{attacker} attacks {place}',
     defeat: 'Defeat',
@@ -166,6 +190,7 @@ export const en = {
   // ── Stats ───────────────────────────────────────────────────────────────
   stats: {
     title: 'Statistics',
+    tab: 'Stats',
     territoriesOverTime: 'Territories Over Time',
     troopsOverTime: 'Troops Over Time',
     goldOverTime: 'Gold Over Time',

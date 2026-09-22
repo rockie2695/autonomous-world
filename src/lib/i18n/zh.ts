@@ -26,10 +26,32 @@ export const zh = {
     description: '觀看數百個 AI 角色在動態地圖上建立勢力、征戰、結盟、背叛。',
     features: {
       autonomous: '完全自主運行',
+      autonomousDesc: '世界自行演化，無需人工干預。AI 角色自主決策、征戰、結盟。',
       realtime: '即時模擬',
+      realtimeDesc: '每回合自動計算所有事件，包括戰鬥、經濟、外交、叛變。',
       infinite: '無限世界',
+      infiniteDesc: '沒有終點，只有持續的變化。勢力興衰，歷史不斷重寫。',
+      noVictory: '無勝利條件',
+      noVictoryDesc: '純觀察式體驗，觀看 AI 們書寫自己的傳奇。',
+    },
+    howItWorks: {
+      title: '運作方式',
+      step1: '觀察世界',
+      step1Desc: '觀看數百個 AI 角色在動態地圖上建立勢力、征戰、結盟、背叛。',
+      step2: '分析局勢',
+      step2Desc: '追蹤勢力消長、將領實力、經濟發展，洞察歷史走向。',
+      step3: '見證演化',
+      step3Desc: '觀察數百回合的演化，見證文明的興衰與傳奇的誕生。',
+    },
+    stats: {
+      title: '世界概況',
+      characters: '活躍將領',
+      factions: '活躍勢力',
+      places: '領土數',
+      rounds: '已執行回合',
     },
     startButton: '進入世界',
+    learnMore: '了解更多',
   },
 
   // ── Game ────────────────────────────────────────────────────────────────
@@ -66,6 +88,7 @@ export const zh = {
   // ── Faction ─────────────────────────────────────────────────────────────
   faction: {
     name: '勢力名稱',
+    tab: '將領',
     color: '顏色',
     alive: '存活',
     collapsed: '已瓦解',
@@ -121,6 +144,7 @@ export const zh = {
   // ── Events ──────────────────────────────────────────────────────────────
   events: {
     title: '事件日誌',
+    tab: '事件',
     battle: '戰鬥',
     battleDesc: '{attacker} 攻打 {place}',
     defeat: '戰敗',
@@ -166,6 +190,7 @@ export const zh = {
   // ── Stats ───────────────────────────────────────────────────────────────
   stats: {
     title: '統計圖表',
+    tab: '統計',
     territoriesOverTime: '領地數變化',
     troopsOverTime: '兵力變化',
     goldOverTime: '金錢變化',
