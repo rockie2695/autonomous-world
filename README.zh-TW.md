@@ -25,7 +25,6 @@
 | 驗證 | Zod |
 | React 優化 | React Compiler |
 | 測試 | Vitest |
-| 排程 | GitHub Action (每小時 POST /api/admin/run-round) |
 
 ## 快速開始
 
@@ -68,7 +67,6 @@ pnpm dev
 | `GOOGLE_CLIENT_ID` | ✅ | Google OAuth Client ID |
 | `GOOGLE_CLIENT_SECRET` | ✅ | Google OAuth Client Secret |
 | `ADMIN_EMAIL` | ✅ | 管理員電子信箱（逗號分隔） |
-| `ADMIN_TOKEN` | ❌ | GitHub Action 認證 Token |
 
 ## 專案結構
 
@@ -100,6 +98,7 @@ autonomous-world/
 │   └── lib/                       # 共用工具（透過 @/* 引入）
 │       ├── auth.ts                # Auth.js v5 設定與輔助函數
 │       ├── prisma.ts              # Prisma client 單例（使用 PrismaPg adapter）
+│       ├── api.ts                 # apiFetch 輔助函數（401 統一導向首頁）
 │       ├── queryClient.tsx        # TanStack Query provider
 │       ├── validations.ts         # Zod 驗證模式
 │       ├── gameConfig.ts          # 所有可調整的遊戲數值
@@ -114,9 +113,8 @@ autonomous-world/
 │           ├── place.ts           # 地點名稱
 │           └── faction.ts         # 勢力名稱
 ├── src/components/
-│   ├── SigmaMap.tsx               # 互動式圖形地圖（Sigma.js + graphology）
-│   ├── EventLog.tsx               # 雙語事件日誌（含 i18n）
-│   └── StatsCharts.tsx            # SVG 折線圖（勢力統計）
+│   └── SigmaMap.tsx               # 互動式圖形地圖（Sigma.js + graphology）
+│                                  # （EventLog 與 StatsCharts 定義於 game/page.tsx）
 ├── server/
 │   ├── runRound.ts                # 主遊戲迴圈協調器（14 階段 + 佈局 + 快照）
 │   ├── graph/
@@ -157,7 +155,7 @@ autonomous-world/
 - 沒有勝利條件 — 遊戲無限運行
 
 ### 角色
-- 每個角色擁有：**武力 (wu)**、**統領 (tong)**、**經濟 (jing)**、**速度**
+- 每個角色擁有：**武力 (wu)**、**統領 (tong)**、**智謀 (jing)**、**速度**
 - 屬性範圍 5-30，速度使用常態分佈 (μ=17, σ=5)
 - 角色每回合老化，最終因年老而死亡（50-80 歲）
 

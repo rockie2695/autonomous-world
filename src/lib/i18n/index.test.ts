@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { t, getLocale, setLocale, LOCALES, DEFAULT_LOCALE, getTranslations } from './index';
 
 describe('i18n (Internationalization)', () => {
-  // Mock localStorage and window
+  // 模擬 localStorage 與 window / Mock localStorage and window
   const localStorageMock = (() => {
     let store: Record<string, string> = {};
     return {
@@ -20,7 +20,7 @@ describe('i18n (Internationalization)', () => {
   })();
 
   beforeEach(() => {
-    // Setup mocks
+    // 設定模擬 / Setup mocks
     Object.defineProperty(global, 'localStorage', {
       value: localStorageMock,
       writable: true,
@@ -35,7 +35,7 @@ describe('i18n (Internationalization)', () => {
       writable: true,
     });
     
-    // Mock navigator.language
+    // 模擬 navigator.language / Mock navigator.language
     Object.defineProperty(global, 'navigator', {
       value: {
         language: 'en-US',
@@ -155,7 +155,7 @@ describe('i18n (Internationalization)', () => {
       const zhTranslations = getTranslations('zh');
       const enTranslations = getTranslations('en');
       
-      // Check that both have the same top-level keys
+      // 檢查兩者有相同的頂層鍵 / Check that both have the same top-level keys
       expect(Object.keys(zhTranslations).sort()).toEqual(
         Object.keys(enTranslations).sort()
       );

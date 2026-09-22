@@ -92,7 +92,7 @@ describe('Snapshot Compression', () => {
       const jsonString = JSON.stringify(state);
       const compressed = compressSnapshot(state);
       
-      // For small objects, gzip might not be smaller, but it should still work
+      // 小物件的 gzip 可能不會更小，但仍應正常運作 / For small objects, gzip might not be smaller, but it should still work
       expect(compressed.length).toBeGreaterThan(0);
       expect(jsonString.length).toBeGreaterThan(0);
     });
@@ -112,16 +112,16 @@ describe('Snapshot Compression', () => {
       const compressed = compressSnapshot(originalState);
       const decompressed = decompressSnapshot(compressed);
       
-      // Check world properties
+      // 檢查世界屬性 / Check world properties
       expect(typeof decompressed.world.id).toBe('string');
       expect(typeof decompressed.world.currentRound).toBe('number');
       
-      // Check place properties
+      // 檢查地點屬性 / Check place properties
       expect(typeof decompressed.places[0].garrison).toBe('number');
       expect(typeof decompressed.places[0].factionId).toBe('string');
       expect(decompressed.places[1].factionId).toBeNull();
       
-      // Check character properties
+      // 檢查角色屬性 / Check character properties
       expect(typeof decompressed.characters[0].wu).toBe('number');
       expect(typeof decompressed.characters[0].isKing).toBe('boolean');
     });
@@ -158,7 +158,7 @@ describe('Snapshot Compression', () => {
     it('should handle large state objects', () => {
       const state = createTestWorldState();
       
-      // Add many places
+      // 加入大量地點 / Add many places
       for (let i = 0; i < 100; i++) {
         state.places.push({
           id: `place-${i}`,
@@ -177,7 +177,7 @@ describe('Snapshot Compression', () => {
       const compressed = compressSnapshot(state);
       const decompressed = decompressSnapshot(compressed);
       
-      expect(decompressed.places.length).toBe(102); // 2 original + 100 new
+      expect(decompressed.places.length).toBe(102); // 原有 2 個 + 新增 100 個 / 2 original + 100 new
     });
   });
 });

@@ -1,14 +1,16 @@
 // ============================================================================
+// 階段 6：人際關係
 // Phase 6: Relationships
 // ============================================================================
+// 在鄰近角色間建立友誼與不滿。
 // Forms friendships and discontent between nearby characters.
 //
-// Rules (from spec):
-// - Each round: same place or adjacent (1 road) character pairs
-// - FRIEND_FORM_CHANCE (5%) → Friendship (bidirectional)
-// - DISCONTENT_FORM_CHANCE (5%) → Discontent (unidirectional)
+// 規則（來自規格）/ Rules (from spec):
+// - 每回合：同地點或相鄰（1 條道路）的角色配對 / Each round: same place or adjacent (1 road) character pairs
+// - FRIEND_FORM_CHANCE（5%）→ 友誼（雙向）/ FRIEND_FORM_CHANCE (5%) → Friendship (bidirectional)
+// - DISCONTENT_FORM_CHANCE（5%）→ 不滿（單向）/ DISCONTENT_FORM_CHANCE (5%) → Discontent (unidirectional)
 //
-// Usage:
+// 使用方式 / Usage:
 //   await relationships(worldId, round, rng);
 // ============================================================================
 
@@ -17,30 +19,31 @@ import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 
 /**
+ * 在鄰近角色間建立關係。
  * Form relationships between nearby characters.
  *
- * @param worldId - The world to process
- * @param round - Current round number
- * @param rng - Seeded RNG for relationship formation
+ * @param worldId - 要處理的世界 ID / World to process
+ * @param round - 當前回合數 / Current round number
+ * @param rng - 用於關係建立的種子 RNG / Seeded RNG for relationship formation
  */
 export async function relationships(
   worldId: string,
   round: number,
   rng: Rng
 ): Promise<void> {
-  // Get all living characters with their places
+  // 取得所有存活角色及其所在地 / Get all living characters with their places
   const characters = await prisma.character.findMany({
     where: { worldId, alive: true },
     select: { id: true, placeId: true },
   });
 
-  // Get all roads to find adjacent places
+  // 取得所有道路以找出相鄰地點 / Get all roads to find adjacent places
   const roads = await prisma.road.findMany({
     where: { worldId },
     select: { aId: true, bId: true },
   });
 
-  // Build adjacency map
+  // 建立鄰接表 / Build adjacency map
   const adjacent = new Map<string, Set<string>>();
   for (const road of roads) {
     if (!adjacent.has(road.aId)) adjacent.set(road.aId, new Set());
@@ -49,7 +52,7 @@ export async function relationships(
     adjacent.get(road.bId)!.add(road.aId);
   }
 
-  // Find eligible pairs (same place or adjacent)
+  // 找出符合條件的配對（同地點或相鄰）/ Find eligible pairs (same place or adjacent)
   const eligiblePairs: [string, string][] = [];
 
   for (let i = 0; i < characters.length; i++) {
@@ -57,13 +60,13 @@ export async function relationships(
       const a = characters[i];
       const b = characters[j];
 
-      // Same place
+      // 同地點 / Same place
       if (a.placeId === b.placeId) {
         eligiblePairs.push([a.id, b.id]);
         continue;
       }
 
-      // Adjacent places
+      // 相鄰地點 / Adjacent places
       const aAdjacent = adjacent.get(a.placeId);
       if (aAdjacent?.has(b.placeId)) {
         eligiblePairs.push([a.id, b.id]);
@@ -71,11 +74,11 @@ export async function relationships(
     }
   }
 
-  // Process each eligible pair
+  // 處理每組符合條件的配對 / Process each eligible pair
   for (const [aId, bId] of eligiblePairs) {
-    // Form friendship
+    // 建立友誼 / Form friendship
     if (rng.chance(CONFIG.FRIEND_FORM_CHANCE)) {
-      // Check if friendship already exists
+      // 檢查友誼是否已存在 / Check if friendship already exists
       const existing = await prisma.friendship.findUnique({
         where: {
           worldId_aId_bId: {
@@ -98,7 +101,7 @@ export async function relationships(
       }
     }
 
-    // Form discontent (unidirectional)
+    // 建立不滿（單向）/ Form discontent (unidirectional)
     if (rng.chance(CONFIG.DISCONTENT_FORM_CHANCE)) {
       const existing = await prisma.discontent.findUnique({
         where: {

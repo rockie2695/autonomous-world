@@ -53,9 +53,9 @@ describe('Faction Name Generator', () => {
         lengths.add(name.length);
       }
       
-      // Should have at least 2 different lengths
+      // 至少應有 2 種不同長度 / Should have at least 2 different lengths
       expect(lengths.size).toBeGreaterThanOrEqual(2);
-      // All lengths should be 3-5
+      // 所有長度應為 3-5 / All lengths should be 3-5
       lengths.forEach(len => {
         expect(len).toBeGreaterThanOrEqual(3);
         expect(len).toBeLessThanOrEqual(5);
@@ -69,7 +69,7 @@ describe('Faction Name Generator', () => {
       const names = generateFactionNames(rng, 15);
       
       expect(names.length).toBe(15);
-      // All names should be unique
+      // 所有名稱應唯一 / All names should be unique
       expect(new Set(names).size).toBe(names.length);
     });
 
@@ -82,7 +82,7 @@ describe('Faction Name Generator', () => {
 
     it('should handle large requests gracefully', () => {
       const rng = createRng('test-seed');
-      // Request a reasonable number
+      // 請求合理的數量 / Request a reasonable number
       const names = generateFactionNames(rng, 50);
       
       expect(names.length).toBeGreaterThan(0);

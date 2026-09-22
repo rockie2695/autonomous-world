@@ -113,7 +113,7 @@ describe('RNG (Random Number Generator)', () => {
       const values = Array.from({ length: 1000 }, () => rng.gaussian(17, 5, 0, 100));
       const average = values.reduce((a, b) => a + b, 0) / values.length;
       
-      // Average should be close to mean (within 2 standard deviations)
+      // 平均值應接近 mean（在 2 個標準差內）/ Average should be close to mean (within 2 standard deviations)
       expect(average).toBeGreaterThan(15);
       expect(average).toBeLessThan(19);
     });
@@ -142,7 +142,7 @@ describe('RNG (Random Number Generator)', () => {
       }
       
       const actualRate = trueCount / iterations;
-      // Should be within 10% of expected probability
+      // 應在預期機率的 10% 以內 / Should be within 10% of expected probability
       expect(actualRate).toBeGreaterThan(0.4);
       expect(actualRate).toBeLessThan(0.6);
     });
@@ -175,7 +175,7 @@ describe('RNG (Random Number Generator)', () => {
       const rng1 = createRng('same-seed');
       const rng2 = createRng('same-seed');
       
-      // Generate some values to advance state
+      // 產生一些值以推進狀態 / Generate some values to advance state
       rng1.random();
       rng1.random();
       rng2.random();

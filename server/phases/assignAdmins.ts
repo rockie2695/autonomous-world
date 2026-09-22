@@ -1,15 +1,17 @@
 // ============================================================================
+// 階段 12：指派總督
 // Phase 12: Assign Admins
 // ============================================================================
+// AI 自動為地點指派總督。
 // AI auto-assigns administrators to places.
 //
-// Rules (from spec):
-// - Each place has 1 administrator
-// - King can administer multiple places
-// - AI assigns the character with highest tong at each place
-// - If king is idle, they administer their current place
+// 規則（來自規格）/ Rules (from spec):
+// - 每個地點有 1 名總督 / Each place has 1 administrator
+// - 君王可同時管理多個地點 / King can administer multiple places
+// - AI 指派各地點統率最高的角色 / AI assigns the character with highest tong at each place
+// - 若君王閒置，則管理其當前地點 / If king is idle, they administer their current place
 //
-// Usage:
+// 使用方式 / Usage:
 //   await assignAdmins(worldId, round, rng);
 // ============================================================================
 
@@ -17,18 +19,19 @@ import { prisma } from '@/lib/prisma';
 import { type Rng } from '@/lib/rng';
 
 /**
+ * 自動為地點指派總督。
  * Auto-assign administrators to places.
  *
- * @param worldId - The world to process
- * @param round - Current round number
- * @param rng - Seeded RNG (unused for this phase)
+ * @param worldId - 要處理的世界 ID / World to process
+ * @param round - 當前回合數 / Current round number
+ * @param rng - 種子 RNG（本階段未使用）/ Seeded RNG (unused for this phase)
  */
 export async function assignAdmins(
   worldId: string,
   round: number,
   rng: Rng
 ): Promise<void> {
-  // Get all places without administrators
+  // 取得所有沒有總督的地點 / Get all places without administrators
   const unassignedPlaces = await prisma.place.findMany({
     where: {
       worldId,
@@ -37,7 +40,7 @@ export async function assignAdmins(
   });
 
   for (const place of unassignedPlaces) {
-    // Find the character with highest tong at this place
+    // 尋找此地點統率最高的角色 / Find the character with highest tong at this place
     const bestCandidate = await prisma.character.findFirst({
       where: {
         worldId,
@@ -56,13 +59,13 @@ export async function assignAdmins(
         },
       });
 
-      // Update character's lastPromotedRound
+      // 更新角色的 lastPromotedRound / Update character's lastPromotedRound
       await prisma.character.update({
         where: { id: bestCandidate.id },
         data: { lastPromotedRound: round },
       });
 
-      // Log admin assignment event / 記錄管理員指派事件
+      // 記錄管理員指派事件 / Log admin assignment event
       await prisma.event.create({
         data: {
           worldId,

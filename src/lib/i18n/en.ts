@@ -1,12 +1,12 @@
 // ============================================================================
-// English Translations
+// 英文翻譯 / English Translations
 // ============================================================================
-// All UI strings for en locale.
-// Keys follow the pattern: section.item
+// en 語言的所有 UI 字串。/ All UI strings for en locale.
+// 鍵遵循 section.item 格式。/ Keys follow the pattern: section.item
 // ============================================================================
 
 export const en = {
-  // ── General ─────────────────────────────────────────────────────────────
+  // ── 通用 / General ───────────────────────────────────────────────────────
   general: {
     title: 'Autonomous World',
     subtitle: 'An infinitely running autonomous simulation',
@@ -20,7 +20,7 @@ export const en = {
     chinese: '中文',
   },
 
-  // ── Homepage ────────────────────────────────────────────────────────────
+  // ── 首頁 / Homepage ─────────────────────────────────────────────────────
   home: {
     intro: 'An infinitely running autonomous simulation. No victory conditions, only eternal evolution.',
     description: 'Watch hundreds of AI characters build factions, conquer, ally, and betray on a dynamic map.',
@@ -54,7 +54,7 @@ export const en = {
     learnMore: 'Learn More',
   },
 
-  // ── Game ────────────────────────────────────────────────────────────────
+  // ── 遊戲 / Game ─────────────────────────────────────────────────────────
   game: {
     round: 'Round',
     currentRound: 'Current Round',
@@ -68,7 +68,7 @@ export const en = {
     noData: 'No data for this round',
   },
 
-  // ── Map ─────────────────────────────────────────────────────────────────
+  // ── 地圖 / Map ──────────────────────────────────────────────────────────
   map: {
     zoomIn: 'Zoom In',
     zoomOut: 'Zoom Out',
@@ -85,7 +85,7 @@ export const en = {
     linkedPlaces: 'Linked Places',
   },
 
-  // ── Faction ─────────────────────────────────────────────────────────────
+  // ── 勢力 / Faction ──────────────────────────────────────────────────────
   faction: {
     name: 'Faction Name',
     tab: 'Characters',
@@ -101,7 +101,7 @@ export const en = {
     noKing: 'No King',
   },
 
-  // ── Character ───────────────────────────────────────────────────────────
+  // ── 角色 / Character ────────────────────────────────────────────────────
   character: {
     name: 'Character Name',
     wu: 'Martial',
@@ -124,7 +124,7 @@ export const en = {
     loyaltyAltruism: 'Altruism',
   },
 
-  // ── Place ───────────────────────────────────────────────────────────────
+  // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
     name: 'Place Name',
     owner: 'Owner',
@@ -141,7 +141,7 @@ export const en = {
     upgradeCost: 'Upgrade Cost',
   },
 
-  // ── Events ──────────────────────────────────────────────────────────────
+  // ── 事件 / Events ───────────────────────────────────────────────────────
   events: {
     title: 'Event Log',
     tab: 'Events',
@@ -187,7 +187,7 @@ export const en = {
     buildingUpgradeDesc: '{place} {building} upgraded to level {level}',
   },
 
-  // ── Stats ───────────────────────────────────────────────────────────────
+  // ── 統計 / Stats ────────────────────────────────────────────────────────
   stats: {
     title: 'Statistics',
     tab: 'Stats',
@@ -197,7 +197,7 @@ export const en = {
     charactersOverTime: 'Characters Over Time',
   },
 
-  // ── Ranking ─────────────────────────────────────────────────────────────
+  // ── 排行 / Ranking ──────────────────────────────────────────────────────
   ranking: {
     title: 'Faction Ranking',
     rank: 'Rank',
@@ -207,7 +207,7 @@ export const en = {
     characters: 'Characters',
   },
 
-  // ── Admin ───────────────────────────────────────────────────────────────
+  // ── 管理員 / Admin ──────────────────────────────────────────────────────
   admin: {
     runRound: 'Run Next Round',
     resetWorld: 'Reset World',
@@ -220,5 +220,5 @@ export const en = {
   },
 } as const;
 
-/** Type for en locale keys */
+/** en 語言鍵的型別 / Type for en locale keys */
 export type EnLocale = typeof en;

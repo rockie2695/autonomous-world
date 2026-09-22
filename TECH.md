@@ -83,14 +83,16 @@ src/app/
 │   ├── auth/              # Auth.js 認證端點
 │   │   └── [...nextauth]/ # OAuth 回調處理
 │   ├── world/             # 遊戲世界資料端點
-│   │   ├── state/         # GET /api/world/state
-│   │   ├── characters/    # GET /api/world/characters
-│   │   ├── factions/      # GET /api/world/factions
-│   │   ├── places/        # GET /api/world/places
-│   │   ├── roads/         # GET /api/world/roads
-│   │   └── round/         # POST /api/world/round
+│   │   ├── current/       # GET /api/world/current
+│   │   ├── state/         # GET /api/world/state?round=N
+│   │   ├── rounds/        # GET /api/world/rounds
+│   │   ├── events/        # GET /api/world/events?round=N
+│   │   └── stats/         # GET /api/world/stats?from=A&to=B
 │   └── admin/             # 管理員端點
-│       └── round/         # POST /api/admin/round
+│       ├── run-round/     # POST /api/admin/run-round
+│       ├── reset-world/   # POST /api/admin/reset-world
+│       └── assign-admin/  # POST /api/admin/assign-admin
+├── game/                  # 主遊戲頁面（含 SigmaMap、EventLog、StatsCharts）
 ├── page.tsx                # 首頁 (Server Component)
 ├── layout.tsx              # 全域佈局
 └── globals.css             # 全域樣式
@@ -408,8 +410,11 @@ model Road {
 ```typescript
 import { prisma } from '@/lib/prisma';
 
-// 單例模式 (避免多個連接)
-export const prisma = new PrismaClient();
+// 單例模式（使用 PrismaPg driver adapter，避免多個連接）
+// Singleton pattern (uses PrismaPg driver adapter to avoid multiple connections)
+// 實際建立方式 / Actual creation:
+//   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+//   return new PrismaClient({ adapter });
 
 // 查詢
 const world = await prisma.world.findFirst({
@@ -768,7 +773,7 @@ React Compiler 在建置時分析您的程式碼：
 ### 版本資訊 / Version Info
 - **vitest**: 5.0.0
 - **@testing-library/react**: 16.x
-- **@testing-library/jest-dom**: 6.x
+- **@testing-library/jest-dom**: 7.x
 
 ### 設定 / Configuration
 
@@ -779,14 +784,17 @@ import path from 'path';
 
 export default defineConfig({
   test: {
-    environment: 'jsdom',
+    environment: 'node',
     globals: true,
-    setupFiles: [],
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'server/**/*.test.ts', '__tests__/**/*.test.ts'],
+    exclude: ['node_modules', '.next', 'dist'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
+      include: ['src/lib/**/*.ts', 'server/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'server/**/*.test.ts', '**/*.d.ts'],
     },
+    testTimeout: 10000,
   },
   resolve: {
     alias: {
@@ -847,26 +855,38 @@ pnpm test:coverage
 確定性隨機數生成器，使用 seed 確保可重現：
 
 ```typescript
-// src/lib/rng.ts
-import seedrandom from 'seedrandom';
+// src/lib/rng.ts — mulberry32 實作（無外部依賴）
+// src/lib/rng.ts — mulberry32 implementation (no external dependency)
 
-export type Rng = {
-  random: () => number;
-  chance: (p: number) => boolean;
-  int: (min: number, max: number) => number;
-  pick: <T>(arr: T[]) => T | undefined;
-  shuffle: <T>(arr: T[]) => T[];
-};
+export interface RngState {
+  s: number;  // 內部 32 位元狀態 / Internal 32-bit state
+}
 
-export function createRng(seed: string): Rng {
-  const rng = seedrandom(seed);
-  return {
-    random: () => rng(),
-    chance: (p) => rng() < p,
-    int: (min, max) => Math.floor(rng() * (max - min + 1)) + min,
-    pick: (arr) => arr[Math.floor(rng() * arr.length)],
-    shuffle: (arr) => [...arr].sort(() => rng() - 0.5),
-  };
+export function createRng(seed: string, initialState?: string): Rng {
+  // FNV-1a 雜湊種子字串為 32 位元整數
+  // Hash seed string to 32-bit integer using FNV-1a
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+
+  const state: RngState = initialState
+    ? JSON.parse(initialState)
+    : { s: h >>> 0 };
+
+  return new Rng(state);
+}
+
+export class Rng {
+  // random(), int(min,max), pick(arr), shuffle(arr),
+  // gaussian(mean,sigma,min,max), float(min,max), chance(p),
+  // getState() → JSON 字串 / JSON string
+  // mulberry32 步驟 / mulberry32 step:
+  //   let t = (this.state.s += 0x6d2b79f5);
+  //   t = Math.imul(t ^ (t >>> 15), t | 1);
+  //   t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  //   return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 }
 ```
 
@@ -1274,4 +1294,4 @@ Autonomous World 使用現代化的技術棧：
 
 ---
 
-*最後更新 / Last Updated: 2026-09-17*
+*最後更新 / Last Updated: 2026-09-23*

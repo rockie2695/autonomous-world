@@ -4,7 +4,7 @@ import { CONFIG, getConfig, type ConfigKey } from './gameConfig';
 describe('Game Configuration', () => {
   describe('CONFIG object', () => {
     it('should have all required configuration keys', () => {
-      // Places
+      // 地點 / Places
       expect(CONFIG).toHaveProperty('PLACE_INITIAL_COUNT');
       expect(CONFIG).toHaveProperty('PLACE_MAX_COUNT');
       expect(CONFIG).toHaveProperty('PLACE_NEW_PER_ROUND');
@@ -13,10 +13,10 @@ describe('Game Configuration', () => {
       expect(CONFIG).toHaveProperty('PLACE_INITIAL_BARRACKS');
       expect(CONFIG).toHaveProperty('PLACE_INITIAL_GARRISON');
 
-      // Roads
+      // 道路 / Roads
       expect(CONFIG).toHaveProperty('ROAD_MAX_PER_PLACE');
 
-      // Characters
+      // 角色 / Characters
       expect(CONFIG).toHaveProperty('CHAR_START_AGE');
       expect(CONFIG).toHaveProperty('CHAR_MAX_AGE_MIN');
       expect(CONFIG).toHaveProperty('CHAR_MAX_AGE_MAX');
@@ -27,17 +27,17 @@ describe('Game Configuration', () => {
       expect(CONFIG).toHaveProperty('CHAR_AMBITION_MIN');
       expect(CONFIG).toHaveProperty('CHAR_AMBITION_MAX');
 
-      // Economy
+      // 經濟 / Economy
       expect(CONFIG).toHaveProperty('PLACE_BASE_INCOME');
       expect(CONFIG).toHaveProperty('INCOME_KING_SHARE');
       expect(CONFIG).toHaveProperty('INCOME_ADMIN_SHARE');
       expect(CONFIG).toHaveProperty('INCOME_OTHER_SHARE');
 
-      // Battle
+      // 戰鬥 / Battle
       expect(CONFIG).toHaveProperty('BATTLE_RANDOM_MIN');
       expect(CONFIG).toHaveProperty('BATTLE_RANDOM_MAX');
 
-      // Signals
+      // 號令 / Signals
       expect(CONFIG).toHaveProperty('SIGNAL_RANGE');
       expect(CONFIG).toHaveProperty('SIGNAL_DURATION');
     });
@@ -52,20 +52,20 @@ describe('Game Configuration', () => {
     });
 
     it('should have valid value ranges', () => {
-      // Ability ranges
+      // 屬性範圍 / Ability ranges
       expect(CONFIG.CHAR_ABILITY_MIN).toBeLessThan(CONFIG.CHAR_ABILITY_MAX);
       expect(CONFIG.CHAR_SPEED_MIN).toBeLessThan(CONFIG.CHAR_SPEED_MAX);
       expect(CONFIG.CHAR_AMBITION_MIN).toBeLessThan(CONFIG.CHAR_AMBITION_MAX);
 
-      // Age ranges
+      // 年齡範圍 / Age ranges
       expect(CONFIG.CHAR_MAX_AGE_MIN).toBeLessThan(CONFIG.CHAR_MAX_AGE_MAX);
       expect(CONFIG.CHAR_START_AGE).toBeLessThan(CONFIG.CHAR_MAX_AGE_MIN);
 
-      // Income shares should sum to 1
+      // 收入份額總和應為 1 / Income shares should sum to 1
       const totalShare = CONFIG.INCOME_KING_SHARE + CONFIG.INCOME_ADMIN_SHARE + CONFIG.INCOME_OTHER_SHARE;
       expect(totalShare).toBeCloseTo(1.0, 2);
 
-      // Battle random range
+      // 戰鬥隨機範圍 / Battle random range
       expect(CONFIG.BATTLE_RANDOM_MIN).toBeLessThan(CONFIG.BATTLE_RANDOM_MAX);
       expect(CONFIG.BATTLE_RANDOM_MIN).toBeGreaterThan(0);
       expect(CONFIG.BATTLE_RANDOM_MAX).toBeLessThanOrEqual(2);
@@ -106,7 +106,7 @@ describe('Game Configuration', () => {
     });
 
     it('should be type-safe', () => {
-      // This should compile without errors
+      // 此處應可無錯誤編譯 / This should compile without errors
       const value: ConfigKey = 'PLACE_INITIAL_COUNT';
       expect(getConfig(value)).toBe(100);
     });
@@ -127,7 +127,7 @@ describe('Game Configuration', () => {
     });
 
     it('should have valid escape probability formula constants', () => {
-      // Base + diff * per_diff should stay within min/max
+      // base + diff * per_diff 應保持在 min/max 之內 / Base + diff * per_diff should stay within min/max
       expect(CONFIG.SPEED_ESCAPE_BASE).toBeGreaterThanOrEqual(CONFIG.SPEED_ESCAPE_MIN);
       expect(CONFIG.SPEED_ESCAPE_BASE).toBeLessThanOrEqual(CONFIG.SPEED_ESCAPE_MAX);
     });

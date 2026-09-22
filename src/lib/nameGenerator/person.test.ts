@@ -29,7 +29,7 @@ describe('Person Name Generator', () => {
       const names1 = Array.from({ length: 10 }, () => generatePersonName(rng1));
       const names2 = Array.from({ length: 10 }, () => generatePersonName(rng2));
       
-      // At least some names should be different
+      // 至少部分名稱應不同 / At least some names should be different
       const hasDifferent = names1.some((name, i) => name !== names2[i]);
       expect(hasDifferent).toBe(true);
     });
@@ -37,7 +37,7 @@ describe('Person Name Generator', () => {
     it('should have a surname as the first character', () => {
       const rng = createRng('test-seed');
       
-      // Common Chinese surnames (top 100 from 百家姓)
+      // 常見中文姓氏（百家姓前 100）/ Common Chinese surnames (top 100 from 百家姓)
       const commonSurnames = [
         '王', '李', '張', '劉', '陳', '楊', '黃', '趙', '吳', '周',
         '徐', '孫', '馬', '朱', '胡', '郭', '林', '何', '高', '羅',
@@ -78,11 +78,11 @@ describe('Person Name Generator', () => {
 
     it('should allow duplicate names', () => {
       const rng = createRng('test-seed');
-      // Generate many names - some may repeat
+      // 產生大量名稱 — 部分可能重複 / Generate many names - some may repeat
       const names = generatePersonNames(rng, 100);
       
       expect(names.length).toBe(100);
-      // The set might be smaller than the array if there are duplicates
+      // 若有重複，集合可能小於陣列 / The set might be smaller than the array if there are duplicates
       const uniqueNames = new Set(names);
       expect(uniqueNames.size).toBeLessThanOrEqual(100);
     });

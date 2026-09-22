@@ -59,8 +59,8 @@ import { factionDeath } from './phases/factionDeath';
 export interface RoundResult {
   worldId: string;
   round: number;
-  duration: number;           // Execution time in ms
-  events: number;             // Number of events generated
+  duration: number;           // 執行時間（毫秒）/ Execution time in ms
+  events: number;             // 產生的事件數 / Number of events generated
   charactersSpawned: number;
   charactersDied: number;
   battlesFought: number;
@@ -179,7 +179,7 @@ export async function runRound(worldId: string): Promise<RoundResult> {
     worldId,
     round: currentRound,
     duration,
-    events: 0, // TODO: Count actual events from Event table
+    events: 0, // TODO: 從 Event 表統計實際事件數 / Count actual events from Event table
     charactersSpawned,
     charactersDied,
     battlesFought,

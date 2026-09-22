@@ -59,6 +59,7 @@ export const CONFIG = {
   // → 大多數角色速度在 12-22 之間（μ±1σ）
   // → 很少角色速度 <7 或 >27（μ±2σ 之外）
   //
+  // 野心使用常態分佈 μ=17, σ=5（截斷至 5-30）。
   // Ambition uses normal distribution μ=17, σ=5 (clamped to 5-30).
   CHAR_START_AGE: 20, // 所有角色起始年齡為 20 / All characters start at age 20
   CHAR_MAX_AGE_MIN: 50, // 最小隨機最大年齡（因年老死亡）/ Min random maxAge (death from old age)

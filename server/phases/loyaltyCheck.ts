@@ -1,20 +1,22 @@
 // ============================================================================
+// 階段 8：忠誠檢查（叛變）
 // Phase 8: Loyalty Check (Defection)
 // ============================================================================
+// 檢查角色是否會從其陣營叛逃。
 // Checks if characters will defect from their faction.
 //
-// Rules (from spec):
+// 規則（來自規格）/ Rules (from spec):
 // - base = ambition × 0.5
-// - if loyalty != king.loyalty: base × 1.2
-// - if friend defected recently: base × 1.5
+// - 若 loyalty != king.loyalty: base × 1.2 / if loyalty != king.loyalty: base × 1.2
+// - 若朋友最近叛逃: base × 1.5 / if friend defected recently: base × 1.5
 // - base × (1 - king.tong × 0.01)
-// - if faction.places > 500: base × 0.8
-// - if has Discontent: base × 1.3
-// - if rand(100) < base: defect!
-//   - if admin: create new faction with that place
-//   - else: join nearby faction or create new one
+// - 若 faction.places > 500: base × 0.8 / if faction.places > 500: base × 0.8
+// - 若有不滿: base × 1.3 / if has Discontent: base × 1.3
+// - 若 rand(100) < base: 叛逃！ / if rand(100) < base: defect!
+//   - 若為總督：以該地點建立新勢力 / if admin: create new faction with that place
+//   - 否則：加入鄰近勢力或建立新的 / else: join nearby faction or create new one
 //
-// Usage:
+// 使用方式 / Usage:
 //   const defections = await loyaltyCheck(worldId, round, rng);
 // ============================================================================
 
@@ -24,25 +26,26 @@ import { type Rng } from '@/lib/rng';
 import { generateFactionName } from '@/lib/nameGenerator/faction';
 
 /**
+ * 檢查並處理叛變。
  * Check for defections and process them.
  *
- * @param worldId - The world to process
- * @param round - Current round number
- * @param rng - Seeded RNG for defection rolls
- * @returns Number of characters that defected
+ * @param worldId - 要處理的世界 ID / World to process
+ * @param round - 當前回合數 / Current round number
+ * @param rng - 用於叛變擲骰的種子 RNG / Seeded RNG for defection rolls
+ * @returns 叛變的角色數 / Number of characters that defected
  */
 export async function loyaltyCheck(
   worldId: string,
   round: number,
   rng: Rng
 ): Promise<number> {
-  // Get all living characters in factions
+  // 取得所有在勢力中的存活角色 / Get all living characters in factions
   const characters = await prisma.character.findMany({
     where: {
       worldId,
       alive: true,
       factionId: { not: null },
-      isKing: false, // Kings don't defect
+      isKing: false, // 君王不會叛變 / Kings don't defect
     },
     include: {
       faction: {
@@ -60,10 +63,10 @@ export async function loyaltyCheck(
   for (const char of characters) {
     if (!char.faction) continue;
 
-    // Calculate defection probability
+    // 計算叛變機率 / Calculate defection probability
     let base = char.ambition * CONFIG.AMBITION_DEFECT_BASE_MULT;
 
-    // Check loyalty difference from king
+    // 檢查與君王的忠誠差異 / Check loyalty difference from king
     if (char.faction.kingId) {
       const king = await prisma.character.findUnique({
         where: { id: char.faction.kingId },
@@ -75,12 +78,12 @@ export async function loyaltyCheck(
           base *= CONFIG.AMBITION_DIFF_LOYALTY_MULT;
         }
 
-        // King's tong reduces defection
+        // 君王統率降低叛變 / King's tong reduces defection
         base *= 1 - CONFIG.AMBITION_KING_TONG_REDUCE * king.tong;
       }
     }
 
-    // Check if friend defected recently
+    // 檢查朋友是否最近叛逃 / Check if friend defected recently
     const recentDefection = await prisma.event.findFirst({
       where: {
         worldId,
@@ -97,7 +100,7 @@ export async function loyaltyCheck(
       base *= CONFIG.AMBITION_FRIEND_DEFECT_MULT;
     }
 
-    // Large faction reduces defection
+    // 大型勢力降低叛變 / Large faction reduces defection
     const factionCharCount = await prisma.character.count({
       where: {
         factionId: char.factionId!,
@@ -109,7 +112,7 @@ export async function loyaltyCheck(
       base *= CONFIG.AMBITION_LARGE_FACTION_MULT;
     }
 
-    // Discontent increases defection
+    // 不滿增加叛變 / Discontent increases defection
     const hasDiscontent = await prisma.discontent.findFirst({
       where: {
         worldId,
@@ -121,11 +124,11 @@ export async function loyaltyCheck(
       base *= CONFIG.DISCONTENT_DEFECT_MULT;
     }
 
-    // Roll for defection
+    // 叛變擲骰 / Roll for defection
     if (rng.chance(base / 100)) {
       defectionCount++;
 
-      // Determine defection type
+      // 決定叛變類型 / Determine defection type
       const isAdministrator = await prisma.place.findFirst({
         where: {
           worldId,
@@ -134,7 +137,7 @@ export async function loyaltyCheck(
       });
 
       if (isAdministrator) {
-        // Admin creates new faction with their place
+        // 總督以其地點建立新勢力 / Admin creates new faction with their place
         const factionName = generateFactionName(rng);
         const color = `hsl(${rng.int(0, 360)}, 70%, 50%)`;
 
@@ -148,13 +151,13 @@ export async function loyaltyCheck(
           },
         });
 
-        // Transfer the place to new faction
+        // 將地點轉移給新勢力 / Transfer the place to new faction
         await prisma.place.update({
           where: { id: isAdministrator.id },
           data: { factionId: newFaction.id },
         });
 
-        // Update character
+        // 更新角色 / Update character
         await prisma.character.update({
           where: { id: char.id },
           data: {
@@ -167,7 +170,7 @@ export async function loyaltyCheck(
           },
         });
 
-        // Log defection event / 記錄叛變事件
+        // 記錄叛變事件 / Log defection event
         await prisma.event.create({
           data: {
             worldId,
@@ -186,8 +189,8 @@ export async function loyaltyCheck(
           },
         });
       } else {
-        // Join nearby faction or create new one
-        // Find adjacent places
+        // 加入鄰近勢力或建立新的 / Join nearby faction or create new one
+        // 尋找相鄰地點 / Find adjacent places
         const adjacentPlaces = await prisma.road.findMany({
           where: {
             worldId,
@@ -202,7 +205,7 @@ export async function loyaltyCheck(
           },
         });
 
-        // Find a nearby faction to join
+        // 尋找可加入的鄰近勢力 / Find a nearby faction to join
         let joinedFaction = false;
         for (const road of adjacentPlaces) {
           const nearbyFactionId =
@@ -220,7 +223,7 @@ export async function loyaltyCheck(
                 r !== road
             )
           ) {
-            // Join this faction
+            // 加入此勢力 / Join this faction
             await prisma.character.update({
               where: { id: char.id },
               data: {
@@ -232,7 +235,7 @@ export async function loyaltyCheck(
               },
             });
 
-            // Log defection event / 記錄叛變事件
+            // 記錄叛變事件 / Log defection event
             await prisma.event.create({
               data: {
                 worldId,
@@ -254,7 +257,7 @@ export async function loyaltyCheck(
           }
         }
 
-        // If couldn't join nearby, create new faction
+        // 若無法加入鄰近勢力，則建立新的 / If couldn't join nearby, create new faction
         if (!joinedFaction) {
           const factionName = generateFactionName(rng);
           const color = `hsl(${rng.int(0, 360)}, 70%, 50%)`;
@@ -281,7 +284,7 @@ export async function loyaltyCheck(
             },
           });
 
-          // Log defection event / 記錄叛變事件
+          // 記錄叛變事件 / Log defection event
           await prisma.event.create({
             data: {
               worldId,

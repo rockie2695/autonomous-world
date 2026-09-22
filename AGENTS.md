@@ -136,6 +136,7 @@ src/
 └── lib/                   # Shared utilities and configurations
     ├── auth.ts            # Auth.js configuration
     ├── prisma.ts          # Prisma client singleton
+    ├── api.ts             # apiFetch helper (unified 401 handling)
     ├── queryClient.tsx    # TanStack Query provider
     ├── validations.ts     # Zod validation schemas
     ├── gameConfig.ts      # All tunable game values
@@ -162,12 +163,14 @@ server/
 
 ```
 src/components/
-├── SigmaMap.tsx           # Interactive graph map (Sigma.js + graphology)
-│                          # - Nodes: faction-colored (HSL→hex), sized by troops
-│                          # - Edges: semi-transparent roads
-│                          # - Dynamic labels with faction-colored backgrounds
-├── EventLog.tsx           # Bilingual event log (i18n t() with parameter substitution)
-└── StatsCharts.tsx        # SVG line charts for faction stats over time
+└── SigmaMap.tsx           # Interactive graph map (Sigma.js + graphology)
+                           # - Nodes: faction-colored (HSL→hex), sized by troops
+                           # - Edges: semi-transparent roads
+                           # - Dynamic labels with faction-colored backgrounds
+
+src/app/game/page.tsx also defines locally:
+├── EventLog               # Bilingual event log (i18n t() with parameter substitution)
+└── StatsCharts            # SVG line charts for faction stats over time
 ```
 
 ### Database

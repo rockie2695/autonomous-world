@@ -27,7 +27,6 @@ Autonomous World is a browser-based simulation game where hundreds of AI charact
 | Validation | Zod |
 | React Optimization | React Compiler |
 | Testing | Vitest |
-| Scheduling | GitHub Action (hourly POST /api/admin/run-round) |
 
 ## Getting Started
 
@@ -70,7 +69,6 @@ pnpm dev
 | `GOOGLE_CLIENT_ID` | ✅ | Google OAuth Client ID |
 | `GOOGLE_CLIENT_SECRET` | ✅ | Google OAuth Client Secret |
 | `ADMIN_EMAIL` | ✅ | Email(s) of admin users (comma-separated) |
-| `ADMIN_TOKEN` | ❌ | Token for GitHub Action authentication |
 
 ## Project Structure
 
@@ -102,6 +100,7 @@ autonomous-world/
 │   └── lib/                       # Shared utilities (imported via @/*)
 │       ├── auth.ts                # Auth.js v5 configuration & helpers
 │       ├── prisma.ts              # Prisma client singleton (with PrismaPg adapter)
+│       ├── api.ts                 # apiFetch helper (unified 401 → redirect home)
 │       ├── queryClient.tsx        # TanStack Query provider
 │       ├── validations.ts         # Zod validation schemas
 │       ├── gameConfig.ts          # All tunable game values
@@ -116,9 +115,8 @@ autonomous-world/
 │           ├── place.ts           # Place names
 │           └── faction.ts         # Faction names
 ├── src/components/
-│   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
-│   ├── EventLog.tsx               # Bilingual event log with i18n
-│   └── StatsCharts.tsx            # SVG line charts for faction stats
+│   └── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
+│                                  # (EventLog & StatsCharts are defined in game/page.tsx)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
 │   ├── graph/
@@ -159,7 +157,7 @@ autonomous-world/
 - No victory conditions — the game runs infinitely
 
 ### Characters
-- Each character has: **Martial (wu)**, **Leadership (tong)**, **Economy (j ing)**, **Speed**
+- Each character has: **Martial (wu)**, **Command (tong)**, **Strategy (jing)**, **Speed**
 - Stats range 5-30, with speed using normal distribution (μ=17, σ=5)
 - Characters age each round and eventually die of old age (50-80 years)
 

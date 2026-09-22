@@ -55,7 +55,7 @@ describe('Place Name Generator', () => {
       const names = generatePlaceNames(rng, 20);
       
       expect(names.length).toBe(20);
-      // All names should be unique
+      // 所有名稱應唯一 / All names should be unique
       expect(new Set(names).size).toBe(names.length);
     });
 
@@ -68,10 +68,10 @@ describe('Place Name Generator', () => {
 
     it('should handle large requests gracefully', () => {
       const rng = createRng('test-seed');
-      // Request more than possible unique combinations
+      // 請求超過可能的唯一組合 / Request more than possible unique combinations
       const names = generatePlaceNames(rng, 100);
       
-      // Should return what it can
+      // 應回傳所能產生的 / Should return what it can
       expect(names.length).toBeGreaterThan(0);
       expect(names.length).toBeLessThanOrEqual(100);
     });
