@@ -101,120 +101,130 @@ async function main() {
   console.log(`Created ${places.length} places`);
 
   // ── 3. 建立道路 / Create Roads ──────────────────────────────────
-  // 初始道路為隨機連接，非地理鄰近（因為 seed 階段尚無佈局）
-  // 執行期新地點才會用「鄰居重心 + 隨機偏移」增量佈局
-  // Initial roads are random connections, not geographic neighbors
-  // (no layout exists yet at seed time; runtime new places use neighbor centroid layout)
-  // 保證連通性：先建 MST（最小生成樹），再隨機加邊
-  // Guarantee connectivity: MST first, then random extra edges
+  // 先以圓盤均勻分佈產生初始座標，再依「地理距離」建路：
+  // 3.1 地理 MST 打底（保證全圖連通），3.2 由近至遠補邊至 1-3 條
+  // Generate initial disk positions first, then build roads by geographic distance:
+  // 3.1 geographic MST base (guarantees connectivity), 3.2 nearest-first extra edges up to 1-3
+  // 結果：有路的地方座標彼此接近（短邊），無路的地方較遠
+  // Result: road-linked places sit close together (short edges), non-linked farther apart
   // 每個地方最終 1-3 條路（每端最多 3 條）
   // Each place ends up with 1-3 roads (max 3 per end)
+
+  // ── 3.0 初始座標（供地理距離 + FA2 初始位置）/ Initial positions (geo distance + FA2) ──
+  // sqrt(rng()) 讓圓盤分佈均勻（避免中心聚集）
+  // sqrt(rng()) gives uniform disk distribution (avoids center clustering)
+  const R = CONFIG.INITIAL_LAYOUT_RADIUS;
+  const initialPos = places.map(() => {
+    const angle = rng.float(0, Math.PI * 2);
+    const r = Math.sqrt(rng.float(0, 1)) * R;
+    return { x: Math.cos(angle) * r, y: Math.sin(angle) * r };
+  });
 
   const roadSet = new Set<string>();
   const roads = [];
   const roadCountPerPlace = new Map<string, number>();
+  const pendingRoads: Array<[string, string]> = [];
 
   // 初始化路數計數 / Initialize road counts
   for (const place of places) {
     roadCountPerPlace.set(place.id, 0);
   }
 
-  // ── 3.1 MST 打底（保證全圖連通）/ Step 1: MST (guarantee connectivity) ──
-  // 從 place[0] 開始，逐步加入未連接節點
-  const visited = new Set<string>([places[0].id]);
-  const unvisited = new Set<string>(places.slice(1).map((p) => p.id));
-
-  while (unvisited.size > 0) {
-    // 隨機選一個未訪問節點
-    const uId = Array.from(unvisited)[Math.floor(rng.float(0, unvisited.size))];
-    // 從已訪問且未滿的節點中隨機選一個
-    const candidates = Array.from(visited).filter((vId) => {
-      if (vId === uId) return false;
-      if ((roadCountPerPlace.get(vId) ?? 0) >= CONFIG.ROAD_MAX_PER_PLACE) return false;
-      const key = vId < uId ? `${vId}-${uId}` : `${uId}-${vId}`;
-      return !roadSet.has(key);
-    });
-
-    if (candidates.length === 0) break; // 無法連接（所有節點都滿了）
-
-    const vId = candidates[Math.floor(rng.float(0, candidates.length))];
-    const [aId, bId] = vId < uId ? [vId, uId] : [uId, vId];
-    const roadKey = `${aId}-${bId}`;
-
-    roadSet.add(roadKey);
+  // 新增道路（雙端度數上限檢查）/ Add a road (checks degree cap at both ends)
+  const addRoad = (idA: string, idB: string): boolean => {
+    const [aId, bId] = idA < idB ? [idA, idB] : [idB, idA];
+    const key = `${aId}-${bId}`;
+    if (roadSet.has(key)) return false;
+    if ((roadCountPerPlace.get(aId) ?? 0) >= CONFIG.ROAD_MAX_PER_PLACE) return false;
+    if ((roadCountPerPlace.get(bId) ?? 0) >= CONFIG.ROAD_MAX_PER_PLACE) return false;
+    roadSet.add(key);
     roadCountPerPlace.set(aId, (roadCountPerPlace.get(aId) ?? 0) + 1);
     roadCountPerPlace.set(bId, (roadCountPerPlace.get(bId) ?? 0) + 1);
-    visited.add(uId);
-    unvisited.delete(uId);
+    pendingRoads.push([aId, bId]);
+    return true;
+  };
 
-    const road = await prisma.road.create({
-      data: { worldId: world.id, aId, bId, createdAtRound: 0 },
-    });
-    roads.push(road);
+  // ── 3.1 地理 MST（Prim，保證全圖連通）/ Geographic MST (Prim, guarantees connectivity) ──
+  // 每次加入「連接樹內外、且兩端度數未滿」的最短地理邊
+  // Each step adds the shortest geographic edge joining tree/outside with both ends under the degree cap
+  const inMst = new Array<boolean>(places.length).fill(false);
+  inMst[0] = true;
+  let mstSize = 1;
+  while (mstSize < places.length) {
+    let bestFrom = -1;
+    let bestTo = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < places.length; i++) {
+      if (!inMst[i]) continue;
+      if ((roadCountPerPlace.get(places[i].id) ?? 0) >= CONFIG.ROAD_MAX_PER_PLACE) continue;
+      for (let j = 0; j < places.length; j++) {
+        if (inMst[j]) continue;
+        if ((roadCountPerPlace.get(places[j].id) ?? 0) >= CONFIG.ROAD_MAX_PER_PLACE) continue;
+        const d = Math.hypot(initialPos[i].x - initialPos[j].x, initialPos[i].y - initialPos[j].y);
+        if (d < bestDist) {
+          bestDist = d;
+          bestFrom = i;
+          bestTo = j;
+        }
+      }
+    }
+    if (bestFrom === -1) break; // 理論上不可達（樹內必有未滿節點）/ Unreachable (tree always has an unsaturated node)
+    addRoad(places[bestFrom].id, places[bestTo].id);
+    inMst[bestTo] = true;
+    mstSize++;
   }
 
-  // ── 3.2 隨機加額外邊（達到目標度數）/ Step 2: Random extra edges ──
-  // 確保每個地方至少 1 條路（fallback），再隨機補到 1-3 條
-  for (const place of places) {
-    const currentCount = roadCountPerPlace.get(place.id) ?? 0;
+  // ── 3.2 由近至遠補邊（達目標 1-3 條）/ Extra edges nearest-first (to reach 1-3) ──
+  for (let i = 0; i < places.length; i++) {
+    const currentCount = roadCountPerPlace.get(places[i].id) ?? 0;
     if (currentCount >= CONFIG.ROAD_MAX_PER_PLACE) continue;
 
     // 目標：1-3 條路 / Target: 1-3 roads
     const target = rng.int(CONFIG.ROAD_NEW_PER_PLACE_MIN, CONFIG.ROAD_NEW_PER_PLACE_MAX);
-    let needed = target - currentCount;
-    if (needed <= 0) continue;
+    if (target <= currentCount) continue;
 
-    // 隨機選擇可連接的其他地方
-    const candidates = rng.shuffle(
-      places.filter((p) => {
-        if (p.id === place.id) return false;
-        return (roadCountPerPlace.get(p.id) ?? 0) < CONFIG.ROAD_MAX_PER_PLACE;
+    // 候選依地理距離由近至遠 / Candidates sorted nearest-first by geographic distance
+    const candidates = places
+      .map((p, j) => ({
+        j,
+        d: Math.hypot(initialPos[i].x - initialPos[j].x, initialPos[i].y - initialPos[j].y),
+      }))
+      .filter(({ j }) => j !== i)
+      .sort((a, b) => a.d - b.d);
+
+    for (const { j } of candidates) {
+      if ((roadCountPerPlace.get(places[i].id) ?? 0) >= target) break;
+      addRoad(places[i].id, places[j].id);
+    }
+  }
+
+  // 寫入資料庫 / Persist roads to database
+  for (const [aId, bId] of pendingRoads) {
+    roads.push(
+      await prisma.road.create({
+        data: { worldId: world.id, aId, bId, createdAtRound: 0 },
       })
     );
-
-    for (const other of candidates) {
-      if (needed <= 0) break;
-      const [aId, bId] = place.id < other.id ? [place.id, other.id] : [other.id, place.id];
-      const key = `${aId}-${bId}`;
-
-      if (!roadSet.has(key)) {
-        roadSet.add(key);
-        roadCountPerPlace.set(aId, (roadCountPerPlace.get(aId) ?? 0) + 1);
-        roadCountPerPlace.set(bId, (roadCountPerPlace.get(bId) ?? 0) + 1);
-
-        const road = await prisma.road.create({
-          data: { worldId: world.id, aId, bId, createdAtRound: 0 },
-        });
-        roads.push(road);
-        needed--;
-      }
-    }
   }
 
   console.log(`Created ${roads.length} roads`);
 
   // ── 3.5 計算初始佈局 / Calculate Initial Layout ─────────────────
-  // 使用 ForceAtlas2 根據道路網路計算位置，讓連接的地方更近
-  // Use ForceAtlas2 to calculate positions based on road network,
-  // so connected places are naturally closer together
+  // 使用 ForceAtlas2 根據道路網路微調座標（地理建路已讓連接的地方彼此接近）
+  // ForceAtlas2 refines positions from the road network (geo roads already place linked close)
 
   console.log('Calculating initial layout with ForceAtlas2...');
 
   // 建立 graphology 圖形 / Create graphology graph
   const layoutGraph = new Graph();
 
-  // 新增所有地方為節點 / Add all places as nodes
-  // 使用 sqrt(rng()) 讓分佈均勻（避免中心聚集）
-  // Use sqrt(rng()) for uniform distribution (avoids center clustering)
-  const R = CONFIG.INITIAL_LAYOUT_RADIUS;
-  for (const place of places) {
-    const angle = rng.float(0, Math.PI * 2);
-    const r = Math.sqrt(rng.float(0, 1)) * R; // sqrt 讓分佈均勻
+  // 新增所有地方為節點（使用 3.0 的初始座標）/ Add all places as nodes (positions from 3.0)
+  places.forEach((place, i) => {
     layoutGraph.addNode(place.id, {
-      x: Math.cos(angle) * r,
-      y: Math.sin(angle) * r,
+      x: initialPos[i].x,
+      y: initialPos[i].y,
     });
-  }
+  });
 
   // 新增道路為邊緣 / Add roads as edges
   for (const road of roads) {

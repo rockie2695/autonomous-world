@@ -52,6 +52,20 @@ export async function assignAdmins(
     });
 
     if (bestCandidate) {
+      // 先清除該角色在其他地點的總督職，避免 Place.administratorId 唯一約束衝突
+      // (角色可能帶著總督身分移動到新地點，造成同時被兩地點指名)
+      // Clear the character's admin role at other places first to avoid the
+      // Place.administratorId unique constraint conflict (a character may have
+      // moved to a new place while still listed as admin of their old one)
+      await prisma.place.updateMany({
+        where: {
+          worldId,
+          administratorId: bestCandidate.id,
+          id: { not: place.id },
+        },
+        data: { administratorId: null },
+      });
+
       await prisma.place.update({
         where: { id: place.id },
         data: {

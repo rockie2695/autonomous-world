@@ -322,6 +322,17 @@ export async function battle(
 
         // 若無總督，攻擊者成為總督 / Attacker becomes admin if no admin
         if (!place.administratorId) {
+          // 先清除攻擊者在其他地點的總督職，避免 Place.administratorId 唯一約束衝突
+          // Clear the attacker's admin role at other places first to avoid the
+          // Place.administratorId unique constraint conflict
+          await prisma.place.updateMany({
+            where: {
+              worldId,
+              administratorId: attacker.id,
+              id: { not: place.id },
+            },
+            data: { administratorId: null },
+          });
           await prisma.place.update({
             where: { id: place.id },
             data: { administratorId: attacker.id },

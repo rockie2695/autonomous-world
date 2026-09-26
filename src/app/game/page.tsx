@@ -6,12 +6,15 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
-import { t, setLocale, getLocale, DEFAULT_LOCALE } from '@/lib/i18n';
+import { motion, AnimatePresence } from 'motion/react';
+import { t, setLocale, getLocale, getTranslations, DEFAULT_LOCALE } from '@/lib/i18n';
 import type { Locale } from '@/lib/i18n';
+import type { MapCameraControls } from '@/components/SigmaMap';
 import { apiFetch } from '@/lib/api';
+import { signOut } from 'next-auth/react';
 
 const SigmaMap = dynamic(
   () => import('@/components/SigmaMap').then((mod) => mod.SigmaMap),
@@ -69,7 +72,8 @@ interface WorldState {
 interface GameEvent {
   id: string;
   type: string;
-  payload: Record<string, unknown>;
+  // 事件資料（API 回傳 Prisma 的 data 欄位）/ Event payload (API returns Prisma's data field)
+  data: Record<string, unknown>;
   round: number;
 }
 
@@ -80,7 +84,7 @@ function getServerLocale(): Locale {
 }
 
 function subscribeLocale(callback: () => void): () => void {
-  if (typeof window === 'undefined') return () => {};
+  if (typeof window === 'undefined') return () => { };
   window.addEventListener('storage', callback);
   return () => window.removeEventListener('storage', callback);
 }
@@ -91,6 +95,8 @@ export default function GamePage() {
   const [selectedRound, setSelectedRound] = useState<number>(0);
   const [selectedPlace, setSelectedPlace] = useState<WorldState['places'][0] | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  /** 地圖視角控制（浮動縮放 / 重設按鈕）/ Map camera controls (floating zoom / reset buttons) */
+  const mapControlsRef = useRef<MapCameraControls | null>(null);
 
   const locale = useSyncExternalStore(
     subscribeLocale,
@@ -123,8 +129,14 @@ export default function GamePage() {
     async function checkAdmin() {
       try {
         const res = await fetch('/api/auth/session');
-        await res.json();
-        setIsAdmin(false);
+        const result: { user?: { email?: string | null } } = await res.json();
+        // 比對 session email 與 ADMIN_EMAIL（逗號分隔清單，與伺服器端 isAdmin 規則一致）
+        // Compare session email with ADMIN_EMAIL (comma-separated list, same rule as server-side isAdmin)
+        const adminEmails = (process.env.ADMIN_EMAIL ?? '')
+          .split(',')
+          .map((e) => e.trim().toLowerCase())
+          .filter(Boolean);
+        setIsAdmin(adminEmails.includes((result.user?.email ?? '').toLowerCase()));
       } catch {
         setIsAdmin(false);
       }
@@ -168,7 +180,9 @@ export default function GamePage() {
             <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-cyan-400 animate-spin" />
             <div className="absolute inset-2 rounded-full border-2 border-transparent border-t-blue-500 animate-spin" style={{ animationDirection: 'reverse', animationDuration: '1.5s' }} />
           </div>
-          <p className="font-orbitron text-base text-cyan-400/70 tracking-wider">{t('general.loading')}</p>
+          {/* 使用 locale（useSyncExternalStore）而非 t()，確保 SSR 與 hydration 文字一致
+              Use locale (useSyncExternalStore) instead of t() so SSR and hydration text match */}
+          <p className="font-orbitron text-base text-cyan-400/70 tracking-wider">{getTranslations(locale).general.loading}</p>
         </div>
       </div>
     );
@@ -237,15 +251,24 @@ export default function GamePage() {
             </svg>
           </button>
 
-          <span className="text-gray-500 text-xs font-orbitron tracking-wider hidden sm:block">
+          <span className="text-gray-400 text-xs font-orbitron tracking-wider hidden sm:block">
             {worldState?.world.name ?? '—'}
           </span>
           <NextRoundButton
             isAdmin={isAdmin}
             currentRound={selectedRound}
-            onSuccess={() => fetchWorldState()}
+            onSuccess={(round) => setSelectedRound(round)}
           />
           <LanguageSwitch locale={locale} onToggle={handleLocaleToggle} />
+
+          {/* 登出按鈕 / Logout button */}
+          <button
+            onClick={() => signOut({ callbackUrl: '/' })}
+            className="px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider text-red-400/70 border border-gray-700/60 bg-gray-900/50 hover:bg-red-500/10 hover:border-red-500/30 hover:text-red-300 transition-all duration-200"
+            title={t('general.logout')}
+          >
+            {t('general.logout')}
+          </button>
 
           {/* 右側邊欄切換按鈕（手機版）/ Right sidebar toggle (mobile) */}
           <button
@@ -280,14 +303,28 @@ export default function GamePage() {
           />
         </aside>
 
-        {/* ── 左側邊欄（手機版覆蓋）/ Left Sidebar (mobile overlay) ──────────── */}
-        {leftSidebarOpen && (
-          <div className="md:hidden fixed inset-0 z-40 flex">
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setLeftSidebarOpen(false)} />
-            <div className="relative w-72 bg-gray-950 border-r border-gray-800/60 p-3 space-y-3 overflow-y-auto animate-slide-in-left">
+        {/* ── 左側邊欄（手機版覆蓋，含滑出動畫）/ Left Sidebar (mobile overlay, animated) ── */}
+        <AnimatePresence>
+          {leftSidebarOpen && (
+            <motion.div
+              key="left-sidebar"
+              className="md:hidden fixed inset-0 z-40 flex"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setLeftSidebarOpen(false)} />
+              <motion.div
+                className="relative w-72 bg-gray-950 border-r border-gray-800/60 p-3 space-y-3 overflow-y-auto"
+                initial={{ x: '-100%' }}
+                animate={{ x: 0 }}
+                exit={{ x: '-100%' }}
+                transition={{ type: 'tween', duration: 0.25, ease: 'easeOut' }}
+              >
               <div className="flex items-center justify-between mb-2">
-                <span className="font-orbitron text-xs text-gray-500 tracking-wider">控制面板</span>
-                <button onClick={() => setLeftSidebarOpen(false)} className="text-gray-500 hover:text-white">✕</button>
+                <span className="font-orbitron text-xs text-gray-400 tracking-wider">控制面板</span>
+                <button onClick={() => setLeftSidebarOpen(false)} className="text-gray-400 hover:text-white">✕</button>
               </div>
               <RoundTimeline
                 currentRound={selectedRound}
@@ -303,9 +340,10 @@ export default function GamePage() {
                 characters={worldState?.characters ?? []}
                 places={worldState?.places ?? []}
               />
-            </div>
-          </div>
-        )}
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* ── 中央（圖形）/ Center (Graph) ───────────────────────────────────── */}
         <main className="flex-1 relative min-w-0">
@@ -317,15 +355,39 @@ export default function GamePage() {
               characters={worldState?.characters ?? []}
               onPlaceClick={(place) => setSelectedPlace(place)}
               selectedPlaceId={selectedPlace?.id}
+              onControlsReady={(controls) => { mapControlsRef.current = controls; }}
             />
           </div>
 
           {/* 浮動控制項 / Floating controls */}
           <div className="absolute bottom-4 right-4 flex gap-2">
-            <button className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm">
+            <button
+              onClick={() => mapControlsRef.current?.resetView()}
+              title="重設視圖 / Reset view"
+              aria-label="重設視圖 / Reset view"
+              className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v5h5" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 16h5v5" />
+              </svg>
+            </button>
+            <button
+              onClick={() => mapControlsRef.current?.zoomIn()}
+              title="放大 / Zoom in"
+              aria-label="放大 / Zoom in"
+              className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm"
+            >
               +
             </button>
-            <button className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm">
+            <button
+              onClick={() => mapControlsRef.current?.zoomOut()}
+              title="縮小 / Zoom out"
+              aria-label="縮小 / Zoom out"
+              className="w-9 h-9 rounded-lg border border-gray-700/60 bg-gray-900/80 backdrop-blur-sm text-gray-400 hover:text-white hover:border-cyan-500/30 flex items-center justify-center transition-all duration-200 text-sm"
+            >
               −
             </button>
           </div>
@@ -365,8 +427,8 @@ export default function GamePage() {
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setRightSidebarOpen(false)} />
             <div className="relative w-80 bg-gray-950 border-l border-gray-800/60 flex flex-col overflow-hidden animate-slide-in-right">
               <div className="flex items-center justify-between px-3 pt-3 pb-0">
-                <span className="font-orbitron text-xs text-gray-500 tracking-wider">資訊面板</span>
-                <button onClick={() => setRightSidebarOpen(false)} className="text-gray-500 hover:text-white">✕</button>
+                <span className="font-orbitron text-xs text-gray-400 tracking-wider">資訊面板</span>
+                <button onClick={() => setRightSidebarOpen(false)} className="text-gray-400 hover:text-white">✕</button>
               </div>
               <RightSidebarTabs
                 activeTab={rightTab}
@@ -398,16 +460,20 @@ export default function GamePage() {
       </div>
 
       {/* ── 地方詳情彈窗 / Place Detail Panel ───────────────────────────────── */}
-      {selectedPlace && (
-        <PlaceDetail
-          place={selectedPlace}
-          factions={worldState?.factions ?? []}
-          characters={worldState?.characters ?? []}
-          roads={worldState?.roads ?? []}
-          places={worldState?.places ?? []}
-          onClose={() => setSelectedPlace(null)}
-        />
-      )}
+      {/* 地點詳情彈窗（含淡出動畫）/ Place detail popup (with fade-out exit) */}
+      <AnimatePresence>
+        {selectedPlace && (
+          <PlaceDetail
+            key="place-detail"
+            place={selectedPlace}
+            factions={worldState?.factions ?? []}
+            characters={worldState?.characters ?? []}
+            roads={worldState?.roads ?? []}
+            places={worldState?.places ?? []}
+            onClose={() => setSelectedPlace(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -453,11 +519,10 @@ function RightSidebarTabs({
         <button
           key={tab.key}
           onClick={() => onTabChange(tab.key)}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-orbitron tracking-wider transition-all duration-200 border-b-2 ${
-            activeTab === tab.key
-              ? 'text-cyan-400 border-cyan-400 bg-cyan-500/5'
-              : 'text-gray-500 border-transparent hover:text-gray-300 hover:bg-gray-800/30'
-          }`}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-orbitron tracking-wider transition-all duration-200 border-b-2 ${activeTab === tab.key
+            ? 'text-cyan-400 border-cyan-400 bg-cyan-500/5'
+            : 'text-gray-400 border-transparent hover:text-gray-300 hover:bg-gray-800/30'
+            }`}
         >
           <span>{tab.icon}</span>
           <span>{tab.label}</span>
@@ -474,7 +539,8 @@ function NextRoundButton({
 }: {
   isAdmin: boolean;
   currentRound: number;
-  onSuccess: () => void;
+  /** 回傳新回合數，讓頁面跳到剛執行的回合 / Receives the new round number so the view jumps to it */
+  onSuccess: (round: number) => void;
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -490,24 +556,23 @@ function NextRoundButton({
         setError(data.error ?? 'Failed');
         return;
       }
-      onSuccess();
+      onSuccess(data.round ?? currentRound + 1);
     } catch {
       setError('Network error');
     } finally {
       setLoading(false);
     }
   };
-
+  
   return (
     <div className="relative">
       <button
         onClick={handleRun}
         disabled={!isAdmin || loading}
-        className={`px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider transition-all duration-200 ${
-          isAdmin
-            ? 'text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50'
-            : 'text-gray-600 border border-gray-800 bg-gray-900/50 cursor-not-allowed'
-        }`}
+        className={`px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider transition-all duration-200 ${isAdmin
+          ? 'text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50'
+          : 'text-gray-600 border border-gray-800 bg-gray-900/50 cursor-not-allowed'
+          }`}
         title={isAdmin ? t('admin.runRound') : t('game.adminOnly')}
       >
         {loading ? '⏳' : '▶'} {t('game.nextRound')}
@@ -567,11 +632,10 @@ function RoundTimeline({
             <button
               key={round}
               onClick={() => onSelect(round)}
-              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-200 ${
-                round === currentRound
-                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800/50'
-              }`}
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-200 ${round === currentRound
+                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                : 'text-gray-400 hover:text-gray-300 hover:bg-gray-800/50'
+                }`}
             >
               <span className="font-orbitron tracking-wider">{t('game.round')} {String(round).padStart(4, '0')}</span>
             </button>
@@ -660,11 +724,10 @@ function CharacterList({
             <button
               key={char.id}
               onClick={() => setSelectedChar(selectedChar === char.id ? null : char.id)}
-              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-150 ${
-                selectedChar === char.id
-                  ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
-              }`}
+              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-150 ${selectedChar === char.id
+                ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/30'
+                }`}
             >
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
@@ -672,7 +735,7 @@ function CharacterList({
                 <span className="ml-auto text-xs text-gray-600 font-orbitron">⚔{char.troops}</span>
               </div>
               {selectedChar === char.id && (
-                <div className="mt-1.5 pl-3 text-xs text-gray-500 space-y-0.5 border-l border-gray-800">
+                <div className="mt-1.5 pl-3 text-xs text-gray-400 space-y-0.5 border-l border-gray-800">
                   <div>{t('character.wu')}: {char.wu} · {t('character.tong')}: {char.tong} · {t('character.jing')}: {char.jing}</div>
                   <div>{t('character.speed')}: {char.speed} · {t('character.ambition')}: {char.ambition}</div>
                   <div>{t('character.troops')}: {char.troops} · 💰 {char.gold}</div>
@@ -719,7 +782,7 @@ function EventLog({
   };
 
   function formatEvent(event: GameEvent): string {
-    const p = event.payload;
+    const p = event.data;
     switch (event.type) {
       case 'PLACE_CREATED':
         return t('events.newPlaceDesc').replace('{place}', p.placeName as string);
@@ -845,7 +908,7 @@ function StatsCharts({
 
     return (
       <div className="mb-3">
-        <div className="text-xs text-gray-500 font-orbitron tracking-wider mb-1.5 uppercase">{title}</div>
+        <div className="text-xs text-gray-400 font-orbitron tracking-wider mb-1.5 uppercase">{title}</div>
         <svg width={width} height={height} className="w-full">
           {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
             <line
@@ -926,12 +989,20 @@ function PlaceDetail({
     .filter((name): name is string => name !== null);
 
   return (
-    <div
+    <motion.div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
       onClick={onClose}
     >
-      <div
-        className="relative max-w-md w-full mx-4 rounded-xl border border-gray-700/60 bg-gray-900/95 backdrop-blur-md shadow-2xl shadow-black/50 animate-slide-in"
+      <motion.div
+        className="relative max-w-md w-full mx-4 rounded-xl border border-gray-700/60 bg-gray-900/95 backdrop-blur-md shadow-2xl shadow-black/50"
+        initial={{ opacity: 0, scale: 0.95, y: 12 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 12 }}
+        transition={{ duration: 0.2, ease: 'easeOut' }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* 頂部發光線 / Top glow line */}
@@ -940,20 +1011,20 @@ function PlaceDetail({
         {/* 標頭 / Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-800/60">
           <div>
-            <h3 className="font-orbitron font-bold text-base text-white tracking-wide">{place.name}</h3>
+            <h3 className="font-orbitron font-bold text-lg text-white tracking-wide">{place.name}</h3>
             {faction && (
               <div className="flex items-center gap-1.5 mt-1">
-                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: faction.color }} />
-                <span className="text-sm text-gray-400">{faction.name}</span>
+                <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: faction.color }} />
+                <span className="text-base text-gray-400">{faction.name}</span>
               </div>
             )}
             {!faction && (
-              <span className="text-xs text-gray-600">{t('place.unowned')}</span>
+              <span className="text-sm text-gray-600">{t('place.unowned')}</span>
             )}
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-lg border border-gray-700/60 bg-gray-800/50 text-gray-500 hover:text-white hover:border-gray-600 flex items-center justify-center transition-all duration-200"
+            className="w-8 h-8 rounded-lg border border-gray-700/60 bg-gray-800/50 text-gray-400 hover:text-white hover:border-gray-600 flex items-center justify-center transition-all duration-200"
           >
             ✕
           </button>
@@ -963,12 +1034,12 @@ function PlaceDetail({
           {/* 相連地點 / Linked Places */}
           {linkedPlaceNames.length > 0 && (
             <div>
-              <div className="text-xs text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+              <div className="text-sm text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
                 🛣️ {t('map.linkedPlaces')}
               </div>
               <div className="flex flex-wrap gap-1">
                 {linkedPlaceNames.map((name) => (
-                  <span key={name} className="text-xs bg-gray-800/60 border border-gray-700/40 rounded px-2 py-0.5 text-gray-400">
+                  <span key={name} className="text-sm bg-gray-800/60 border border-gray-700/40 rounded px-2 py-0.5 text-gray-400">
                     {name}
                   </span>
                 ))}
@@ -985,31 +1056,31 @@ function PlaceDetail({
 
           {/* 駐軍 / Garrison */}
           <div className="flex items-center justify-between p-2.5 rounded-lg bg-gray-800/30 border border-gray-800/40">
-            <span className="text-sm text-gray-500">{t('place.garrison')}</span>
-            <span className="font-orbitron font-bold text-base text-cyan-400">⚔ {place.garrison}</span>
+            <span className="text-base text-gray-400">{t('place.garrison')}</span>
+            <span className="font-orbitron font-bold text-lg text-cyan-400">⚔ {place.garrison}</span>
           </div>
 
           {/* 駐紮將領 / Stationed Characters */}
           <div>
-            <div className="text-xs text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+            <div className="text-sm text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
               {t('place.characters')}
             </div>
             <div className="space-y-0.5 max-h-28 overflow-y-auto">
               {placeChars.length === 0 && (
-                <p className="text-gray-700 text-xs">—</p>
+                <p className="text-gray-700 text-sm">—</p>
               )}
               {placeChars.map((char) => (
-                <div key={char.id} className="flex items-center gap-2 px-2 py-1 rounded-md text-sm text-gray-400">
+                <div key={char.id} className="flex items-center gap-2 px-2 py-1 rounded-md text-base text-gray-400">
                   <span className="font-medium text-gray-300">{char.name}</span>
-                  {char.isKing && <span className="text-amber-400 text-xs">👑</span>}
-                  <span className="ml-auto text-xs font-orbitron text-gray-600">⚔{char.troops}</span>
+                  {char.isKing && <span className="text-amber-400 text-sm">👑</span>}
+                  <span className="ml-auto text-sm font-orbitron text-gray-600">⚔{char.troops}</span>
                 </div>
               ))}
             </div>
           </div>
         </div>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -1024,9 +1095,9 @@ function BuildingStat({
 }) {
   return (
     <div className="text-center p-2 rounded-lg bg-gray-800/30 border border-gray-800/40">
-      <div className="text-sm mb-0.5">{icon}</div>
-      <div className="font-orbitron font-bold text-base text-white">{value}</div>
-      <div className="text-xs text-gray-600 uppercase tracking-wider">{label}</div>
+      <div className="text-base mb-0.5">{icon}</div>
+      <div className="font-orbitron font-bold text-lg text-white">{value}</div>
+      <div className="text-sm text-gray-600 uppercase tracking-wider">{label}</div>
     </div>
   );
 }
@@ -1038,6 +1109,7 @@ function GameGraph({
   characters,
   onPlaceClick,
   selectedPlaceId,
+  onControlsReady,
 }: {
   places: WorldState['places'];
   factions: WorldState['factions'];
@@ -1045,6 +1117,7 @@ function GameGraph({
   characters: WorldState['characters'];
   onPlaceClick?: (place: WorldState['places'][0]) => void;
   selectedPlaceId?: string | null;
+  onControlsReady?: (controls: MapCameraControls | null) => void;
 }) {
   return (
     <div className="w-full h-full bg-[#020617] relative">
@@ -1055,21 +1128,22 @@ function GameGraph({
         characters={characters}
         onPlaceClick={onPlaceClick}
         selectedPlaceId={selectedPlaceId}
+        onControlsReady={onControlsReady}
       />
       {/* 圖例 / Legend */}
-      <div className="absolute bottom-4 left-4 bg-gray-900/90 backdrop-blur-sm border border-gray-800/60 rounded-lg p-3 text-sm space-y-1">
-        <div className="font-orbitron text-xs font-semibold tracking-wider text-gray-500 uppercase mb-2">
+      <div className="absolute bottom-4 left-4 bg-gray-900/90 backdrop-blur-sm border border-gray-800/60 rounded-lg p-3.5 text-base space-y-1">
+        <div className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 uppercase mb-2">
           {t('map.faction')}
         </div>
         {factions.filter(f => f.alive).slice(0, 5).map(f => (
           <div key={f.id} className="flex items-center gap-2">
-            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: f.color }} />
-            <span className="text-xs text-gray-500">{f.name}</span>
+            <div className="w-3 h-3 rounded-full" style={{ backgroundColor: f.color }} />
+            <span className="text-sm text-gray-400">{f.name}</span>
           </div>
         ))}
         <div className="flex items-center gap-2">
-          <div className="w-2.5 h-2.5 rounded-full bg-gray-600" />
-          <span className="text-xs text-gray-500">{t('place.unowned')}</span>
+          <div className="w-3 h-3 rounded-full bg-gray-600" />
+          <span className="text-sm text-gray-400">{t('place.unowned')}</span>
         </div>
       </div>
     </div>

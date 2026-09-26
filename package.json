@@ -13,15 +13,18 @@
     "test:coverage": "vitest run --coverage",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "capture:hero": "node scripts/capture-hero.mjs"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "cn": "^0.4.0",
     "dotenv": "^17.4.2",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",
+    "motion": "^13.4.4",
     "next": "16.3.5",
     "next-auth": "5.0.0-beta.32",
     "pg": "^8.23.0",
@@ -31,6 +34,7 @@
     "zod": "^4.6.2"
   },
   "devDependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@tailwindcss/postcss": "^4",
     "@tanstack/react-query": "^5.102.8",
     "@testing-library/jest-dom": "^7.0.1",
@@ -42,6 +46,7 @@
     "babel-plugin-react-compiler": "^1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
+    "playwright": "^1.63.0",
     "prisma": "^7.10.0",
     "tailwindcss": "^4",
     "typescript": "^5",

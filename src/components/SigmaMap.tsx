@@ -95,6 +95,21 @@ interface Character {
   alive: boolean;
 }
 
+/**
+ * 地圖視角控制 — 由 SigmaMap 透過 onControlsReady 提供。
+ * Map camera controls — provided by SigmaMap via onControlsReady.
+ * 父層將其存入 ref，供浮動縮放/重設按鈕呼叫。
+ * Parents store it in a ref for the floating zoom/reset buttons.
+ */
+export interface MapCameraControls {
+  /** 放大 / Zoom in */
+  zoomIn: () => void;
+  /** 縮小 / Zoom out */
+  zoomOut: () => void;
+  /** 重設拖曳位置與縮放層級（動畫回到預設視角）/ Reset pan position and zoom level (animated back to default view) */
+  resetView: () => void;
+}
+
 interface SigmaMapProps {
   places: Place[];
   factions: Faction[];
@@ -102,6 +117,8 @@ interface SigmaMapProps {
   characters: Character[];
   onPlaceClick?: (place: Place) => void;
   selectedPlaceId?: string | null;
+  /** 視角控制回呼；Sigma 實例建立後呼叫，卸載時呼叫 null / Camera controls callback; invoked after the Sigma instance is created, null on unmount */
+  onControlsReady?: (controls: MapCameraControls | null) => void;
 }
 
 interface Tooltip {
@@ -124,6 +141,7 @@ export function SigmaMap({
   characters,
   onPlaceClick,
   selectedPlaceId,
+  onControlsReady,
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -133,6 +151,7 @@ export function SigmaMap({
   const hoveredNeighborsRef = useRef<Set<string>>(new Set());
   const selectedPlaceIdRef = useRef(selectedPlaceId);
   const onPlaceClickRef = useRef(onPlaceClick);
+  const onControlsReadyRef = useRef(onControlsReady);
 
   // 選中地點變更時（開啟或關閉彈窗）立即清除殘留的 tooltip。
   // Clear the lingering tooltip immediately when the selected place changes
@@ -152,7 +171,8 @@ export function SigmaMap({
   useEffect(() => {
     selectedPlaceIdRef.current = selectedPlaceId;
     onPlaceClickRef.current = onPlaceClick;
-  }, [selectedPlaceId, onPlaceClick]);
+    onControlsReadyRef.current = onControlsReady;
+  }, [selectedPlaceId, onPlaceClick, onControlsReady]);
 
   // ── 建立 Sigma 實例（僅一次）/ Create the Sigma instance (once) ──────────
 
@@ -198,14 +218,14 @@ export function SigmaMap({
 
         // hover / 選中 時標籤變青色，連接節點也高亮 / Label turns cyan on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
-          res.labelColor = '#22d3ee'; // 霓虹青綠 / Neon cyan
+          res.labelColor = '#1EBDD6'; // 霓虹青綠 / Neon cyan
           res.zIndex = 1;
           res.highlighted = true;
         } else if (selectedPlaceIdRef.current === node) {
-          res.labelColor = '#22d3ee';
+          res.labelColor = '#1EBDD6';
           res.highlighted = true;
         } else if (hoveredNeighborsRef.current.has(node)) {
-          res.labelColor = '#22d3ee';
+          res.labelColor = '#1EBDD6';
           res.highlighted = true;
         } else {
           res.labelColor = '#e2e8f0'; // 預設淺灰 / Default light gray
@@ -272,7 +292,24 @@ export function SigmaMap({
 
     sigmaRef.current = sigma;
 
+    // 將視角控制交給父層（浮動縮放 / 重設按鈕使用）
+    // Hand camera controls to the parent (used by floating zoom / reset buttons)
+    onControlsReadyRef.current?.({
+      zoomIn: () => {
+        void sigma.getCamera().animatedZoom();
+      },
+      zoomOut: () => {
+        void sigma.getCamera().animatedUnzoom();
+      },
+      resetView: () => {
+        // 回到預設視角：置中、ratio 1、角度 0（同時重設拖曳位置與縮放）
+        // Return to default view: centered, ratio 1, angle 0 (resets pan and zoom)
+        void sigma.getCamera().animatedReset();
+      },
+    });
+
     return () => {
+      onControlsReadyRef.current?.(null);
       sigma.kill();
       sigmaRef.current = null;
       // 清除 hover 狀態，避免殘留舊的高亮標籤
@@ -385,7 +422,7 @@ export function SigmaMap({
       {/* 工具提示 / Tooltip */}
       {tooltip && (
         <div
-          className="absolute pointer-events-none z-50 bg-gray-900/95 backdrop-blur-md rounded-xl p-3 text-sm shadow-2xl shadow-black/50 border border-gray-700/60"
+          className="absolute pointer-events-none z-50 bg-gray-900/95 backdrop-blur-md rounded-xl p-3.5 text-base shadow-2xl shadow-black/50 border border-gray-700/60"
           style={{
             left: tooltip.x + 15,
             top: tooltip.y - 10,
@@ -395,7 +432,7 @@ export function SigmaMap({
           {/* 頂部發光線 / Top glow line */}
           <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
 
-          <div className="font-orbitron font-bold text-base text-white mb-1 tracking-wide">
+          <div className="font-orbitron font-bold text-lg text-white mb-1 tracking-wide">
             {tooltip.place.name}
           </div>
           {tooltip.faction && (
@@ -404,10 +441,10 @@ export function SigmaMap({
                 className="w-2.5 h-2.5 rounded-full"
                 style={{ backgroundColor: tooltip.faction.color }}
               />
-              <span className="text-gray-300 text-xs">{tooltip.faction.name}</span>
+              <span className="text-gray-300 text-sm">{tooltip.faction.name}</span>
             </div>
           )}
-          <div className="space-y-0.5 text-gray-500 text-xs">
+          <div className="space-y-0.5 text-gray-400 text-sm">
             <div>⚔️ 兵力: <span className="text-cyan-400 font-orbitron">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
             <div>🏰 堡壘: <span className="text-gray-400 font-orbitron">{tooltip.place.fortress}</span></div>
             <div>🏪 市場: <span className="text-gray-400 font-orbitron">{tooltip.place.market}</span></div>
@@ -415,7 +452,7 @@ export function SigmaMap({
             <div>👥 將領: <span className="text-gray-400 font-orbitron">{tooltip.characterCount}</span></div>
           </div>
           {tooltip.linkedPlaces.length > 0 && (
-            <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-500 text-xs">
+            <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-400 text-sm">
               🛣️ {tooltip.linkedPlaces.join('、')}
             </div>
           )}

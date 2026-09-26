@@ -34,6 +34,26 @@ export default async function HomePage() {
           <div className="shooting-star" />
           <div className="shooting-star" />
         </div>
+
+        {/* ── 遊戲畫面英雄影片（僅首屏，壓在星空之上）/ Game-screen hero video
+             (first screen only, layered over the starfield) ─────────────── */}
+        <div className="absolute inset-x-0 top-0 h-screen overflow-hidden">
+          <video
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            poster="/hero-poster.jpg"
+            aria-hidden="true"
+            className="absolute inset-0 w-full h-full object-cover opacity-45 motion-reduce:hidden"
+          >
+            <source src="/hero.mp4" type="video/mp4" />
+            <source src="/hero.webm" type="video/webm" />
+          </video>
+          {/* 壓暗層：確保標頭與主視覺文字可讀 / Dimming layer: keep header & hero text readable */}
+          <div className="absolute inset-0 bg-gradient-to-b from-[#020617]/75 via-[#020617]/55 to-[#020617]/90" />
+        </div>
       </div>
 
       {/* ── 標頭 / Header ──────────────────────────────────────────────────────── */}
@@ -80,7 +100,7 @@ export default async function HomePage() {
         <p className="text-lg md:text-xl text-gray-400 mb-4 max-w-2xl leading-relaxed">
           {t('home.intro')}
         </p>
-        <p className="text-sm text-gray-500 mb-14 max-w-xl leading-relaxed">
+        <p className="text-sm text-gray-400 mb-14 max-w-xl leading-relaxed">
           {t('home.description')}
         </p>
 
@@ -258,7 +278,7 @@ function FeatureCard({
         <h3 className="font-orbitron font-semibold text-sm tracking-wide text-white mb-2">
           {title}
         </h3>
-        <p className="text-gray-500 text-xs leading-relaxed">{description}</p>
+        <p className="text-gray-400 text-xs leading-relaxed">{description}</p>
       </div>
     </div>
   );
@@ -313,7 +333,7 @@ function StatsCard({
 
       <div className="text-3xl mb-3">{icon}</div>
       <div className="font-orbitron text-2xl md:text-3xl font-bold text-white mb-2">{value}</div>
-      <div className="text-gray-500 text-xs uppercase tracking-wider">{label}</div>
+      <div className="text-gray-400 text-xs uppercase tracking-wider">{label}</div>
     </div>
   );
 }
