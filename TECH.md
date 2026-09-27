@@ -1047,6 +1047,154 @@ export const CONFIG = {
 - 1 個勢力
 - round-0 快照 + `currentRound: 1`
 
+### 遊戲數值公式 / Game Formulas
+
+所有常數定義於 `src/lib/gameConfig.ts`（唯一真實來源）。以下公式與程式碼逐一核對。
+All constants live in `src/lib/gameConfig.ts` (single source of truth). Every formula below is verified against the code.
+
+#### 屬性作用 / What Each Stat Affects
+
+| 屬性 Stat | 影響 Effect |
+|---|---|
+| `wu` 武力 | 戰鬥攻擊力 Battle attack power（`× (1 + wu/30)`） |
+| `tong` 統率 | 戰鬥防禦力 Battle defense（`× (1 + tong/30)`，僅將領對戰）；降低部下叛變機率（`× (1 − 0.01 × king.tong)`） |
+| `jing` 智力 | **目前無任何 gameplay 效果 / Currently NO gameplay effect** — 僅儲存與顯示（grep 全專案：`jing` 只出現在建立、查詢、顯示處）。**金錢增加與 `jing` 無關** — 收入只看地點市場等級 |
+| `speed` 速度 | 移動順序（快者先動）；逃跑機率（每點速度差 ±2%） |
+| `ambition` 野心 | 叛變機率基礎（`base = ambition × 0.5`） |
+
+> ⚠️ `CHAR_TROOP_CAP_BASE: 100` / `CHAR_TROOP_CAP_PER_TONG: 20` 已定義但**未被任何遊戲邏輯使用**（僅 `gameConfig.ts` 與測試引用）— 兵力目前無上限。
+
+#### 初始值 / Initial Values（`prisma/seed.ts`）
+
+| 項目 | 公式 |
+|---|---|
+| 國王 `wu` / `tong` / `jing` | `rng.int(5, 30)` 均勻分佈 |
+| 國王 `speed` / `ambition` | `rng.gaussian(17, 5, 5, 30)` 常態分佈（截斷 5–30） |
+| 國王 `age` / `maxAge` | `age = 20`；`maxAge = rng.int(50, 80)` |
+| 國王 `troops` | `rng.int(5, 15)` |
+| 國王 **`gold`（初始金錢）** | **`rng.int(50, 150)`** |
+| 國王 `loyalty` | `rng.pick(['SELF', 'PATH', 'ALTRUISM'])` |
+| 國王所在地點 | `garrison = 10`，`fortress/market/barracks = 1` |
+| 其他地點 | `garrison = 0`，三建築皆 0；無主之地 `factionId = null` |
+
+#### 角色生成 / Character Spawn（`server/phases/spawnCharacters.ts`）
+
+- **僅出現在有勢力控制的地點**（`factionId != null`），新角色 `factionId = place.factionId`（加入該勢力）
+- 生成率線性遞減：`rate = 5% − progress × (5% − 1%)`，其中 `progress = min(1, (地點數 − 100) / (2000 − 100))`
+  - 100 地點 → 每地點 5%；2000 地點 → 1%
+- 屬性：`wu/tong/jing = int(5,30)`；`speed/ambition = gaussian(17,5)`；`maxAge = int(50,80)`；`age = 20`；`troops = 0`；`gold = 0`
+- **回傳值**：`string[]` — 本回合生成的角色 ID；`runRound.ts` 將其以 `Set` 傳給 `aiMove(..., skipIds)`，**出生者該回合不移動**（無 `CHARACTER_MOVED` 事件）
+- **行政官指派（同回合內、於生成後立即執行）**：
+  1. 出生地無行政官（或行政官已死亡）→ 直接指派：`place.administratorId = 新角色`、`lastPromotedRound = round`、寫入 `ADMIN_ASSIGNED` 事件
+  2. 現任行政官是存活的**國王** → 國王保留席位，不比較
+  3. 否則比較**總能力 `wu + tong + jing`**（新將領 vs 現任），僅**嚴格較大**才取代（平手不動）
+  4. 取代時：被免職者野心 **＋`AMBITION_ADMIN_REPLACED_DELTA`（1）**，以 `CHAR_AMBITION_MAX` 封頂；寫入 `ADMIN_REMOVED` 事件（含 `newAdminName`/`oldTotal`/`newTotal`）**及** `AmbitionEvent`（`delta` = 實際套用量、`reason` 含地點與接任者）
+- `Place.administratorId` 為全域 `@unique` — 一個角色同時只能管理一個地點
+
+#### 經濟 / Economy（`server/phases/economy.ts`）
+
+**地點收入 / Place income：**
+```
+income = PLACE_BASE_INCOME(10) + market × PLACE_MARKET_INCOME_PER_LV(5)
+```
+例：market 3 級 → 10 + 3×5 = 25 金/回合。
+
+**分配 / Distribution**（每地點每回合）：
+
+| 情況 | 結果 |
+|---|---|
+| 有國王 + 有總督 | 國王 `floor(income × 0.4)`；總督 `floor(income × 0.3)`；剩餘平均分給該地點其他角色（`floor`，餘數不分配） |
+| 僅國王（無總督） | **國王得全部 `income`（100%）**，其他人得 0 |
+| 僅總督（無國王） | 總督得全部 `income`（100%） |
+| 無國王無總督 | 無人分配（收入蒸發） |
+
+**徵兵 / Garrison recruitment**（僅有勢力的地點）：
+```
+garrison += PLACE_BASE_RECRUIT(2) + barracks × PLACE_BARRACKS_RECRUIT_PER_LV(3)
+```
+
+**購兵 / Troop purchase**（每個在地點的存活角色）：
+- `maxBuyable = floor(gold / CHAR_BUY_TROOP_PRICE(2))`；若 `maxBuyable ≥ 10` 才購買
+- `buyCount = rng.int(10, min(100, maxBuyable))`；花費 `buyCount × 2` 金，`troops += buyCount`
+
+#### 建築 / Buildings（`server/phases/build.ts`）
+
+- 每地點每回合隨機挑一種建築升級；僅有總督的地點可升級；總督付錢
+- **費用：`cost = BUILDING_UPGRADE_COST_BASE(100) × 2^currentLevel`**（指數成長：0→1 級 100、1→2 級 200、2→3 級 400、3→4 級 800、4→5 級 1600）
+- 最高等級 5
+
+#### 戰鬥 / Battle（`server/phases/battle.ts`）
+
+**通用隨機數：** `rand = rng.float(0.85, 1.15)`（atk / def 各自獨立擲骰）
+
+**A. 攻堅駐軍（無主地點或無將領駐軍）：**
+```
+atk = attacker.troops × (1 + attacker.wu × 1/30) × atkRand
+def = place.garrison  × (1 + fortress × 0.2)   × defRand   // 駐軍無統帥，tong 不計
+```
+- `atk > def` → 駐軍全滅、攻擊者 `troops = floor(troops × 0.9)`（疲勞）後佔領
+- 否則攻擊者逃跑：`escapeChance = clamp(0.5 + attacker.speed × 0.02, 0.1, 0.9)`（駐軍速度視為 0）
+
+**B. 將領對戰（攻擊者 vs 地點守將）：**
+```
+atk = attacker.troops × (1 + attacker.wu × 1/30) × atkRand
+def = defender.troops × (1 + defender.tong × 1/30) × (1 + fortress × 0.2) × defRand
+```
+- 攻擊者勝：守將逃跑（公式同下）；攻擊者 `troops = floor(troops × 0.9)`
+- 守將勝：攻擊者逃跑，`speedDiff = attacker.speed − defender.speed`
+
+**逃跑 / Escape（兩者共用）：**
+```
+escapeChance = clamp(SPEED_ESCAPE_BASE(0.5) + speedDiff × 0.02, 0.1, 0.9)
+```
+- 成功 → 移動到鄰近「同勢力或無主」地點，`troops = 0`；找不到落腳點 → 留在原地 `troops = 0`
+- 失敗 → 死亡（`BATTLE_DEATH`）
+
+#### 叛變 / Defection（`server/phases/loyaltyCheck.ts`）
+
+國王與叛變者不會被檢查（`isKing: false` 過濾）。基礎機率：
+```
+base = ambition × AMBITION_DEFECT_BASE_MULT(0.5)
+```
+依序乘算修正，最後 `rng.chance(base / 100)` 擲骰：
+
+| 條件 | 乘數 |
+|---|---|
+| `loyalty ≠ king.loyalty` | `× 1.2` |
+| 國王統率加成（無條件） | `× (1 − 0.01 × king.tong)`（tong 30 → ×0.7） |
+| 朋友於 5 回合內叛逃 | `× 1.5` ⚠️ 實作備註：查詢的事件型別為 `'DEFECT'`，但事件實際寫入為 `'DEFECTION'` → **此乘數目前永遠不會觸發** |
+| 同勢力存活角色 > 500 | `× 0.8`（注意：比對的是**角色數**，非地點數） |
+| 有 Discontent（不滿） | `× 1.3` |
+
+#### 野心變化 / Ambition Changes（`server/phases/ambitionEvents.ts`）
+
+每回合對每個角色計算 `delta`，最終 `clamp(5, 30)`：
+- `+ AMBITION_NO_PROMOTION_DELTA(0.5)`：若 ≥ 20 回合未升遷（`roundsSincePromotion ≥ 20`，從未升遷者以 `round` 計算）
+- `− 0.5 × (king.tong / 30)`：國王統率越高，部下野心降越多（tong 30 → −0.5）
+- 朋友叛逃 `+2`：**未實作**（程式碼標註 `TODO`，該區段被跳過）
+
+#### 老化與死亡 / Aging & Death（`server/phases/ageAndDeath.ts`）
+
+- 所有存活角色 `age += 1`（每回合）
+- `age >= maxAge` → 自然死亡（`DEATH`，reason `old_age`）；`maxAge` 於生成時 `int(50, 80)`
+
+#### 信號 / Signals（`server/phases/signals.ts`）
+
+- 持續 `SIGNAL_DURATION(5)` 回合、冷卻 `SIGNAL_COOLDOWN(10)` 回合、範圍 2 跳（`SIGNAL_RANGE`）、每勢力同時最多 1 個啟動中
+- 國王 / 總督可發送；移動 AI 目標優先序：信號 > 勢力敵人 > 最近無主地 > 原地不動；每回合移 1 格，依 `speed` 降序執行
+- `aiMove(worldId, round, rng, skipIds?)`：`skipIds` 為本回合出生的角色 ID 集合，命中者直接跳過 —— **出生者該回合完全不移動**（即使有信號/敵人/行軍目標）
+
+#### 地圖節點大小 / Map Node Size（`src/components/SigmaMap.tsx`）
+
+```
+nodeSize = 4 + log(troops + 1) × 2     // troops = garrison + 該地點所有角色 troops
+```
+
+#### 世界佈局 / World Layout
+
+- ForceAtlas2 全域重算每 `LAYOUT_RECALC_INTERVAL(100)` 回合
+- 新節點：鄰居重心 + 隨機偏移 `radius ∈ [20, 50]`；最小節點間距 15，碰撞重試 10 次
+
 ---
 
 ## 地圖視覺化 / Map Visualization

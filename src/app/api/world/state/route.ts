@@ -132,7 +132,17 @@ export async function GET(request: NextRequest) {
     // Prisma 7 returns Uint8Array for Bytes fields, convert to Buffer
     const buffer = Buffer.from(snapshot.data);
     const state = decompressSnapshot(buffer);
-    return NextResponse.json({ ...state, spotlights, moves });
+    // 快照內嵌的 world.currentRound 是「快照當下的回合」，會讓時間軸在觀看
+    // 舊回合時縮短到該回合 — 一律覆寫為即時的最新回合 /
+    // The snapshot's embedded world.currentRound is the round at capture time,
+    // which would shrink the timeline when viewing an old round — always
+    // override it with the live latest round.
+    return NextResponse.json({
+      ...state,
+      world: { ...state.world, currentRound: world.currentRound },
+      spotlights,
+      moves,
+    });
   }
   // 沒有可用的快照 — 查詢即時資料 / No snapshot available — query live data
   // 這是沒有快照的回合的後備方案 / This is a fallback for rounds without snapshots
@@ -143,6 +153,7 @@ export async function GET(request: NextRequest) {
         id: true,
         name: true,
         factionId: true,
+        administratorId: true,
         garrison: true,
         fortress: true,
         market: true,
@@ -171,6 +182,7 @@ export async function GET(request: NextRequest) {
         tong: true,
         jing: true,
         speed: true,
+        loyalty: true,
         ambition: true,
         age: true,
         troops: true,

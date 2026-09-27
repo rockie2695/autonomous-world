@@ -15,6 +15,7 @@
 //
 // 使用方式 / Usage:
 //   await aiMove(worldId, round, rng);
+//   await aiMove(worldId, round, rng, skipIds); // skipIds: 本回合出生者不移動
 // ============================================================================
 
 import { prisma } from '@/lib/prisma';
@@ -29,11 +30,14 @@ import { recordMove } from '../moveEvent';
  * @param worldId - 要處理的世界 ID / World to process
  * @param round - 當前回合數 / Current round number
  * @param rng - 用於打破速度平手的種子 RNG / Seeded RNG for tie-breaking movement order
+ * @param skipIds - 本回合不得移動的角色 ID（出生回合原地待命）
+ *                  Character IDs that must not move this round (spawn-round stay put)
  */
 export async function aiMove(
   worldId: string,
   round: number,
-  rng: Rng
+  rng: Rng,
+  skipIds?: ReadonlySet<string>
 ): Promise<void> {
   // 取得所有存活角色及其所在地與陣營 / Get all living characters with their current locations and faction
   const characters = await prisma.character.findMany({
@@ -130,6 +134,10 @@ export async function aiMove(
 
   // 移動每個角色 / Move each character
   for (const char of sorted) {
+    // 本回合出生的角色原地待命（出生回合不移動）/
+    // Spawned this round: stay put (no movement in spawn round)
+    if (skipIds?.has(char.id)) continue;
+
     const currentPlaceFaction = placeFactionMap.get(char.placeId);
 
     // 1. 檢查角色是否有號令目標 / Check if character has a target from signal

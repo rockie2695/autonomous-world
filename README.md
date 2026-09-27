@@ -161,12 +161,15 @@ autonomous-world/
 - Stats range 5-30, with speed using normal distribution (μ=17, σ=5)
 - Characters age each round and eventually die of old age (50-80 years)
 - Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
+- Characters spawned in a round never move in that round (they stay put until the next round)
+- On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removed admin's ambition **increases** by `AMBITION_ADMIN_REPLACED_DELTA` (1), logged as an `ADMIN_REMOVED` event + an `AmbitionEvent`
 
 ### Factions
 - Characters can belong to a faction (kingdom/nation)
 - Each faction has a king, color, and set of territories
 - When a king dies, the faction enters "collapsing" state and dissolves
 - Only faction-controlled places can be assigned an administrator (auto-assign skips unowned places; the admin API returns 400 for them)
+- The place popup shows who manages the place (administrator name, 👑 if the king), or "No Administrator"
 
 ### Map Visualization
 
@@ -179,7 +182,7 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
 - Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
 - Node labels follow one zoom rule: shown only when zoom ≥ `LABEL_SIZE_THRESHOLD` (8), via Sigma's `labelRenderedSizeThreshold`; labels always paint above the spotlight overlay
-- **Spotlight rings** — places created or attacked within the last `SPOTLIGHT_ROUNDS` (3) rounds pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
+- **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
 
 ### Battles

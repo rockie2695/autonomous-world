@@ -179,6 +179,8 @@ export const zh = {
     eliminationDesc: '{faction} 已完全消滅',
     adminAssigned: '行政官指派',
     adminAssignedDesc: '{character} 被指派為 {place} 的行政官',
+    adminRemoved: '行政官免職',
+    adminRemovedDesc: '{character} 被免去 {place} 行政官職務（由 {newAdmin} 接任），野心上升',
     battleOrder: '戰鬥順序',
     battleOrderDesc: '{place} 的攻擊順序: {order}',
     newPlace: '新地點',

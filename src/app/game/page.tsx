@@ -34,6 +34,7 @@ interface WorldState {
     id: string;
     name: string;
     factionId: string | null;
+    administratorId: string | null;
     garrison: number;
     fortress: number;
     market: number;
@@ -56,6 +57,7 @@ interface WorldState {
     tong: number;
     jing: number;
     speed: number;
+    loyalty: string;
     ambition: number;
     age: number;
     troops: number;
@@ -131,6 +133,8 @@ export default function GamePage() {
   });
 
   const errorMessage = error instanceof Error ? error.message : null;
+  /** 已執行的最大回合：快照存在 0..currentRound-1，currentRound 是尚未執行的下一回合 → 時間軸不顯示未來回合 / Last run round: snapshots exist for 0..currentRound-1, currentRound is the next (un-run) round → never show future rounds on the timeline */
+  const lastRound = Math.max(0, (worldState?.world.currentRound ?? 1) - 1);
 
   useEffect(() => {
     async function checkAdmin() {
@@ -166,7 +170,7 @@ export default function GamePage() {
     const timer = setInterval(() => {
       setSelectedRound((prev) => {
         const next = prev + 1;
-        if (next > (worldState?.world.currentRound ?? 0)) {
+        if (next > lastRound) {
           setIsPlaying(false);
           return prev;
         }
@@ -174,7 +178,7 @@ export default function GamePage() {
       });
     }, playSpeed);
     return () => clearInterval(timer);
-  }, [isPlaying, playSpeed, worldState?.world.currentRound]);
+  }, [isPlaying, playSpeed, lastRound]);
 
   // ── 載入狀態 / Loading State ──────────────────────────────────────────────
 
@@ -270,6 +274,9 @@ export default function GamePage() {
               // Round may be unchanged (viewing latest) → cache key stays, so
               // explicitly invalidate to force a fresh fetch of newest state
               void queryClient.invalidateQueries({ queryKey: ['worldState'] });
+              // 事件日誌現在包含所有回合 → 新回合完成後也要失效
+              // Event log now spans all rounds → invalidate after a new round too
+              void queryClient.invalidateQueries({ queryKey: ['events'] });
             }}
           />
           <LanguageSwitch locale={locale} onToggle={handleLocaleToggle} />
@@ -302,7 +309,7 @@ export default function GamePage() {
         <aside className="hidden md:block w-64 border-r border-gray-800/60 bg-gray-950/50 p-3 space-y-3 overflow-y-auto shrink-0">
           <RoundTimeline
             currentRound={selectedRound}
-            maxRound={worldState?.world.currentRound ?? 0}
+            maxRound={lastRound}
             isPlaying={isPlaying}
             playSpeed={playSpeed}
             onSelect={handleRoundSelect}
@@ -341,7 +348,7 @@ export default function GamePage() {
               </div>
               <RoundTimeline
                 currentRound={selectedRound}
-                maxRound={worldState?.world.currentRound ?? 0}
+                maxRound={lastRound}
                 isPlaying={isPlaying}
                 playSpeed={playSpeed}
                 onSelect={(r) => { handleRoundSelect(r); setLeftSidebarOpen(false); }}
@@ -424,7 +431,6 @@ export default function GamePage() {
             )}
             {rightTab === 'events' && (
               <EventLog
-                round={selectedRound}
                 worldId={worldState?.world.id ?? ''}
               />
             )}
@@ -460,7 +466,6 @@ export default function GamePage() {
                 )}
                 {rightTab === 'events' && (
                   <EventLog
-                    round={selectedRound}
                     worldId={worldState?.world.id ?? ''}
                   />
                 )}
@@ -650,8 +655,9 @@ function RoundTimeline({
         />
         <span className="text-xs text-gray-500 font-orbitron">{playSpeed}ms</span>
       </div>
+      {/* 顯示所有回合（不設上限），捲軸內可滾動 / Show ALL rounds (no cap), scrollable */}
       <div className="space-y-0.5 max-h-40 overflow-y-auto">
-        {Array.from({ length: Math.min(maxRound + 1, 20) }, (_, i) => maxRound - i).map(
+        {Array.from({ length: maxRound + 1 }, (_, i) => maxRound - i).map(
           (round) => (
             <button
               key={round}
@@ -942,8 +948,8 @@ function CharacterList({
               {selectedChar === char.id && (
                 <div className="mt-1.5 pl-3 text-xs text-gray-400 space-y-0.5 border-l border-gray-800">
                   <div>{t('character.wu')}: {char.wu} · {t('character.tong')}: {char.tong} · {t('character.jing')}: {char.jing}</div>
-                  <div>{t('character.speed')}: {char.speed} · {t('character.ambition')}: {char.ambition}</div>
-                  <div>{t('character.troops')}: {char.troops} · 💰 {char.gold}</div>
+                  <div>{t('character.speed')}: {char.speed} · {t('character.ambition')}: {Math.round(char.ambition)}</div>
+                  <div>{t('character.age')}: {char.age} · {t('character.troops')}: {char.troops} · 💰 {char.gold}</div>
                   <div>{t('character.place')}: {placeMap.get(char.placeId) ?? '—'}</div>
                 </div>
               )}
@@ -965,8 +971,11 @@ function CharacterList({
               <th className="py-2 pr-3 font-medium text-right">{t('character.tong')}</th>
               <th className="py-2 pr-3 font-medium text-right">{t('character.jing')}</th>
               <th className="py-2 pr-3 font-medium text-right">{t('character.speed')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.ambition')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.age')}</th>
               <th className="py-2 pr-3 font-medium text-right">{t('character.troops')}</th>
               <th className="py-2 pr-3 font-medium text-right">{t('character.gold')}</th>
+              <th className="py-2 pr-3 font-medium">{t('character.loyalty')}</th>
               <th className="py-2 font-medium">{t('character.place')}</th>
             </tr>
           </thead>
@@ -999,8 +1008,16 @@ function CharacterList({
                 <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.tong}</td>
                 <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.jing}</td>
                 <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.speed}</td>
+                {/* 野心存於 Float 欄位（±0.5 增減），顯示取整與其他整數屬性一致 /
+                    Ambition lives in a Float column (±0.5 deltas); round for
+                    display so it matches the other integer stats */}
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{Math.round(char.ambition)}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.age}</td>
                 <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.troops}</td>
                 <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.gold}</td>
+                <td className="py-2 pr-3 text-gray-400">
+                  {t(`character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`)}
+                </td>
                 <td className="py-2 text-gray-400">{placeName}</td>
               </tr>
             ))}
@@ -1012,16 +1029,15 @@ function CharacterList({
 }
 
 function EventLog({
-  round,
   worldId,
 }: {
-  round: number;
   worldId: string;
 }) {
   const { data, isLoading } = useQuery<{ events: GameEvent[] }>({
-    queryKey: ['events', round],
+    // 不帶 round → 回傳所有回合的事件 / Omit round → events for ALL rounds
+    queryKey: ['events'],
     queryFn: async () => {
-      const res = await apiFetch(`/api/world/events?round=${round}`);
+      const res = await apiFetch('/api/world/events');
       if (!res.ok) return { events: [] };
       return res.json();
     },
@@ -1042,6 +1058,7 @@ function EventLog({
     FACTION_ELIMINATED: '❌',
     BUILDING_UPGRADE: '🏗️',
     ADMIN_ASSIGNED: '👤',
+    ADMIN_REMOVED: '👤❌',
     PLACE_CAPTURED: '🚩',
   };
 
@@ -1085,6 +1102,11 @@ function EventLog({
         return t('events.adminAssignedDesc')
           .replace('{character}', p.charName as string)
           .replace('{place}', p.placeName as string);
+      case 'ADMIN_REMOVED':
+        return t('events.adminRemovedDesc')
+          .replace('{character}', p.charName as string)
+          .replace('{place}', p.placeName as string)
+          .replace('{newAdmin}', (p.newAdminName as string) ?? '?');
       case 'PLACE_CAPTURED':
         return t('events.placeCaptureDesc')
           .replace('{character}', p.charName as string)
@@ -1099,10 +1121,11 @@ function EventLog({
       <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase flex items-center justify-between">
         <span>{t('events.title')}</span>
         <span className="text-cyan-400/70 text-xs tracking-widest">
-          {t('game.round')} {String(round).padStart(4, '0')}
+          {events.length} {t('events.tab')}
         </span>
       </h3>
-      <div className="space-y-0.5 max-h-40 overflow-y-auto">
+      {/* 所有回合的事件，高度加倍以便瀏覽 / All rounds' events, doubled height for browsing */}
+      <div className="space-y-0.5 max-h-80 overflow-y-auto">
         {isLoading && (
           <p className="text-gray-500 text-xs">{t('general.loading')}</p>
         )}
@@ -1112,6 +1135,10 @@ function EventLog({
         {events.map((event) => (
           <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/20 transition-colors duration-150">
             <span className="text-sm shrink-0 mt-0.5">{eventIcons[event.type] ?? '📌'}</span>
+            {/* 回合徽章：所有回合的事件需標示來源回合 / Round badge: all-rounds events need their source round */}
+            <span className="font-orbitron text-[10px] text-cyan-500/60 shrink-0 mt-1 tracking-wider">
+              {String(event.round).padStart(4, '0')}
+            </span>
             <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
           </div>
         ))}
@@ -1260,6 +1287,8 @@ function PlaceDetail({
   const placeChars = characters.filter(
     (c) => c.placeId === place.id && c.alive
   );
+  // 管理此地點的行政官（可能人在他處）/ The place's administrator (may be elsewhere)
+  const adminChar = characters.find((c) => c.id === place.administratorId) ?? null;
 
   const linkedPlaceNames = roads
     .filter((road) => road.aId === place.id || road.bId === place.id)
@@ -1337,6 +1366,19 @@ function PlaceDetail({
           <div className="flex items-center justify-between p-2.5 rounded-lg bg-gray-800/30 border border-gray-800/40">
             <span className="text-base text-gray-400">{t('place.garrison')}</span>
             <span className="font-orbitron font-bold text-lg text-cyan-400">⚔ {place.garrison}</span>
+          </div>
+
+          {/* 行政官 / Administrator */}
+          <div className="flex items-center justify-between p-2.5 rounded-lg bg-gray-800/30 border border-gray-800/40">
+            <span className="text-base text-gray-400">{t('place.administrator')}</span>
+            {adminChar ? (
+              <span className="text-base font-medium text-amber-300">
+                {adminChar.isKing ? '👑 ' : ''}
+                {adminChar.name}
+              </span>
+            ) : (
+              <span className="text-base text-gray-600">{t('place.noAdmin')}</span>
+            )}
           </div>
 
           {/* 駐紮將領 / Stationed Characters */}

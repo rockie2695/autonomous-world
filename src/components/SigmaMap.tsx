@@ -64,6 +64,7 @@ interface Place {
   id: string;
   name: string;
   factionId: string | null;
+  administratorId: string | null;
   garrison: number;
   fortress: number;
   market: number;

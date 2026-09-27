@@ -156,7 +156,7 @@ server/
 │   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
     ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent, road limit enforced)
-    ├── spawnCharacters.ts # Phase 2 (faction-controlled places only)
+    ├── spawnCharacters.ts # Phase 2 (faction-controlled places only; returns spawned IDs + assigns spawn-place admin)
     └── ...               # Phases 3-14
 ```
 
@@ -214,13 +214,23 @@ A place is "faction-controlled" when `place.factionId != null`. Unowned (無主�
 - **Manual admin assignment**: `POST /api/admin/assign-admin` returns **400** `"Cannot assign administrator to an unowned place"` when `place.factionId` is null
 - If legacy data violates this (e.g. an admin left behind after a rule change), clear it once: `prisma.place.updateMany({ where: { factionId: null, administratorId: { not: null } }, data: { administratorId: null } })`
 
+### Spawn Round Rules (Phase 2 + Phase 9)
+
+- `spawnCharacters.ts` returns `string[]` of IDs spawned this round (it also assigns admins, see below); `runRound.ts` passes them to `aiMove(worldId, round, rng, skipIds)` as a `Set` — **characters spawned in a round never move in that round** (no movement, no `CHARACTER_MOVED` event in the spawn round)
+- **Spawn admin assignment** (done inside `spawnCharacters.ts` right after creation, so economy/assignAdmins see it the same round):
+  1. Spawn place vacant (or its admin is dead) → assign the new leader directly (`lastPromotedRound = round`, `ADMIN_ASSIGNED` event)
+  2. Current admin is the living **king** → king keeps his seat, no comparison
+  3. Otherwise compare **total ability `wu + tong + jing`** (new leader vs current admin); only a **strictly greater** total replaces the admin
+  4. On replacement: old admin's ambition **increases** by `CONFIG.AMBITION_ADMIN_REPLACED_DELTA` (1, clamped to `CHAR_AMBITION_MAX`), logged as an `ADMIN_REMOVED` Event **and** an `AmbitionEvent`
+- `Place.administratorId` is globally unique (`@unique`) — a character administers at most one place
+
 ### Map Spotlight & Move Animation
 
 - `GET /api/world/state?round=N` returns `spotlights: Array<{placeId, kind: 'created'|'attacked'}>` and `moves: Array<{fromPlaceId, toPlaceId, factionId}>` (computed from the events table; works for both snapshot and live paths)
-- Spotlight window: rounds `N - CONFIG.SPOTLIGHT_ROUNDS + 1 .. N` over `PLACE_CREATED` (kind `created`) and `PLACE_CAPTURED`/`BATTLE_DEATH`/`ESCAPE_SUCCESS` (kind `attacked`; `created` wins ties)
+- Spotlight window: rounds `N - CONFIG.SPOTLIGHT_ROUNDS + 1 .. N` (with `SPOTLIGHT_ROUNDS: 1` → only round `N`) over `PLACE_CREATED` (kind `created`) and `PLACE_CAPTURED`/`BATTLE_DEATH`/`ESCAPE_SUCCESS` (kind `attacked`; `created` wins ties)
 - `moves` includes only `CHARACTER_MOVED` events with `round === N` (the displayed round exactly)
 - `CHARACTER_MOVED` events are written by `server/moveEvent.ts#recordMove()` from all four `aiMove.ts` movement sites and the three `battle.ts` escape sites; no-op when `fromPlaceId === toPlaceId`
-- Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 3`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
+- Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 1`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
 - **Z-order**: the overlay `<canvas>` paints first (below), the sigma container div paints last (above) — so place labels always render on top of spotlight rings. Keep that DOM order.
 - **Label visibility**: node labels use one zoom rule — `labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD` (8) in `SigmaMap.tsx`. Tune the threshold in `gameConfig.ts`, not inline.
 - `GET /api/world/events?round=N` applies read-time enrichment to `CHARACTER_MOVED`: adds `fromPlaceName`/`toPlaceName` by joining `places` (events themselves store only placeIds)

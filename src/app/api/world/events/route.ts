@@ -1,12 +1,13 @@
 // ============================================================================
-// API 路由 — 取得回合事件 / API Route — Get Events for a Round
+// API 路由 — 取得事件 / API Route — Get Events
 // ============================================================================
-// 回傳特定回合中發生的所有事件。
-// Returns all events that occurred in a specific round.
+// 回傳所有回合（或指定單一回合）的事件。
+// Returns events for all rounds, or for a single round when round is given.
 //
-// GET /api/world/events?round=N
+// GET /api/world/events[?round=N]
 // 查詢參數 / Query params:
-//   round（必填）— 要取得事件的回合數 / round (required) — Round number to fetch events for
+//   round（選填）— 僅回傳該回合；省略時回傳所有回合 /
+//   round (optional) — only that round; omit to get all rounds
 // 回應 / Response: { events: Event[] }
 // ============================================================================
 
@@ -26,9 +27,14 @@ export async function GET(request: NextRequest) {
   }
 
   // 使用 Zod 驗證查詢參數 / Validate query parameters with Zod
+  // 注意：searchParams.get() 缺參數時回傳 null，而 z.coerce.number() 會把
+  // null 轉成 0 — 必須先轉 undefined 才能真正省略 round /
+  // NOTE: searchParams.get() returns null when absent and z.coerce.number()
+  // turns null into 0 — map it to undefined so round is truly optional.
   const { searchParams } = new URL(request.url);
+  const roundParam = searchParams.get('round');
   const queryResult = EventsQuerySchema.safeParse({
-    round: searchParams.get('round'),
+    round: roundParam === null ? undefined : roundParam,
   });
 
   if (!queryResult.success) {
@@ -52,13 +58,18 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // 取得此回合的事件 / Fetch events for this round
+  // 取得事件（單一回合或所有回合）/ Fetch events (single round or all rounds)
+  // 全部模式依回合倒序、回合內依建立時間正序（新的在前）/
+  // All mode: round desc, createdAt asc within a round (newest round first)
   const events = await prisma.event.findMany({
     where: {
       worldId: world.id,
-      round,
+      ...(round !== undefined ? { round } : {}),
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy:
+      round !== undefined
+        ? { createdAt: 'asc' }
+        : [{ round: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
   });
 
   // 讀取時 enrich：CHARACTER_MOVED 只存 placeId，補上地名（讀取時 join 讓

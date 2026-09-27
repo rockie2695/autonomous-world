@@ -108,7 +108,10 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   await spawnPlaces(worldId, currentRound, rng);
 
   // ── 階段 2：生成角色 / Phase 2: Spawn Characters ──────────────────────────
-  charactersSpawned = await spawnCharacters(worldId, currentRound, rng);
+  // 回傳本回合新生成的角色 ID；這些角色在本回合不得移動（出生回合原地待命）
+  // Returns IDs spawned this round; they must not move in their spawn round
+  const spawnedIds = await spawnCharacters(worldId, currentRound, rng);
+  charactersSpawned = spawnedIds.length;
 
   // ── 階段 3：年齡和死亡 / Phase 3: Age and Death ─────────────────────────
   charactersDied = await ageAndDeath(worldId, currentRound, rng);
@@ -129,7 +132,8 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   defections = await loyaltyCheck(worldId, currentRound, rng);
 
   // ── 階段 9：AI 移動 / Phase 9: AI Move ───────────────────────────────────
-  await aiMove(worldId, currentRound, rng);
+  // skipIds：本回合出生的角色不移動 / Spawned this round stay put
+  await aiMove(worldId, currentRound, rng, new Set(spawnedIds));
 
   // ── 階段 10：戰鬥 / Phase 10: Battle ───────────────────────────────────
   battlesFought = await battle(worldId, currentRound, rng);

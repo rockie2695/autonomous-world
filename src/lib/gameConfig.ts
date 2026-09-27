@@ -121,6 +121,7 @@ export const CONFIG = {
   AMBITION_NO_PROMOTION_DELTA: 0.5, // 每 20 回合野心增加量 / Ambition increase per 20 rounds
   AMBITION_FRIEND_DEFECT_DELTA: 2, // 朋友叛變時 +2 野心 / +2 ambition when friend defects
   AMBITION_KING_TONG_DELTA: 0.5, // 國王強時 -0.5 × (king.tong/30) / -0.5 × (king.tong/30) when king strong
+  AMBITION_ADMIN_REPLACED_DELTA: 1, // 被免去行政官職務時野心 +1 / +1 ambition when removed as administrator
 
   // ── 友誼 / 不滿 ─────────────────────────────────────────────────────────
   // 關係每回合在附近角色間隨機形成
@@ -202,9 +203,9 @@ export const CONFIG = {
   INITIAL_LAYOUT_RADIUS: 500, // 初始散佈半徑 / Initial spread radius
 
   // ── 地圖聚光燈 / Map Spotlight ─────────────────────────────────────────────
-  // 新生成 / 被攻擊的地點顯示發光環的回合數
-  // Rounds a newly created / attacked place keeps its glowing ring
-  SPOTLIGHT_ROUNDS: 3,
+  // 新生成 / 被攻擊的地點顯示發光環的回合數（1 = 僅當前顯示回合）
+  // Rounds a newly created / attacked place keeps its glowing ring (1 = displayed round only)
+  SPOTLIGHT_ROUNDS: 1,
 
   // 聚光燈環幾何（覆蓋畫布）/ Spotlight ring geometry (overlay canvas)
   // 環半徑 = scaleSize(節點尺寸) + OFFSET + PULSE_AMP * 脈動

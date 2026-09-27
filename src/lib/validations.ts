@@ -71,12 +71,15 @@ export const StatsQuerySchema = z.object({
 /**
  * 取得事件的查詢參數驗證。
  * Query parameter validation for getting events.
+ *
+ * round 省略時回傳所有回合的事件 / When round is omitted, returns events for all rounds.
  */
 export const EventsQuerySchema = z.object({
   round: z.coerce
     .number()
     .int()
-    .min(0, '回合數必須為非負整數 / Round must be a non-negative integer'),
+    .min(0, '回合數必須為非負整數 / Round must be a non-negative integer')
+    .optional(),
 });
 
 // ─── 型別匯出 / Type Exports ─────────────────────────────────────────────────

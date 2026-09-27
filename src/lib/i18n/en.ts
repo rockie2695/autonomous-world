@@ -179,6 +179,8 @@ export const en = {
     eliminationDesc: '{faction} has been completely eliminated',
     adminAssigned: 'Admin Assigned',
     adminAssignedDesc: '{character} assigned as administrator of {place}',
+    adminRemoved: 'Admin Removed',
+    adminRemovedDesc: '{character} was removed as administrator of {place} (replaced by {newAdmin}); ambition increased',
     battleOrder: 'Battle Order',
     battleOrderDesc: '{place} attack order: {order}',
     newPlace: 'New Place',
