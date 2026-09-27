@@ -18,6 +18,8 @@ export const en = {
     language: 'Language',
     english: 'English',
     chinese: '中文',
+    details: 'Details',
+    status: 'Status',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
@@ -183,8 +185,12 @@ export const en = {
     newPlaceDesc: 'New place {place} was created',
     spawn: 'Character Spawned',
     spawnDesc: '{character} was born into the world',
+    move: 'Moved',
+    moveDesc: '{character} moved from {from} to {to}',
     buildingUpgrade: 'Building Upgrade',
     buildingUpgradeDesc: '{place} {building} upgraded to level {level}',
+    placeCapture: 'Place Captured',
+    placeCaptureDesc: '{character} captured {place}',
   },
 
   // ── 統計 / Stats ────────────────────────────────────────────────────────

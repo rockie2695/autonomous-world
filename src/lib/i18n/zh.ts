@@ -18,6 +18,8 @@ export const zh = {
     language: '語言',
     english: 'English',
     chinese: '中文',
+    details: '詳細資料',
+    status: '狀態',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
@@ -183,8 +185,12 @@ export const zh = {
     newPlaceDesc: '建立了新地點 {place}',
     spawn: '角色生成',
     spawnDesc: '{character} 在世界中誕生',
+    move: '移動',
+    moveDesc: '{character} 從 {from} 移動到 {to}',
     buildingUpgrade: '建築升級',
     buildingUpgradeDesc: '{place} 的 {building} 升級至 {level}',
+    placeCapture: '佔領新地',
+    placeCaptureDesc: '{character} 佔領了 {place}',
   },
 
   // ── 統計 / Stats ────────────────────────────────────────────────────────

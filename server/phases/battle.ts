@@ -16,6 +16,10 @@
 //   - 若逃跑失敗 → 死亡 / If escape fails → death
 // - 勝者：troops ×= 0.9（疲勞）/ Winner: troops ×= 0.9 (fatigue)
 // - 若守軍全滅：地點易主 / If all defenders dead: place changes owner
+// - 無主之地：將領抵達即進攻；駐軍 > 0 則交戰，駐軍 0 則直接佔領
+//   戰勝（或無駐軍）→ 陣營控制該地；戰敗 → 逃跑或死亡 / Unowned place: commander
+//   arriving assaults it; garrison > 0 → fight, garrison 0 → free capture.
+//   Win (or no garrison) → faction controls the place; lose → escape or die
 //
 // 使用方式 / Usage:
 //   const battles = await battle(worldId, round, rng);
@@ -24,6 +28,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
+import { recordMove } from '../moveEvent';
 
 /**
  * 解決所有交戰地點的戰鬥。
@@ -39,17 +44,6 @@ export async function battle(
   round: number,
   rng: Rng
 ): Promise<number> {
-  // 找出同時有我方與敵方角色的地點 / Find all places with both friendly and enemy characters
-  const places = await prisma.place.findMany({
-    where: { worldId, factionId: { not: null } },
-    include: {
-      characters: {
-        where: { alive: true },
-        select: { id: true, factionId: true, wu: true, tong: true, speed: true, troops: true, name: true },
-      },
-    },
-  });
-
   // 取得所有道路以進行逃跑路徑尋找 / Get all roads for escape pathfinding
   const roads = await prisma.road.findMany({
     where: { worldId },
@@ -76,6 +70,211 @@ export async function battle(
   }
 
   let battleCount = 0;
+
+  // ── A. 無主之地進攻 / Assaults on unowned places ─────────────────────────
+  // 將領抵達無主之地：駐軍 > 0 則與駐軍交戰，否則直接佔領 /
+  // Commander arrives at unowned place: fight the garrison if > 0, else free capture
+  const unownedPlaces = await prisma.place.findMany({
+    where: { worldId, factionId: null },
+    include: {
+      characters: {
+        where: { alive: true },
+        select: { id: true, factionId: true, wu: true, speed: true, troops: true, name: true },
+      },
+    },
+  });
+
+  for (const place of unownedPlaces) {
+    if (place.characters.length === 0) continue;
+
+    // 攻擊者：有陣營、有兵力，依速度降序，取最快者執行本回合進攻 /
+    // Attackers: faction members with troops, speed descending; fastest acts this round
+    const attackers = place.characters
+      .filter((c) => c.factionId !== null && c.troops > 0)
+      .sort((a, b) => b.speed - a.speed);
+    const attacker = attackers[0];
+    if (!attacker || !attacker.factionId) continue;
+
+    let captured = false;
+
+    if (place.garrison > 0) {
+      // 與駐軍交戰（駐軍無統帥，防禦只算兵力 × 堡壘）/
+      // Fight the garrison (no commander: defense = troops × fortress only)
+      battleCount++;
+
+      const atkRandom = rng.float(
+        CONFIG.BATTLE_RANDOM_MIN,
+        CONFIG.BATTLE_RANDOM_MAX
+      );
+      const atk =
+        attacker.troops *
+        (1 + attacker.wu * CONFIG.BATTLE_ATK_WU_MULT) *
+        atkRandom;
+
+      const defRandom = rng.float(
+        CONFIG.BATTLE_RANDOM_MIN,
+        CONFIG.BATTLE_RANDOM_MAX
+      );
+      const def =
+        place.garrison *
+        (1 + place.fortress * CONFIG.BATTLE_FORTRESS_DEF_MULT) *
+        defRandom;
+
+      if (atk > def) {
+        // 進攻成功：駐軍全滅，攻擊者疲勞後佔領 /
+        // Assault succeeds: garrison wiped, attacker fatigues then captures
+        const fatiguedTroops = Math.floor(
+          attacker.troops * CONFIG.CHAR_FATIGUE_PER_WIN
+        );
+        await prisma.character.update({
+          where: { id: attacker.id },
+          data: { troops: fatiguedTroops },
+        });
+        captured = true;
+      } else {
+        // 進攻失敗：攻擊者依速度差嘗試逃跑（駐軍速度視為 0）/
+        // Assault fails: attacker tries to escape (garrison speed treated as 0)
+        const speedDiff = attacker.speed;
+        const escapeChance = Math.max(
+          CONFIG.SPEED_ESCAPE_MIN,
+          Math.min(
+            CONFIG.SPEED_ESCAPE_MAX,
+            CONFIG.SPEED_ESCAPE_BASE + speedDiff * CONFIG.SPEED_ESCAPE_PER_DIFF
+          )
+        );
+
+        if (rng.chance(escapeChance)) {
+          const neighbors = adjacent.get(place.id) ?? [];
+          let escapePlaceId: string | null = null;
+          for (const neighbor of neighbors) {
+            const neighborFaction = placeFactionMap.get(neighbor);
+            if (
+              neighborFaction === attacker.factionId ||
+              neighborFaction === null
+            ) {
+              escapePlaceId = neighbor;
+              break;
+            }
+          }
+
+          if (escapePlaceId) {
+            await prisma.character.update({
+              where: { id: attacker.id },
+              data: { troops: 0, placeId: escapePlaceId },
+            });
+            await recordMove({
+              worldId,
+              round,
+              charId: attacker.id,
+              charName: attacker.name,
+              factionId: attacker.factionId,
+              fromPlaceId: place.id,
+              toPlaceId: escapePlaceId,
+            });
+          } else {
+            await prisma.character.update({
+              where: { id: attacker.id },
+              data: { troops: 0 },
+            });
+          }
+
+          await prisma.event.create({
+            data: {
+              worldId,
+              round,
+              type: 'ESCAPE_SUCCESS',
+              data: {
+                charId: attacker.id,
+                charName: attacker.name,
+                placeId: place.id,
+                placeName: place.name,
+                speedDiff,
+              },
+            },
+          });
+        } else {
+          // 逃跑失敗 — 死亡 / Escape failed — death
+          await prisma.character.update({
+            where: { id: attacker.id },
+            data: { alive: false, diedAtRound: round },
+          });
+
+          await prisma.event.create({
+            data: {
+              worldId,
+              round,
+              type: 'BATTLE_DEATH',
+              data: {
+                charId: attacker.id,
+                charName: attacker.name,
+                placeId: place.id,
+                placeName: place.name,
+                defenderName: `駐軍 ${place.garrison}`,
+              },
+            },
+          });
+        }
+      }
+    } else {
+      // 無駐軍 — 直接佔領 / No garrison — free capture
+      captured = true;
+    }
+
+    if (captured) {
+      // 陣營控制該地 / Faction controls the place
+      await prisma.place.update({
+        where: { id: place.id },
+        data: { factionId: attacker.factionId, garrison: 0 },
+      });
+
+      // 若無總督，佔領者成為總督（先清除其他地點總督職避免唯一約束）/
+      // Capturer becomes admin if none (clear other admin posts to avoid unique conflict)
+      if (!place.administratorId) {
+        await prisma.place.updateMany({
+          where: {
+            worldId,
+            administratorId: attacker.id,
+            id: { not: place.id },
+          },
+          data: { administratorId: null },
+        });
+        await prisma.place.update({
+          where: { id: place.id },
+          data: { administratorId: attacker.id },
+        });
+      }
+
+      // 佔領事件 / Capture event
+      await prisma.event.create({
+        data: {
+          worldId,
+          round,
+          type: 'PLACE_CAPTURED',
+          data: {
+            charId: attacker.id,
+            charName: attacker.name,
+            placeId: place.id,
+            placeName: place.name,
+            factionId: attacker.factionId,
+            garrisonFought: place.garrison,
+          },
+        },
+      });
+    }
+  }
+
+  // ── B. 已佔領地點的戰鬥（重新查詢，納入剛易主的地點，讓後到的攻擊者與新擁有者交戰）/
+  // Battles at owned places (re-query to include just-captured places so late
+  // attackers fight the new owner)
+  const places = await prisma.place.findMany({
+    where: { worldId, factionId: { not: null } },
+    include: {
+      characters: {
+        where: { alive: true },
+        select: { id: true, factionId: true, wu: true, tong: true, speed: true, troops: true, name: true },
+      },
+    },
+  });
 
   for (const place of places) {
     if (!place.factionId) continue;
@@ -163,6 +362,15 @@ export async function battle(
               await prisma.character.update({
                 where: { id: defender.id },
                 data: { troops: 0, placeId: escapePlaceId },
+              });
+              await recordMove({
+                worldId,
+                round,
+                charId: defender.id,
+                charName: defender.name,
+                factionId: defender.factionId,
+                fromPlaceId: place.id,
+                toPlaceId: escapePlaceId,
               });
             } else {
               await prisma.character.update({
@@ -257,6 +465,15 @@ export async function battle(
               await prisma.character.update({
                 where: { id: attacker.id },
                 data: { troops: 0, placeId: escapePlaceId },
+              });
+              await recordMove({
+                worldId,
+                round,
+                charId: attacker.id,
+                charName: attacker.name,
+                factionId: attacker.factionId,
+                fromPlaceId: place.id,
+                toPlaceId: escapePlaceId,
               });
             } else {
               await prisma.character.update({

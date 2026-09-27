@@ -6,8 +6,9 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'motion/react';
 import { t, setLocale, getLocale, getTranslations, DEFAULT_LOCALE } from '@/lib/i18n';
@@ -56,6 +57,7 @@ interface WorldState {
     jing: number;
     speed: number;
     ambition: number;
+    age: number;
     troops: number;
     gold: number;
     placeId: string;
@@ -67,6 +69,10 @@ interface WorldState {
     aId: string;
     bId: string;
   }>;
+  /** 地圖聚光燈：近 K 回合內新生成 / 被攻擊的地點 / Map spotlight: places created/attacked within the last K rounds */
+  spotlights?: Array<{ placeId: string; kind: 'created' | 'attacked' }>;
+  /** 本回合移動（供地圖動畫）/ This round's moves (for the map animation) */
+  moves?: Array<{ fromPlaceId: string; toPlaceId: string; factionId: string | null }>;
 }
 
 interface GameEvent {
@@ -95,6 +101,7 @@ export default function GamePage() {
   const [selectedRound, setSelectedRound] = useState<number>(0);
   const [selectedPlace, setSelectedPlace] = useState<WorldState['places'][0] | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  const queryClient = useQueryClient();
   /** 地圖視角控制（浮動縮放 / 重設按鈕）/ Map camera controls (floating zoom / reset buttons) */
   const mapControlsRef = useRef<MapCameraControls | null>(null);
 
@@ -257,7 +264,13 @@ export default function GamePage() {
           <NextRoundButton
             isAdmin={isAdmin}
             currentRound={selectedRound}
-            onSuccess={(round) => setSelectedRound(round)}
+            onSuccess={(round) => {
+              setSelectedRound(round);
+              // 回合可能沒變（正在看最新回合）→ 快取不會失效，強制重新抓取
+              // Round may be unchanged (viewing latest) → cache key stays, so
+              // explicitly invalidate to force a fresh fetch of newest state
+              void queryClient.invalidateQueries({ queryKey: ['worldState'] });
+            }}
           />
           <LanguageSwitch locale={locale} onToggle={handleLocaleToggle} />
 
@@ -349,14 +362,16 @@ export default function GamePage() {
         <main className="flex-1 relative min-w-0">
           <div className="absolute inset-0">
             <GameGraph
-              places={worldState?.places ?? []}
-              factions={worldState?.factions ?? []}
-              roads={worldState?.roads ?? []}
-              characters={worldState?.characters ?? []}
-              onPlaceClick={(place) => setSelectedPlace(place)}
-              selectedPlaceId={selectedPlace?.id}
-              onControlsReady={(controls) => { mapControlsRef.current = controls; }}
-            />
+                places={worldState?.places ?? []}
+                factions={worldState?.factions ?? []}
+                roads={worldState?.roads ?? []}
+                characters={worldState?.characters ?? []}
+                spotlights={worldState?.spotlights ?? []}
+                moves={worldState?.moves ?? []}
+                onPlaceClick={(place) => setSelectedPlace(place)}
+                selectedPlaceId={selectedPlace?.id}
+                onControlsReady={(controls) => { mapControlsRef.current = controls; }}
+              />
           </div>
 
           {/* 浮動控制項 / Floating controls */}
@@ -404,6 +419,7 @@ export default function GamePage() {
               <CharacterList
                 characters={worldState?.characters ?? []}
                 places={worldState?.places ?? []}
+                factions={worldState?.factions ?? []}
               />
             )}
             {rightTab === 'events' && (
@@ -439,6 +455,7 @@ export default function GamePage() {
                   <CharacterList
                     characters={worldState?.characters ?? []}
                     places={worldState?.places ?? []}
+                    factions={worldState?.factions ?? []}
                   />
                 )}
                 {rightTab === 'events' && (
@@ -543,10 +560,14 @@ function NextRoundButton({
   onSuccess: (round: number) => void;
 }) {
   const [loading, setLoading] = useState(false);
+  // 用 ref 同步擋住 loading 中的重複點擊（state 更新前的空窗）
+  // Ref closes the race window before setState re-renders, blocking double-clicks
+  const loadingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleRun = async () => {
-    if (!isAdmin || loading) return;
+    if (!isAdmin || loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     setError(null);
     try {
@@ -560,6 +581,7 @@ function NextRoundButton({
     } catch {
       setError('Network error');
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
   };
@@ -569,9 +591,11 @@ function NextRoundButton({
       <button
         onClick={handleRun}
         disabled={!isAdmin || loading}
-        className={`px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider transition-all duration-200 ${isAdmin
-          ? 'text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50'
-          : 'text-gray-600 border border-gray-800 bg-gray-900/50 cursor-not-allowed'
+        className={`px-3 py-1.5 rounded-md text-xs font-orbitron tracking-wider transition-all duration-200 ${!isAdmin
+          ? 'text-gray-500 border border-gray-800 bg-gray-900/50 cursor-not-allowed'
+          : loading
+            ? 'text-cyan-300/40 border border-cyan-500/15 bg-cyan-500/5 cursor-not-allowed opacity-60'
+            : 'text-cyan-300 border border-cyan-500/30 bg-cyan-500/5 hover:bg-cyan-500/15 hover:border-cyan-400/50'
           }`}
         title={isAdmin ? t('admin.runRound') : t('game.adminOnly')}
       >
@@ -624,7 +648,7 @@ function RoundTimeline({
           onChange={(e) => onSpeedChange(Number(e.target.value))}
           className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
         />
-        <span className="text-xs text-gray-600 font-orbitron">{playSpeed}ms</span>
+        <span className="text-xs text-gray-500 font-orbitron">{playSpeed}ms</span>
       </div>
       <div className="space-y-0.5 max-h-40 overflow-y-auto">
         {Array.from({ length: Math.min(maxRound + 1, 20) }, (_, i) => maxRound - i).map(
@@ -646,6 +670,65 @@ function RoundTimeline({
   );
 }
 
+/**
+ * 詳細資料彈窗 / Detail info modal
+ * Portal 到 body：側欄卡片有 backdrop-filter，會使子層 fixed 定位失效 /
+ * Portaled to body: sidebar cards use backdrop-filter, which breaks
+ * fixed positioning for descendant elements
+ */
+function DetailModal({
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}) {
+  // open 只會在使用者點擊後於客戶端變 true（SSR 時恒為 false），
+  // 因此不需 mounted effect，也不會在伺服器端存取 document /
+  // open only flips true after a user click on the client (always false
+  // during SSR), so no mounted effect is needed and document is never
+  // touched on the server
+  if (!open) return null;
+
+  return createPortal(
+    <motion.div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.15 }}
+      onClick={onClose}
+    >
+      <motion.div
+        className="w-full max-w-3xl max-h-[80vh] overflow-hidden rounded-xl border border-gray-800 bg-gray-950 shadow-2xl flex flex-col"
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.15 }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+          <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-300 uppercase">
+            {title}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-gray-500 hover:text-gray-200 text-lg leading-none transition-colors duration-150"
+            aria-label="close"
+          >
+            ✕
+          </button>
+        </div>
+        <div className="p-4 overflow-y-auto">{children}</div>
+      </motion.div>
+    </motion.div>,
+    document.body
+  );
+}
+
 function FactionRanking({
   factions,
   characters,
@@ -655,11 +738,43 @@ function FactionRanking({
   characters: WorldState['characters'];
   places: WorldState['places'];
 }) {
+  const [showDetail, setShowDetail] = useState(false);
+
+  // 彈窗用完整資料：含全部勢力（不只前 10 名）/
+  // Full data for the modal: all factions (not just top 10)
+  const detailRows = factions
+    .map((faction) => {
+      const factionChars = characters.filter(
+        (c) => c.factionId === faction.id && c.alive
+      );
+      const factionPlaces = places.filter((p) => p.factionId === faction.id);
+      const king = factionChars.find((c) => c.isKing);
+      return {
+        faction,
+        members: factionChars.length,
+        territories: factionPlaces.length,
+        troops: factionChars.reduce((sum, c) => sum + c.troops, 0),
+        gold: factionChars.reduce((sum, c) => sum + c.gold, 0),
+        kingName: king?.name ?? null,
+      };
+    })
+    .sort(
+      (a, b) =>
+        Number(b.faction.alive) - Number(a.faction.alive) ||
+        b.territories - a.territories
+    );
+
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
-        {t('ranking.title')}
-      </h3>
+      <button
+        type="button"
+        onClick={() => setShowDetail(true)}
+        title={t('general.details')}
+        className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase w-full flex items-center justify-between group hover:text-cyan-400 transition-colors duration-150"
+      >
+        <span>{t('ranking.title')}</span>
+        <span className="text-xs font-sans opacity-40 group-hover:opacity-100 transition-opacity duration-150">↗</span>
+      </button>
       <div className="space-y-1.5">
         {factions
           .filter((f) => f.alive)
@@ -682,18 +797,82 @@ function FactionRanking({
 
             return (
               <div key={faction.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/30 transition-colors duration-150">
-                <span className="font-orbitron text-xs text-gray-600 w-4">{idx + 1}</span>
+                <span className="font-orbitron text-xs text-gray-500 w-4">{idx + 1}</span>
                 <div
                   className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: faction.color }}
                 />
                 <span className="flex-1 text-sm text-gray-300 truncate">{faction.name}</span>
-                <span className="text-xs text-gray-600 font-orbitron">{factionPlaces.length}{t('ranking.territories')}</span>
-                <span className="text-xs text-gray-600 font-orbitron">{totalTroops}{t('ranking.troops')}</span>
+                <span className="text-xs text-gray-500 font-orbitron">{factionPlaces.length}{t('ranking.territories')}</span>
+                <span className="text-xs text-gray-500 font-orbitron">{totalTroops}{t('ranking.troops')}</span>
               </div>
             );
           })}
       </div>
+
+      <DetailModal
+        open={showDetail}
+        onClose={() => setShowDetail(false)}
+        title={t('ranking.title')}
+      >
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="text-gray-500 text-left border-b border-gray-800">
+              <th className="py-2 pr-3 font-medium">{t('ranking.rank')}</th>
+              <th className="py-2 pr-3 font-medium">{t('faction.name')}</th>
+              <th className="py-2 pr-3 font-medium">{t('general.status')}</th>
+              <th className="py-2 pr-3 font-medium">{t('faction.king')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('faction.territories')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('faction.characters')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('ranking.troops')}</th>
+              <th className="py-2 font-medium text-right">{t('ranking.gold')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detailRows.map((row, idx) => (
+              <tr
+                key={row.faction.id}
+                className="border-b border-gray-800/40 hover:bg-gray-800/20 transition-colors duration-150"
+              >
+                <td className="py-2 pr-3 text-gray-500 font-orbitron">{idx + 1}</td>
+                <td className="py-2 pr-3">
+                  <span className="flex items-center gap-1.5">
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: row.faction.color }}
+                    />
+                    <span className="text-gray-300">{row.faction.name}</span>
+                  </span>
+                </td>
+                <td className="py-2 pr-3">
+                  <span
+                    className={
+                      row.faction.alive && !row.faction.collapsing
+                        ? 'text-emerald-400'
+                        : row.faction.collapsing
+                          ? 'text-amber-400'
+                          : 'text-red-400'
+                    }
+                  >
+                    {row.faction.alive
+                      ? row.faction.collapsing
+                        ? t('faction.collapsing')
+                        : t('faction.alive')
+                      : t('faction.collapsed')}
+                  </span>
+                </td>
+                <td className="py-2 pr-3 text-gray-400">
+                  {row.kingName ?? t('faction.noKing')}
+                </td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{row.territories}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{row.members}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{row.troops}</td>
+                <td className="py-2 text-gray-400 font-orbitron text-right">{row.gold}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </DetailModal>
     </div>
   );
 }
@@ -701,21 +880,47 @@ function FactionRanking({
 function CharacterList({
   characters,
   places,
+  factions,
 }: {
   characters: WorldState['characters'];
   places: WorldState['places'];
+  factions: WorldState['factions'];
 }) {
   const [selectedChar, setSelectedChar] = useState<string | null>(null);
+  const [showDetail, setShowDetail] = useState(false);
   const placeMap = new Map<string, string>();
   for (const place of places) {
     placeMap.set(place.id, place.name);
   }
+  const factionMap = new Map<string, WorldState['factions'][0]>();
+  for (const faction of factions) {
+    factionMap.set(faction.id, faction);
+  }
+
+  // 彈窗用完整資料：全部存活將領，依兵力排序 /
+  // Full data for the modal: all alive characters, sorted by troops
+  const detailRows = characters
+    .filter((c) => c.alive)
+    .map((char) => ({
+      char,
+      faction: char.factionId
+        ? (factionMap.get(char.factionId) ?? null)
+        : null,
+      placeName: placeMap.get(char.placeId) ?? '—',
+    }))
+    .sort((a, b) => b.char.troops - a.char.troops);
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
-        {t('faction.characters')}
-      </h3>
+      <button
+        type="button"
+        onClick={() => setShowDetail(true)}
+        title={t('general.details')}
+        className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase w-full flex items-center justify-between group hover:text-cyan-400 transition-colors duration-150"
+      >
+        <span>{t('faction.characters')}</span>
+        <span className="text-xs font-sans opacity-40 group-hover:opacity-100 transition-opacity duration-150">↗</span>
+      </button>
       <div className="space-y-0.5 max-h-60 overflow-y-auto">
         {characters
           .filter((c) => c.alive)
@@ -732,7 +937,7 @@ function CharacterList({
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
                 {char.isKing && <span className="text-amber-400 text-xs">👑</span>}
-                <span className="ml-auto text-xs text-gray-600 font-orbitron">⚔{char.troops}</span>
+                <span className="ml-auto text-xs text-gray-500 font-orbitron">⚔{char.troops}</span>
               </div>
               {selectedChar === char.id && (
                 <div className="mt-1.5 pl-3 text-xs text-gray-400 space-y-0.5 border-l border-gray-800">
@@ -745,6 +950,63 @@ function CharacterList({
             </button>
           ))}
       </div>
+
+      <DetailModal
+        open={showDetail}
+        onClose={() => setShowDetail(false)}
+        title={t('faction.characters')}
+      >
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="text-gray-500 text-left border-b border-gray-800">
+              <th className="py-2 pr-3 font-medium">{t('character.name')}</th>
+              <th className="py-2 pr-3 font-medium">{t('faction.name')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.wu')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.tong')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.jing')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.speed')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.troops')}</th>
+              <th className="py-2 pr-3 font-medium text-right">{t('character.gold')}</th>
+              <th className="py-2 font-medium">{t('character.place')}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detailRows.map(({ char, faction, placeName }) => (
+              <tr
+                key={char.id}
+                className="border-b border-gray-800/40 hover:bg-gray-800/20 transition-colors duration-150"
+              >
+                <td className="py-2 pr-3">
+                  <span className="flex items-center gap-1 text-gray-300">
+                    {char.name}
+                    {char.isKing && <span className="text-amber-400">👑</span>}
+                  </span>
+                </td>
+                <td className="py-2 pr-3">
+                  {faction ? (
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: faction.color }}
+                      />
+                      <span className="text-gray-400">{faction.name}</span>
+                    </span>
+                  ) : (
+                    <span className="text-gray-500">—</span>
+                  )}
+                </td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.wu}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.tong}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.jing}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.speed}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.troops}</td>
+                <td className="py-2 pr-3 text-gray-400 font-orbitron text-right">{char.gold}</td>
+                <td className="py-2 text-gray-400">{placeName}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </DetailModal>
     </div>
   );
 }
@@ -771,6 +1033,7 @@ function EventLog({
   const eventIcons: Record<string, string> = {
     PLACE_CREATED: '🏘️',
     CHARACTER_SPAWNED: '👤',
+    CHARACTER_MOVED: '🚶',
     DEATH: '☠️',
     BATTLE_DEATH: '💀',
     ESCAPE_SUCCESS: '🏃',
@@ -779,6 +1042,7 @@ function EventLog({
     FACTION_ELIMINATED: '❌',
     BUILDING_UPGRADE: '🏗️',
     ADMIN_ASSIGNED: '👤',
+    PLACE_CAPTURED: '🚩',
   };
 
   function formatEvent(event: GameEvent): string {
@@ -788,6 +1052,14 @@ function EventLog({
         return t('events.newPlaceDesc').replace('{place}', p.placeName as string);
       case 'CHARACTER_SPAWNED':
         return t('events.spawnDesc').replace('{character}', p.charName as string);
+      case 'CHARACTER_MOVED': {
+        const from = (p.fromPlaceName as string | null) ?? '?';
+        const to = (p.toPlaceName as string | null) ?? '?';
+        return t('events.moveDesc')
+          .replace('{character}', p.charName as string)
+          .replace('{from}', from)
+          .replace('{to}', to);
+      }
       case 'DEATH':
         return t('events.deathDesc').replace('{character}', p.charName as string);
       case 'BATTLE_DEATH':
@@ -813,6 +1085,10 @@ function EventLog({
         return t('events.adminAssignedDesc')
           .replace('{character}', p.charName as string)
           .replace('{place}', p.placeName as string);
+      case 'PLACE_CAPTURED':
+        return t('events.placeCaptureDesc')
+          .replace('{character}', p.charName as string)
+          .replace('{place}', p.placeName as string);
       default:
         return event.type;
     }
@@ -820,15 +1096,18 @@ function EventLog({
 
   return (
     <div className="rounded-xl border border-gray-800/60 bg-gray-900/40 backdrop-blur-sm p-3">
-      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
-        {t('events.title')}
+      <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase flex items-center justify-between">
+        <span>{t('events.title')}</span>
+        <span className="text-cyan-400/70 text-xs tracking-widest">
+          {t('game.round')} {String(round).padStart(4, '0')}
+        </span>
       </h3>
       <div className="space-y-0.5 max-h-40 overflow-y-auto">
         {isLoading && (
-          <p className="text-gray-600 text-xs">{t('general.loading')}</p>
+          <p className="text-gray-500 text-xs">{t('general.loading')}</p>
         )}
         {!isLoading && events.length === 0 && (
-          <p className="text-gray-600 text-xs">{t('game.noData')}</p>
+          <p className="text-gray-500 text-xs">{t('game.noData')}</p>
         )}
         {events.map((event) => (
           <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-gray-800/20 transition-colors duration-150">
@@ -882,7 +1161,7 @@ function StatsCharts({
         <h3 className="font-orbitron text-sm font-semibold tracking-wider text-gray-400 mb-3 uppercase">
           {t('stats.title')}
         </h3>
-        <p className="text-gray-600 text-xs">{t('game.noData')}</p>
+        <p className="text-gray-500 text-xs">{t('game.noData')}</p>
       </div>
     );
   }
@@ -1019,7 +1298,7 @@ function PlaceDetail({
               </div>
             )}
             {!faction && (
-              <span className="text-sm text-gray-600">{t('place.unowned')}</span>
+              <span className="text-sm text-gray-500">{t('place.unowned')}</span>
             )}
           </div>
           <button
@@ -1034,7 +1313,7 @@ function PlaceDetail({
           {/* 相連地點 / Linked Places */}
           {linkedPlaceNames.length > 0 && (
             <div>
-              <div className="text-sm text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+              <div className="text-sm text-gray-500 font-orbitron tracking-wider uppercase mb-1.5">
                 🛣️ {t('map.linkedPlaces')}
               </div>
               <div className="flex flex-wrap gap-1">
@@ -1062,18 +1341,28 @@ function PlaceDetail({
 
           {/* 駐紮將領 / Stationed Characters */}
           <div>
-            <div className="text-sm text-gray-600 font-orbitron tracking-wider uppercase mb-1.5">
+            <div className="text-sm text-gray-500 font-orbitron tracking-wider uppercase mb-1.5">
               {t('place.characters')}
             </div>
-            <div className="space-y-0.5 max-h-28 overflow-y-auto">
+            <div className="space-y-0.5 max-h-44 overflow-y-auto">
               {placeChars.length === 0 && (
                 <p className="text-gray-700 text-sm">—</p>
               )}
               {placeChars.map((char) => (
-                <div key={char.id} className="flex items-center gap-2 px-2 py-1 rounded-md text-base text-gray-400">
-                  <span className="font-medium text-gray-300">{char.name}</span>
-                  {char.isKing && <span className="text-amber-400 text-sm">👑</span>}
-                  <span className="ml-auto text-sm font-orbitron text-gray-600">⚔{char.troops}</span>
+                <div key={char.id} className="px-2 py-1 rounded-md text-base text-gray-400">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-300">{char.name}</span>
+                    {char.isKing && <span className="text-amber-400 text-sm">👑</span>}
+                    <span className="ml-auto text-sm font-orbitron text-gray-500">⚔{char.troops}</span>
+                    <span className="text-sm font-orbitron text-gray-500">💰{char.gold}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-2.5 text-xs font-orbitron text-gray-500">
+                    <span>{t('character.wu')} {char.wu}</span>
+                    <span>{t('character.tong')} {char.tong}</span>
+                    <span>{t('character.jing')} {char.jing}</span>
+                    <span>{t('character.speed')} {char.speed}</span>
+                    <span>{t('character.age')} {char.age}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -1097,7 +1386,7 @@ function BuildingStat({
     <div className="text-center p-2 rounded-lg bg-gray-800/30 border border-gray-800/40">
       <div className="text-base mb-0.5">{icon}</div>
       <div className="font-orbitron font-bold text-lg text-white">{value}</div>
-      <div className="text-sm text-gray-600 uppercase tracking-wider">{label}</div>
+      <div className="text-sm text-gray-500 uppercase tracking-wider">{label}</div>
     </div>
   );
 }
@@ -1107,6 +1396,8 @@ function GameGraph({
   factions,
   roads,
   characters,
+  spotlights,
+  moves,
   onPlaceClick,
   selectedPlaceId,
   onControlsReady,
@@ -1115,6 +1406,8 @@ function GameGraph({
   factions: WorldState['factions'];
   roads: WorldState['roads'];
   characters: WorldState['characters'];
+  spotlights: NonNullable<WorldState['spotlights']>;
+  moves: NonNullable<WorldState['moves']>;
   onPlaceClick?: (place: WorldState['places'][0]) => void;
   selectedPlaceId?: string | null;
   onControlsReady?: (controls: MapCameraControls | null) => void;
@@ -1126,6 +1419,8 @@ function GameGraph({
         factions={factions}
         roads={roads}
         characters={characters}
+        spotlights={spotlights}
+        moves={moves}
         onPlaceClick={onPlaceClick}
         selectedPlaceId={selectedPlaceId}
         onControlsReady={onControlsReady}

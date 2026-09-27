@@ -36,10 +36,11 @@ export async function spawnCharacters(
   round: number,
   rng: Rng
 ): Promise<number> {
-  // 取得世界中所有地點 / Get all places in the world
+  // 取得世界中所有「有陣營」的地點——僅勢力控制地能生成角色 /
+  // Get all faction-controlled places — only owned places can spawn characters
   const places = await prisma.place.findMany({
-    where: { worldId },
-    select: { id: true },
+    where: { worldId, factionId: { not: null } },
+    select: { id: true, factionId: true },
   });
 
   if (places.length === 0) return 0;
@@ -84,7 +85,8 @@ export async function spawnCharacters(
     const loyaltyOptions = ['SELF', 'PATH', 'ALTRUISM'] as const;
     const loyalty = rng.pick([...loyaltyOptions]) ?? 'SELF';
 
-    // 建立角色 / Create the character
+    // 建立角色（加入該地點所屬勢力）/
+    // Create the character (joins the place's faction)
     await prisma.character.create({
       data: {
         worldId,
@@ -98,6 +100,7 @@ export async function spawnCharacters(
         age: CONFIG.CHAR_START_AGE,
         maxAge,
         placeId: place.id,
+        factionId: place.factionId,
         troops: 0,
         gold: 0,
         alive: true,

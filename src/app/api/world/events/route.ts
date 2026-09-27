@@ -61,5 +61,46 @@ export async function GET(request: NextRequest) {
     orderBy: { createdAt: 'asc' },
   });
 
-  return NextResponse.json({ events });
+  // 讀取時 enrich：CHARACTER_MOVED 只存 placeId，補上地名（讀取時 join 讓
+  // 舊事件也能顯示地名，不需回填資料庫）/
+  // Read-time enrichment: CHARACTER_MOVED stores only placeIds — join place
+  // names here so LEGACY events also render names without a DB backfill.
+  const movedPlaceIds = new Set<string>();
+  for (const event of events) {
+    if (event.type === 'CHARACTER_MOVED') {
+      const data = event.data as { fromPlaceId?: string; toPlaceId?: string };
+      if (data.fromPlaceId) movedPlaceIds.add(data.fromPlaceId);
+      if (data.toPlaceId) movedPlaceIds.add(data.toPlaceId);
+    }
+  }
+
+  let placeNameById: Map<string, string> | null = null;
+  if (movedPlaceIds.size > 0) {
+    const places = await prisma.place.findMany({
+      where: { id: { in: [...movedPlaceIds] } },
+      select: { id: true, name: true },
+    });
+    placeNameById = new Map(places.map((p) => [p.id, p.name]));
+  }
+
+  const enriched = placeNameById
+    ? events.map((event) => {
+        if (event.type !== 'CHARACTER_MOVED') return event;
+        const data = event.data as { fromPlaceId?: string; toPlaceId?: string };
+        return {
+          ...event,
+          data: {
+            ...data,
+            fromPlaceName: data.fromPlaceId
+              ? placeNameById.get(data.fromPlaceId) ?? null
+              : null,
+            toPlaceName: data.toPlaceId
+              ? placeNameById.get(data.toPlaceId) ?? null
+              : null,
+          },
+        };
+      })
+    : events;
+
+  return NextResponse.json({ events: enriched });
 }

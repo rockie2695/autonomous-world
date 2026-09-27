@@ -104,15 +104,18 @@ export async function economy(
       });
     }
 
-    // 為駐軍招募士兵 / Recruit troops for the garrison
-    const recruits =
-      CONFIG.PLACE_BASE_RECRUIT +
-      place.barracks * CONFIG.PLACE_BARRACKS_RECRUIT_PER_LV;
+    // 為駐軍招募士兵（無主之地不增兵）/
+    // Recruit troops for the garrison (unowned places get no soldier increase)
+    if (place.factionId) {
+      const recruits =
+        CONFIG.PLACE_BASE_RECRUIT +
+        place.barracks * CONFIG.PLACE_BARRACKS_RECRUIT_PER_LV;
 
-    await prisma.place.update({
-      where: { id: place.id },
-      data: { garrison: { increment: recruits } },
-    });
+      await prisma.place.update({
+        where: { id: place.id },
+        data: { garrison: { increment: recruits } },
+      });
+    }
 
     // 角色以個人金幣購兵 / Characters buy troops with personal gold
     for (const char of place.characters) {

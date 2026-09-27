@@ -87,3 +87,44 @@ export function generatePersonName(rng: Rng): string {
 export function generatePersonNames(rng: Rng, count: number): string[] {
   return Array.from({ length: count }, () => generatePersonName(rng));
 }
+
+/**
+ * 產生不與 taken 撞名的人名；隨機嘗試 64 次失敗後改以確定性掃描
+ * [姓][名] 組合空間（8,000 種），空間耗盡時回傳 null。
+ * Generate a person name not present in `taken`. After 64 random attempts
+ * it falls back to a deterministic scan over the [Surname][Given] cross
+ * product (8,000 combinations); returns null when the space is exhausted.
+ *
+ * 空 taken 時第一個隨機嘗試即成功，RNG 消耗與 generatePersonName 相同。
+ * With an empty `taken` the first random attempt succeeds, so RNG consumption
+ * matches generatePersonName exactly.
+ *
+ * @param rng - 種子 RNG 實例 / Seeded RNG instance
+ * @param taken - 已佔用的名稱集合 / Set of names already in use
+ * @returns 唯一人名，或 null（空間耗盡）/ A unique person name, or null if exhausted
+ */
+export function generateUniquePersonName(
+  rng: Rng,
+  taken: ReadonlySet<string>
+): string | null {
+  // 隨機快速路徑 / Fast random path
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const name = generatePersonName(rng);
+    if (!taken.has(name)) return name;
+  }
+
+  // 確定性掃描：從隨機起點走過全部 [姓][名] 組合
+  // Deterministic scan from a random start over every [Surname][Given]
+  // combination — guaranteed to find a free slot
+  const givenCount = GIVEN_CHARS.length;
+  const total = SURNAMES.length * givenCount;
+  const start = rng.int(0, total - 1);
+  for (let i = 0; i < total; i++) {
+    const idx = (start + i) % total;
+    const surname = Math.floor(idx / givenCount);
+    const given = idx % givenCount;
+    const name = `${SURNAMES[surname]}${GIVEN_CHARS[given]}`;
+    if (!taken.has(name)) return name;
+  }
+  return null;
+}

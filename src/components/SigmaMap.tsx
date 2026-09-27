@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
 import { drawDiscNodeHover } from 'sigma/rendering';
+import { CONFIG } from '@/lib/gameConfig';
 
 /**
  * 將 HSL 字串轉換為 hex 格式 / Convert HSL string to hex format
@@ -115,6 +116,10 @@ interface SigmaMapProps {
   factions: Faction[];
   roads: Road[];
   characters: Character[];
+  /** 地圖聚光燈：近 K 回合內新生成 / 被攻擊的地點 / Map spotlight: places created/attacked within the last K rounds */
+  spotlights?: Array<{ placeId: string; kind: 'created' | 'attacked' }>;
+  /** 本回合移動（from → to），供動畫播放 / This round's moves (from → to) for the travel animation */
+  moves?: Array<{ fromPlaceId: string; toPlaceId: string; factionId: string | null }>;
   onPlaceClick?: (place: Place) => void;
   selectedPlaceId?: string | null;
   /** 視角控制回呼；Sigma 實例建立後呼叫，卸載時呼叫 null / Camera controls callback; invoked after the Sigma instance is created, null on unmount */
@@ -139,11 +144,14 @@ export function SigmaMap({
   factions,
   roads,
   characters,
+  spotlights = [],
+  moves = [],
   onPlaceClick,
   selectedPlaceId,
   onControlsReady,
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
@@ -192,6 +200,9 @@ export function SigmaMap({
       labelColor: { attribute: 'labelColor' },
       labelWeight: 'bold',
       renderLabels: true,
+      // 統一標籤顯示門檻（config）：節點螢幕尺寸低於閾值時隱藏標籤
+      // Unified label show/hide threshold (config-driven)
+      labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD,
       // 自訂 hover 渲染：只在節點「目前」hover / 選中 / 相連時畫白色底框，
       // 過濾掉 sigma 內部殘留的 hoveredNode / highlightedNodes 狀態。
       // 這兩個內部狀態沒有公開清除 API，只靠 mousemove 轉移更新；彈窗
@@ -411,6 +422,140 @@ export function SigmaMap({
     sigmaRef.current?.refresh();
   }, [selectedPlaceId]);
 
+  // ── 聚光燈環 + 移動動畫（覆蓋畫布）────────────────────────────────────────
+  // 每幀用當前鏡頭座標重繪：新生成 / 被攻擊地點顯示脈動發光環；
+  // 本回合的移動以光點沿起點 → 終點行進（週期：行進 → 停頓）。
+  // Spotlight rings + move animation (overlay canvas): every frame redraws
+  // with current camera coordinates — newly created/attacked places get a
+  // pulsing glow ring; this round's moves travel as glowing dots from → to
+  // (cycle: travel → pause). ────────────────────────────────────────────────
+
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    const graph = graphRef.current;
+    const canvas = overlayRef.current;
+    if (!sigma || !graph || !canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const validMoves = moves.filter(
+      (m) => graph.hasNode(m.fromPlaceId) && graph.hasNode(m.toPlaceId)
+    );
+    const visibleSpotlights = spotlights.filter((s) =>
+      graph.hasNode(s.placeId)
+    );
+
+    // 高解析度畫布同步（devicePixelRatio）/ Sync canvas backing store (dpr)
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    resize();
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+
+    if (visibleSpotlights.length === 0 && validMoves.length === 0) {
+      return () => resizeObserver.disconnect();
+    }
+
+    // 動畫點顏色 = 移動者陣營色（無陣營用青綠）/
+    // Move dot color = mover's faction color (teal fallback)
+    const factionColors = new Map<string, string>();
+    for (const faction of factions) {
+      factionColors.set(faction.id, hslToHex(faction.color));
+    }
+
+    let raf = 0;
+    const start = performance.now();
+
+    const tick = (now: number) => {
+      const t = now - start;
+      const rect = canvas.getBoundingClientRect();
+      ctx.clearRect(0, 0, rect.width, rect.height);
+
+      // 聚光燈：脈動發光環（半徑用 scaleSize 隨鏡頭縮放，永遠畫在節點圓外）
+      // Spotlight: pulsing glow ring (radius uses scaleSize so it tracks zoom
+      // and always sits outside the node circle)
+      const pulse = 0.5 + 0.5 * Math.sin((t / CONFIG.SPOTLIGHT_RING_PULSE_MS) * Math.PI);
+      ctx.lineWidth = CONFIG.SPOTLIGHT_RING_WIDTH;
+      for (const sp of visibleSpotlights) {
+        const attrs = graph.getNodeAttributes(sp.placeId);
+        const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y });
+        // 節點的螢幕半徑（與 Sigma 渲染同一套縮放）+ 間距 + 脈動
+        // Node's on-screen radius (same scaling Sigma renders with) + gap + pulse
+        const nodeRadius = sigma.scaleSize(attrs.size as number);
+        const radius =
+          nodeRadius +
+          CONFIG.SPOTLIGHT_RING_OFFSET +
+          CONFIG.SPOTLIGHT_RING_PULSE_AMP * pulse;
+        const color = sp.kind === 'created' ? '#22d3ee' : '#f87171';
+        ctx.beginPath();
+        ctx.arc(vp.x, vp.y, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur =
+          CONFIG.SPOTLIGHT_RING_SHADOW +
+          CONFIG.SPOTLIGHT_RING_SHADOW_PULSE * pulse;
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
+
+      // 移動點：行進（帶尾跡）→ 停頓，週期循環 /
+      // Move dot: travel (with trail) → pause, looping
+      const cycle = CONFIG.MOVE_ANIM_DURATION + CONFIG.MOVE_ANIM_PAUSE;
+      const phase = (t % cycle) / CONFIG.MOVE_ANIM_DURATION;
+      if (phase <= 1) {
+        // easeInOutQuad / 緩入緩出
+        const p = phase;
+        const eased = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+        for (const m of validMoves) {
+          const a = graph.getNodeAttributes(m.fromPlaceId);
+          const b = graph.getNodeAttributes(m.toPlaceId);
+          const va = sigma.graphToViewport({ x: a.x, y: a.y });
+          const vb = sigma.graphToViewport({ x: b.x, y: b.y });
+          const x = va.x + (vb.x - va.x) * eased;
+          const y = va.y + (vb.y - va.y) * eased;
+          const color =
+            (m.factionId ? factionColors.get(m.factionId) : undefined) ??
+            '#5eead4';
+
+          // 尾跡 / Trail
+          const tailT = Math.max(0, eased - 0.12);
+          ctx.beginPath();
+          ctx.moveTo(va.x + (vb.x - va.x) * tailT, va.y + (vb.y - va.y) * tailT);
+          ctx.lineTo(x, y);
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = 0.35;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+
+          // 光點 / Glowing dot
+          ctx.beginPath();
+          ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 10;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      resizeObserver.disconnect();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
+  }, [spotlights, moves, factions]);
+
   return (
     // Sigma 的 kill() 會清空整個 container，因此 tooltip 必須放在
     // sigma container 的兄弟節點，避免 React 移除已被刪除的節點而拋錯。
@@ -418,6 +563,18 @@ export function SigmaMap({
     // SIBLING of the sigma container — otherwise React later tries to remove
     // an already-deleted node and throws 'removeChild' errors.
     <div className="w-full h-full relative">
+      {/* 聚光燈環 + 移動動畫覆蓋層（不攔截滑鼠事件）/ Spotlight rings + move animation overlay (never intercepts mouse events)
+          w-full h-full 必須：canvas 是替換元素，absolute inset-0 不會自動撐滿（intrinsic 300×150）
+          w-full h-full is required: canvas is a replaced element — absolute inset-0 alone leaves it at its intrinsic 300×150
+          DOM 順序：覆蓋層必須在 sigma container「之前」——sigma 的 WebGL canvas
+          背景透明，後畫的 sigma 會疊在覆蓋層上，地名標籤才能壓過聚光燈環。
+          DOM order: the overlay MUST come BEFORE the sigma container — sigma's
+          WebGL canvas is transparent, so painting sigma last puts place labels
+          on top of the spotlight rings. */}
+      <canvas
+        ref={overlayRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+      />
       <div ref={containerRef} className="absolute inset-0" />
       {/* 工具提示 / Tooltip */}
       {tooltip && (

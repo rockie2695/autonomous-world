@@ -72,6 +72,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // 僅有勢力控制的地點可被指派 / Only faction-controlled places can be assigned
+  if (!place.factionId) {
+    return NextResponse.json(
+      { error: 'Cannot assign administrator to an unowned place' },
+      { status: 400 }
+    );
+  }
+
   // 驗證角色存在、存活且屬於此世界 / Validate character exists, is alive, and belongs to this world
   const character = await prisma.character.findFirst({
     where: {

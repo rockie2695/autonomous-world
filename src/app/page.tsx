@@ -247,7 +247,7 @@ export default async function HomePage() {
 
       {/* ── 頁尾 / Footer ──────────────────────────────────────────────────────── */}
       <footer className="relative z-10 px-6 py-5 text-center border-t border-gray-800/50">
-        <p className="font-orbitron text-[10px] tracking-[0.2em] text-gray-600 uppercase">
+        <p className="font-orbitron text-[10px] tracking-[0.2em] text-gray-500 uppercase">
           Autonomous World — Eternal Evolution Simulation
         </p>
       </footer>

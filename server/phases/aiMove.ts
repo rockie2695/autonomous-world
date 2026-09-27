@@ -10,7 +10,8 @@
 // - 移動順序：速度降序（v1.1）/ Movement order: speed descending (v1.1)
 // - 速度相同：以種子 RNG 決定順序 / Same speed: seeded RNG determines order
 // - 若角色無目標則原地不動 / If character has no target, they stay put
-// - 目標優先順序：號令 > 陣營敵人 > 原地不動 / Target priority: Signal > Faction enemy > Stay put
+// - 目標優先順序：號令 > 陣營敵人 > 向最近無主之地行軍 > 原地不動
+// - Target priority: Signal > Faction enemy > March to nearest unowned place > Stay put
 //
 // 使用方式 / Usage:
 //   await aiMove(worldId, round, rng);
@@ -19,6 +20,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
+import { recordMove } from '../moveEvent';
 
 /**
  * 將所有角色朝其目標移動。
@@ -38,9 +40,11 @@ export async function aiMove(
     where: { worldId, alive: true },
     select: {
       id: true,
+      name: true,
       placeId: true,
       speed: true,
       factionId: true,
+      troops: true,
     },
   });
 
@@ -101,6 +105,29 @@ export async function aiMove(
     placeFactionMap.set(place.id, place.factionId);
   }
 
+  // 多源 BFS：從所有無主之地起算，每個地點到最近無主之地的距離
+  // Multi-source BFS from all unowned places: distance to nearest unowned place
+  // 用於「向無主之地行軍」（距離 d 的地點走一步到距離 d-1 的鄰居）
+  // Used for marching on unowned land (step from distance d to a neighbor at d-1)
+  const distToUnowned = new Map<string, number>();
+  const bfsQueue: string[] = [];
+  for (const place of places) {
+    if (place.factionId === null) {
+      distToUnowned.set(place.id, 0);
+      bfsQueue.push(place.id);
+    }
+  }
+  for (let qi = 0; qi < bfsQueue.length; qi++) {
+    const cur = bfsQueue[qi];
+    const d = distToUnowned.get(cur)!;
+    for (const nb of adjacent.get(cur) ?? []) {
+      if (!distToUnowned.has(nb)) {
+        distToUnowned.set(nb, d + 1);
+        bfsQueue.push(nb);
+      }
+    }
+  }
+
   // 移動每個角色 / Move each character
   for (const char of sorted) {
     const currentPlaceFaction = placeFactionMap.get(char.placeId);
@@ -116,6 +143,15 @@ export async function aiMove(
           where: { id: char.id },
           data: { placeId: signalTarget },
         });
+        await recordMove({
+          worldId,
+          round,
+          charId: char.id,
+          charName: char.name,
+          factionId: char.factionId,
+          fromPlaceId: char.placeId,
+          toPlaceId: signalTarget,
+        });
         continue;
       }
 
@@ -127,6 +163,15 @@ export async function aiMove(
         await prisma.character.update({
           where: { id: char.id },
           data: { placeId: neighbor },
+        });
+        await recordMove({
+          worldId,
+          round,
+          charId: char.id,
+          charName: char.name,
+          factionId: char.factionId,
+          fromPlaceId: char.placeId,
+          toPlaceId: neighbor,
         });
         break;
       }
@@ -151,10 +196,48 @@ export async function aiMove(
             where: { id: char.id },
             data: { placeId: target },
           });
+          await recordMove({
+            worldId,
+            round,
+            charId: char.id,
+            charName: char.name,
+            factionId: char.factionId,
+            fromPlaceId: char.placeId,
+            toPlaceId: target,
+          });
+        }
+        continue;
+      }
+
+      // 3. 無相鄰敵人：向最近的無主之地行軍（每回合 1 格）/
+      // No adjacent enemy: march toward the nearest unowned place (1 hop per round)
+      // 僅限有陣營的將領（無陣營者不參與佔領）/ Only faction members (factionless chars never capture)
+      const dist = distToUnowned.get(char.placeId);
+      if (char.factionId && dist !== undefined && dist > 0 && char.troops > 0) {
+        // 走到距離減一的鄰居，若有多个選擇則用 RNG 決定 /
+        // Step to a neighbor at distance-1; RNG breaks ties
+        const nextHops = (adjacent.get(char.placeId) ?? []).filter(
+          (n) => distToUnowned.get(n) === dist - 1
+        );
+        const next = rng.pick(nextHops);
+        if (next) {
+          await prisma.character.update({
+            where: { id: char.id },
+            data: { placeId: next },
+          });
+          await recordMove({
+            worldId,
+            round,
+            charId: char.id,
+            charName: char.name,
+            factionId: char.factionId,
+            fromPlaceId: char.placeId,
+            toPlaceId: next,
+          });
         }
       }
     }
 
-    // 3. 若無目標則原地不動（不移動）/ If no target, stay put (no movement)
+    // 4. 若無目標則原地不動（不移動）/ If no target, stay put (no movement)
   }
 }

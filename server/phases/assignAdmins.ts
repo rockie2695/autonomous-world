@@ -31,11 +31,13 @@ export async function assignAdmins(
   round: number,
   rng: Rng
 ): Promise<void> {
-  // 取得所有沒有總督的地點 / Get all places without administrators
+  // 取得所有「有勢力控制且」沒有總督的地點——無主之地不可被指派 /
+  // Get faction-controlled places without administrators — unowned places can never be assigned
   const unassignedPlaces = await prisma.place.findMany({
     where: {
       worldId,
       administratorId: null,
+      factionId: { not: null },
     },
   });
 

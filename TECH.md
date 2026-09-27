@@ -911,11 +911,22 @@ export function generatePersonName(rng: Rng): string {
 #### 地名生成器
 ```typescript
 // src/lib/nameGenerator/place.ts
+export const PLACE_ADJECTIVES: readonly string[] = [/* 60 個形容詞 */];
+export const PLACE_TERRAINS: readonly string[] = [/* 51 個地形 */];
+export const PLACE_NAME_CAPACITY =
+  PLACE_ADJECTIVES.length * (PLACE_ADJECTIVES.length - 1) * PLACE_TERRAINS.length; // 180,540（adj1 ≠ adj2）
+
 export function generatePlaceName(rng: Rng): string {
-  const adj = rng.pick(ADJECTIVES);  // 形容詞
-  const terrain = rng.pick(TERRAINS);  // 地形
-  return `${adj}${terrain}`;  // 例如：青雲城、落霞關
+  const adj1Index = rng.int(0, PLACE_ADJECTIVES.length - 1);
+  let adj2Index = rng.int(0, PLACE_ADJECTIVES.length - 2); // 排除 adj1 / excludes adj1
+  if (adj2Index >= adj1Index) adj2Index++;
+  const terrain = rng.pick([...PLACE_TERRAINS]); // 地形
+  return `${PLACE_ADJECTIVES[adj1Index]}${PLACE_ADJECTIVES[adj2Index]}${terrain}`;  // 例如：青霞雲嶺
 }
+
+// 已取名集合存在時走 fast path（64 次重試），否則確定性索引掃描 → 保證唯一
+export function generateUniquePlaceName(rng: Rng, taken: ReadonlySet<string>): string | null;
+export function generatePlaceNames(rng: Rng, count: number): string[]; // 批量唯一命名
 ```
 
 #### 勢力名稱生成器
@@ -931,7 +942,27 @@ export function generateFactionName(rng: Rng): string {
   if (roll < 0.7) return `${desc}${noun}${rng.pick(NOUNS)}${suffix}`;  // 4字
   // ...
 }
+
+// fast path（64 次重試）+ DESCRIPTORS×NOUNS×SUFFIXES 確定性掃描 → 保證唯一
+export function generateUniqueFactionName(rng: Rng, taken: ReadonlySet<string>): string;
+// person.ts 同理：SURNAMES×GIVEN_CHARS 掃描
+export function generateUniquePersonName(rng: Rng, taken: ReadonlySet<string>): string;
 ```
+
+#### 存活名稱唯一性 / Unique Alive Names
+
+資料庫層唯一性由 `server/uniqueNames.ts` 提供（taken 集合只查 `alive: true`）：
+
+```typescript
+// server/uniqueNames.ts
+export async function uniqueAliveFactionName(worldId: string, rng: Rng): string;
+export async function uniqueAliveKingName(
+  worldId: string, charId: string, currentName: string, rng: Rng): string;
+// 國王：若現名在存活國王中唯一則直接回傳（零 RNG 消耗），否則改名
+// 兩者皆有 numeric-suffix 不可達兜底；呼叫點：seed.ts、loyaltyCheck.ts、factionCollapse.ts
+```
+
+規則：**存活勢力名稱彼此唯一、存活國王名稱彼此唯一**；死亡後名稱釋放，不保證跨生命週期唯一。
 
 ### 快照壓縮 / Snapshot Compression
 
@@ -1001,10 +1032,12 @@ export const CONFIG = {
 
 `prisma/seed.ts` 初始化遊戲世界：
 - 使用 `createRng()` 確保可重現性
-- 使用 `generatePlaceName()` 生成地方名稱
+- 使用 `generateUniquePlaceName()` 生成**兩個不相同形容詞 + 地形**的唯一地方名稱（adj1 ≠ adj2，容量 180,540）
 - 使用 `generatePersonName()` 生成角色名稱
-- 使用 `generateFactionName()` 生成勢力名稱
+- 使用 `uniqueAliveFactionName()` / `uniqueAliveKingName()` 生成唯一存活勢力名稱與國王名稱
 - 所有數值來自 `CONFIG`
+- **先建立 round-0 快照**（此時 `currentRound` 仍為 0），**再**把 `currentRound` 設為 1：第一次「下一回合」執行回合 1、回傳 `round: 1`、`RND` 從 0000 前進到 0001（重設世界同理）
+- 成功後 `process.exit(0)` 關閉 Prisma 連線池（否則共享 singleton 會讓腳本掛住）
 
 初始狀態：
 - 1 個世界
@@ -1012,6 +1045,7 @@ export const CONFIG = {
 - 道路連接
 - 1 個角色（國王）
 - 1 個勢力
+- round-0 快照 + `currentRound: 1`
 
 ---
 
@@ -1045,7 +1079,7 @@ export const CONFIG = {
 graph.addNode(place.id, {
   x: place.layoutX,           // ForceAtlas2 計算的位置
   y: place.layoutY,
-  size: baseSize + troopBonus, // 5 + min(12, totalTroops / 15)
+  size: 4 + Math.log(totalTroops + 1) * 2, // 對數成長 / logarithmic growth
   color: hslToHex(faction.color), // HSL → Hex 轉換（WebGL 需要）
   label: place.name,
   // 儲存額外資料 / Store extra data for tooltips
@@ -1055,6 +1089,8 @@ graph.addNode(place.id, {
   totalTroops,
 });
 ```
+
+標籤顯示規則 / Label visibility：`labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD`（8，定義於 `gameConfig.ts`）—— 僅當縮放達門檻才渲染節點文字；覆蓋 `<canvas>`（聚光燈層）畫在 sigma 容器之下，故標籤永遠疊在光環之上。
 
 ### 顏色轉換 / Color Conversion
 
@@ -1156,6 +1192,42 @@ export default function GamePage() {
   return <SigmaMap worldId={worldId} round={round} />;
 }
 ```
+
+### 聚光燈與移動動畫 / Spotlight & Move Animation
+
+#### 資料來源 / Data Source
+
+`GET /api/world/state?round=N` 依事件表計算兩個欄位（快照與即時路徑共用）：
+
+```typescript
+// src/app/api/world/state/route.ts (回傳形狀 / response shape)
+spotlights: Array<{ placeId: string; kind: 'created' | 'attacked' }>
+moves: Array<{ fromPlaceId: string; toPlaceId: string; factionId: string | null }>
+```
+
+- 聚光燈視窗：回合 `N - CONFIG.SPOTLIGHT_ROUNDS + 1 .. N`
+  - `PLACE_CREATED` → kind `created`（同地點 `created` 優先）
+  - `PLACE_CAPTURED` / `BATTLE_DEATH` / `ESCAPE_SUCCESS` → kind `attacked`
+- `moves` 只含 `round === N`（當前顯示回合）的 `CHARACTER_MOVED` 事件
+- `CHARACTER_MOVED` 由 `server/moveEvent.ts#recordMove()` 寫入，涵蓋 `aiMove.ts` 四個移動點與 `battle.ts` 三個逃脫點
+- `GET /api/world/events?round=N` 對 `CHARACTER_MOVED` 做**讀取時補強**：join `places` 加上 `fromPlaceName` / `toPlaceName`（事件本身只存 placeId），供事件誌顯示「X 從 A 移動到 B」
+
+#### 渲染 / Rendering
+
+覆蓋一層絕對定位的 `<canvas>`（`pointer-events-none w-full h-full` — canvas 是替換元素，
+僅 `inset-0` 不會撐滿，會停在內建 300×150）：
+
+```typescript
+// src/components/SigmaMap.tsx — RAF 迴圈 / RAF loop
+const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y }); // 每幀用當前鏡頭座標
+// 聚光燈：脈動發光環 pulse = 0.5 + 0.5 * sin(t / 320)
+//   created → #22d3ee（青）、attacked → #f87171（紅）
+// 移動點：easeInOutQuad 行進（尾跡 0.12），週期
+//   MOVE_ANIM_DURATION (1500ms) 行進 + MOVE_ANIM_PAUSE (2500ms) 停頓
+//   顏色 = 移動者陣營色（hslToHex），無陣營 → #5eead4
+```
+
+時序常數位於 `src/lib/gameConfig.ts`：`SPOTLIGHT_ROUNDS`、`MOVE_ANIM_DURATION`、`MOVE_ANIM_PAUSE`。
 
 ---
 

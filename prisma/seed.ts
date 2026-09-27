@@ -18,9 +18,10 @@ import Graph from 'graphology';
 import forceAtlas2 from 'graphology-layout-forceatlas2';
 import { createRng } from '@/lib/rng';
 import { CONFIG, getScalingRatio } from '@/lib/gameConfig';
-import { generatePlaceName } from '@/lib/nameGenerator/place';
+import { generateUniquePlaceName } from '@/lib/nameGenerator/place';
 import { generatePersonName } from '@/lib/nameGenerator/person';
-import { generateFactionName } from '@/lib/nameGenerator/faction';
+import { uniqueAliveFactionName, uniqueAliveKingName } from '../server/uniqueNames';
+import { createSnapshot } from '@/lib/snapshot';
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }),
@@ -75,8 +76,11 @@ async function main() {
   // Using project's nameGenerator and gameConfig
 
   const places = [];
+  const takenPlaceNames = new Set<string>();
   for (let i = 0; i < CONFIG.PLACE_INITIAL_COUNT; i++) {
-    const name = generatePlaceName(rng);
+    const name =
+      generateUniquePlaceName(rng, takenPlaceNames) ?? `地${i + 1}`;
+    takenPlaceNames.add(name);
 
     // 只有國王的位置有初始建築和駐軍，其餘無主之地全部為 0
     // Only the king's place has initial buildings and garrison, all unowned places start at 0
@@ -321,17 +325,24 @@ async function main() {
   const faction = await prisma.faction.create({
     data: {
       worldId: world.id,
-      name: generateFactionName(rng),
+      name: await uniqueAliveFactionName(world.id, rng),
       color: `hsl(${rng.int(0, 360)}, 70%, 50%)`,
       createdAtRound: 0,
       kingId: characters[0].id,
     },
   });
 
-  // 設定第一個角色為王
+  // 設定第一個角色為王（名字須在存活君王中唯一）/ Set the first character
+  // as king (name must be unique among alive kings)
+  const kingName = await uniqueAliveKingName(
+    world.id,
+    characters[0].id,
+    name,
+    rng
+  );
   await prisma.character.update({
     where: { id: characters[0].id },
-    data: { factionId: faction.id, isKing: true },
+    data: { factionId: faction.id, isKing: true, name: kingName },
   });
 
   // 第一個地方歸該勢力
@@ -363,10 +374,26 @@ async function main() {
 
   console.log('Set administrators');
 
-  // 更新世界 RNG 狀態 / Update world RNG state
+  // ── 9. 初始快照 + 推進回合 / Initial snapshot + advance round ────────
+  // 先建立 round 0 快照（此時 currentRound 仍為 0，快照內嵌 0 = 初始狀態、
+  // 無事件），再把 currentRound 設為 1：這樣「下一回合」第一次點擊執行
+  // round 1、回傳 1，RND 標籤才會從 0000 前進。
+  // Create the round-0 snapshot FIRST (while currentRound is still 0, so the
+  // snapshot embeds 0 = initial seeded state, no events), THEN set
+  // currentRound to 1: the first "Next Round" click then runs round 1 and
+  // returns 1, so the RND label advances from 0000.
+  const snapshotBuffer = await createSnapshot(world.id);
+  await prisma.roundSnapshot.create({
+    data: {
+      worldId: world.id,
+      round: 0,
+      data: Buffer.from(snapshotBuffer),
+    },
+  });
+
   await prisma.world.update({
     where: { id: world.id },
-    data: { rngState: rng.getState() },
+    data: { rngState: rng.getState(), currentRound: 1 },
   });
 
   console.log('Database seeded successfully!');
@@ -379,4 +406,7 @@ main()
   })
   .finally(async () => {
     await prisma.$disconnect();
+    // 種子程序可能因共用 Prisma 單例的連線池而掛起 → 明確退出
+    // The seed process may hang on the shared Prisma singleton's pool → exit explicitly
+    process.exit(0);
   });

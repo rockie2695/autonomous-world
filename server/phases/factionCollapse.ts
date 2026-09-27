@@ -18,7 +18,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
-import { generateFactionName } from '@/lib/nameGenerator/faction';
+import { uniqueAliveFactionName, uniqueAliveKingName } from '../uniqueNames';
 
 /**
  * 處理崩潰中勢力的崩潰程序。
@@ -115,7 +115,7 @@ export async function factionCollapse(
 
       // 若無法加入，則建立新勢力 / If couldn't join, create new faction
       if (!joinedFaction) {
-        const factionName = generateFactionName(rng);
+        const factionName = await uniqueAliveFactionName(worldId, rng);
         const color = `hsl(${rng.int(0, 360)}, 70%, 50%)`;
 
         const newFaction = await prisma.faction.create({
@@ -128,11 +128,20 @@ export async function factionCollapse(
           },
         });
 
+        // 新君王名字須在存活君王中唯一 / King name must be unique among alive
+        // kings
+        const kingName = await uniqueAliveKingName(
+          worldId,
+          char.id,
+          char.name,
+          rng
+        );
         await prisma.character.update({
           where: { id: char.id },
           data: {
             factionId: newFaction.id,
             isKing: true,
+            name: kingName,
             ambition: rng.int(
               CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MIN,
               CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MAX

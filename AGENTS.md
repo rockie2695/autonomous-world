@@ -151,11 +151,12 @@ src/
 ```
 server/
 ├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
+├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (used by aiMove + battle escape)
 ├── graph/
 │   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
     ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent, road limit enforced)
-    ├── spawnCharacters.ts # Phase 2
+    ├── spawnCharacters.ts # Phase 2 (faction-controlled places only)
     └── ...               # Phases 3-14
 ```
 
@@ -167,9 +168,14 @@ src/components/
                            # - Nodes: faction-colored (HSL→hex), sized by troops
                            # - Edges: semi-transparent roads
                            # - Dynamic labels with faction-colored backgrounds
+                           # - Overlay <canvas> animation layer (pointer-events-none):
+                           #   pulsing spotlight rings (cyan=created, red=attacked) +
+                           #   faction-colored travel dot for the displayed round's moves.
+                           #   NOTE: canvas is a replaced element — keep `w-full h-full`
+                           #   (inset-0 alone leaves it at intrinsic 300×150).
 
 src/app/game/page.tsx also defines locally:
-├── EventLog               # Bilingual event log (i18n t() with parameter substitution)
+├── EventLog               # Bilingual event log (i18n t() with parameter substitution); header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
 └── StatsCharts            # SVG line charts for faction stats over time
 ```
 
@@ -195,9 +201,29 @@ prisma/
 
 When creating roads between places, always enforce the `ROAD_MAX_PER_PLACE` limit:
 - Query existing road counts per place before selecting targets
-- Filter out places that already have `ROAD_MAX_PER_PLACE` (3) roads
+- Filter out places that already have `ROAD_MAX_PER_PLACE` (4) roads
 - Apply this check in both seed scripts and runtime phases
 - Prevents any place from exceeding the road capacity limit
+
+### Faction-Controlled Place Rules
+
+A place is "faction-controlled" when `place.factionId != null`. Unowned (無主之地) places must never gain these:
+
+- **Character spawn**: `spawnCharacters.ts` queries `where: { factionId: { not: null } }` — no generals spawn at unowned places; a spawned general is created with `factionId: place.factionId` (it joins that place's faction)
+- **Auto admin assignment**: `assignAdmins.ts` queries `where: { factionId: { not: null }, administratorId: null }`
+- **Manual admin assignment**: `POST /api/admin/assign-admin` returns **400** `"Cannot assign administrator to an unowned place"` when `place.factionId` is null
+- If legacy data violates this (e.g. an admin left behind after a rule change), clear it once: `prisma.place.updateMany({ where: { factionId: null, administratorId: { not: null } }, data: { administratorId: null } })`
+
+### Map Spotlight & Move Animation
+
+- `GET /api/world/state?round=N` returns `spotlights: Array<{placeId, kind: 'created'|'attacked'}>` and `moves: Array<{fromPlaceId, toPlaceId, factionId}>` (computed from the events table; works for both snapshot and live paths)
+- Spotlight window: rounds `N - CONFIG.SPOTLIGHT_ROUNDS + 1 .. N` over `PLACE_CREATED` (kind `created`) and `PLACE_CAPTURED`/`BATTLE_DEATH`/`ESCAPE_SUCCESS` (kind `attacked`; `created` wins ties)
+- `moves` includes only `CHARACTER_MOVED` events with `round === N` (the displayed round exactly)
+- `CHARACTER_MOVED` events are written by `server/moveEvent.ts#recordMove()` from all four `aiMove.ts` movement sites and the three `battle.ts` escape sites; no-op when `fromPlaceId === toPlaceId`
+- Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 3`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
+- **Z-order**: the overlay `<canvas>` paints first (below), the sigma container div paints last (above) — so place labels always render on top of spotlight rings. Keep that DOM order.
+- **Label visibility**: node labels use one zoom rule — `labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD` (8) in `SigmaMap.tsx`. Tune the threshold in `gameConfig.ts`, not inline.
+- `GET /api/world/events?round=N` applies read-time enrichment to `CHARACTER_MOVED`: adds `fromPlaceName`/`toPlaceName` by joining `places` (events themselves store only placeIds)
 
 ### Type Safety
 
@@ -240,7 +266,9 @@ The seed script (`prisma/seed.ts`) creates:
 - **1 world** (global, unique)
 - **100 places** with roads connecting them
 - **1 character** (king) with 1 faction
-- Uses project functions: `createRng()`, `generatePlaceName()`, `generatePersonName()`, `generateFactionName()`
+- Uses project functions: `createRng()`, `generateUniquePlaceName()`, `generatePersonName()`, plus `uniqueAliveFactionName()`/`uniqueAliveKingName()` from `server/uniqueNames.ts`
+- Place names are **two distinct adjectives + terrain** (adj1 ≠ adj2; 60×59×51 = 180,540 capacity, guaranteed unique); alive faction names and alive king names are each unique (death releases a name)
+- Creates the **round-0 snapshot first**, then sets `currentRound: 1` — so the first "Next Round" click runs round 1 and the `RND` counter advances 0000 → 0001 (reset-world does the same)
 - All values from `CONFIG` in `gameConfig.ts`
 - **ForceAtlas2 layout** calculates initial positions based on road network
 - **Unowned places** have building level 0 and garrison 0

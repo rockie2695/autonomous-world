@@ -23,7 +23,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
-import { generateFactionName } from '@/lib/nameGenerator/faction';
+import { uniqueAliveFactionName, uniqueAliveKingName } from '../uniqueNames';
 
 /**
  * 檢查並處理叛變。
@@ -138,7 +138,7 @@ export async function loyaltyCheck(
 
       if (isAdministrator) {
         // 總督以其地點建立新勢力 / Admin creates new faction with their place
-        const factionName = generateFactionName(rng);
+        const factionName = await uniqueAliveFactionName(worldId, rng);
         const color = `hsl(${rng.int(0, 360)}, 70%, 50%)`;
 
         const newFaction = await prisma.faction.create({
@@ -157,12 +157,20 @@ export async function loyaltyCheck(
           data: { factionId: newFaction.id },
         });
 
-        // 更新角色 / Update character
+        // 更新角色（新君王名字須在存活君王中唯一）/ Update character (the new
+        // king's name must be unique among alive kings)
+        const kingName = await uniqueAliveKingName(
+          worldId,
+          char.id,
+          char.name,
+          rng
+        );
         await prisma.character.update({
           where: { id: char.id },
           data: {
             factionId: newFaction.id,
             isKing: true,
+            name: kingName,
             ambition: rng.int(
               CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MIN,
               CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MAX
@@ -178,7 +186,7 @@ export async function loyaltyCheck(
             type: 'DEFECTION',
             data: {
               charId: char.id,
-              charName: char.name,
+              charName: kingName,
               oldFactionId: char.factionId,
               newFactionId: newFaction.id,
               newFactionName: factionName,
@@ -259,7 +267,7 @@ export async function loyaltyCheck(
 
         // 若無法加入鄰近勢力，則建立新的 / If couldn't join nearby, create new faction
         if (!joinedFaction) {
-          const factionName = generateFactionName(rng);
+          const factionName = await uniqueAliveFactionName(worldId, rng);
           const color = `hsl(${rng.int(0, 360)}, 70%, 50%)`;
 
           const newFaction = await prisma.faction.create({
@@ -272,11 +280,20 @@ export async function loyaltyCheck(
             },
           });
 
+          // 新君王名字須在存活君王中唯一 / King name must be unique among
+          // alive kings
+          const kingName = await uniqueAliveKingName(
+            worldId,
+            char.id,
+            char.name,
+            rng
+          );
           await prisma.character.update({
             where: { id: char.id },
             data: {
               factionId: newFaction.id,
               isKing: true,
+              name: kingName,
               ambition: rng.int(
                 CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MIN,
                 CONFIG.CHAR_NEW_FACTION_AMBITION_RESET_MAX
@@ -292,7 +309,7 @@ export async function loyaltyCheck(
               type: 'DEFECTION',
               data: {
                 charId: char.id,
-                charName: char.name,
+                charName: kingName,
                 oldFactionId: char.factionId,
                 newFactionId: newFaction.id,
                 newFactionName: factionName,

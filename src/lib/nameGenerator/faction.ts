@@ -123,3 +123,47 @@ export function generateFactionNames(rng: Rng, count: number): string[] {
 
   return Array.from(names);
 }
+
+/**
+ * 產生不與 taken 撞名的勢力名稱；隨機嘗試 64 次失敗後改以確定性掃描
+ * [修飾詞][名詞][後綴] 組合空間（約 4 種），空間耗盡時回傳 null。
+ * Generate a faction name not present in `taken`. After 64 random attempts
+ * it falls back to a deterministic scan over the [Descriptor][Noun][Suffix]
+ * cross product (~40k combinations); returns null when the space is exhausted.
+ *
+ * 空 taken 時第一個隨機嘗試即成功，RNG 消耗與 generateFactionName 相同。
+ * With an empty `taken` the first random attempt succeeds, so RNG consumption
+ * matches generateFactionName exactly (existing seed streams stay intact).
+ *
+ * @param rng - 種子 RNG 實例 / Seeded RNG instance
+ * @param taken - 已佔用的名稱集合 / Set of names already in use
+ * @returns 唯一勢力名稱，或 null（空間耗盡）/ A unique faction name, or null if exhausted
+ */
+export function generateUniqueFactionName(
+  rng: Rng,
+  taken: ReadonlySet<string>
+): string | null {
+  // 隨機快速路徑 / Fast random path
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const name = generateFactionName(rng);
+    if (!taken.has(name)) return name;
+  }
+
+  // 確定性掃描：從隨機起點走過全部 [修飾詞][名詞][後綴] 組合
+  // Deterministic scan from a random start over every
+  // [Descriptor][Noun][Suffix] combination — guaranteed to find a free slot
+  const nounCount = NOUNS.length;
+  const suffixCount = SUFFIXES.length;
+  const total = DESCRIPTORS.length * nounCount * suffixCount;
+  const start = rng.int(0, total - 1);
+  for (let i = 0; i < total; i++) {
+    const idx = (start + i) % total;
+    const desc = Math.floor(idx / (nounCount * suffixCount));
+    const rem = idx % (nounCount * suffixCount);
+    const noun = Math.floor(rem / suffixCount);
+    const suffix = rem % suffixCount;
+    const name = `${DESCRIPTORS[desc]}${NOUNS[noun]}${SUFFIXES[suffix]}`;
+    if (!taken.has(name)) return name;
+  }
+  return null;
+}

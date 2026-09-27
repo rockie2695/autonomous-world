@@ -19,6 +19,7 @@ import { generatePlaceNames } from '@/lib/nameGenerator/place';
 import { generateFactionNames } from '@/lib/nameGenerator/faction';
 import { CONFIG } from '@/lib/gameConfig';
 import { ResetWorldBodySchema } from '@/lib/validations';
+import { createSnapshot } from '@/lib/snapshot';
 
 export async function POST(request: Request) {
   // 檢查認證 / Check authentication
@@ -92,6 +93,25 @@ export async function POST(request: Request) {
       })
     )
   );
+
+  // 初始快照 + 推進回合 / Initial snapshot + advance round
+  // 先建立 round 0 快照（內嵌 currentRound=0 = 初始狀態），再把 currentRound
+  // 設為 1：與 seed 相同，讓「下一回合」第一次點擊即回傳 1、RND 前進。
+  // Create the round-0 snapshot FIRST (embeds currentRound=0 = initial
+  // state), THEN set currentRound to 1 — same as seed: the first "Next
+  // Round" click returns 1 so the RND label advances.
+  const snapshotBuffer = await createSnapshot(world.id);
+  await prisma.roundSnapshot.create({
+    data: {
+      worldId: world.id,
+      round: 0,
+      data: Buffer.from(snapshotBuffer),
+    },
+  });
+  await prisma.world.update({
+    where: { id: world.id },
+    data: { currentRound: 1 },
+  });
 
   return NextResponse.json({
     success: true,

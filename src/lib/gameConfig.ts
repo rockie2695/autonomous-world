@@ -31,17 +31,17 @@ export const CONFIG = {
   PLACE_INITIAL_COUNT: 100, // 世界建立時有多少地點 / How many places exist at world creation
   PLACE_MAX_COUNT: 2000, // 地點總數上限 / Hard cap on total places
   PLACE_NEW_PER_ROUND: 1, // 每回合新增的地點數 / New places added each round
-  PLACE_INITIAL_FORTRESS: 1, // 新地點初始堡壘等級 / Initial fortress level for new places
-  PLACE_INITIAL_MARKET: 1, // 新地點初始市場等級 / Initial market level for new places
-  PLACE_INITIAL_BARRACKS: 1, // 新地點初始兵營等級 / Initial barracks level for new places
-  PLACE_INITIAL_GARRISON: 10, // 新地點初始駐軍 / Initial garrison for new places
+  PLACE_INITIAL_FORTRESS: 1, // 國王初始地點堡壘（新地點皆 0）/ King's starting place fortress (new places all 0)
+  PLACE_INITIAL_MARKET: 1, // 國王初始地點市場（新地點皆 0）/ King's starting place market (new places all 0)
+  PLACE_INITIAL_BARRACKS: 1, // 國王初始地點兵營（新地點皆 0）/ King's starting place barracks (new places all 0)
+  PLACE_INITIAL_GARRISON: 10, // 國王初始地點駐軍（新地點無駐軍）/ King's starting place garrison (new places get none)
 
   // ── 道路 / Roads ─────────────────────────────────────────────────────────
-  // 每個地點連接 1-3 個其他地點。道路使移動成為可能。
-  // Each place connects to 1-3 other places. Roads enable movement.
-  ROAD_MAX_PER_PLACE: 3, // 單一地點最多連接的道路數 / Max roads connected to any single place
+  // 每個地點連接 1-4 個其他地點。道路使移動成為可能。
+  // Each place connects to 1-4 other places. Roads enable movement.
+  ROAD_MAX_PER_PLACE: 4, // 單一地點最多連接的道路數 / Max roads connected to any single place
   ROAD_NEW_PER_PLACE_MIN: 1, // 地點建立時最少新增道路數 / Min new roads when a place is created
-  ROAD_NEW_PER_PLACE_MAX: 3, // 地點建立時最多新增道路數 / Max new roads when a place is created
+  ROAD_NEW_PER_PLACE_MAX: 4, // 地點建立時最多新增道路數 / Max new roads when a place is created
 
   // ── 角色 / Characters ────────────────────────────────────────────────────
   // 屬性 (wu/tong/jing/speed) 使用均勻分佈 5-30。
@@ -200,6 +200,35 @@ export const CONFIG = {
   // ── 初始佈局 / Initial Layout ────────────────────────────────────────────
   INITIAL_LAYOUT_ITERATIONS: 200, // 迭代次數，越大越收斂但有遞減報酬 / Iterations, higher = more convergence but diminishing returns
   INITIAL_LAYOUT_RADIUS: 500, // 初始散佈半徑 / Initial spread radius
+
+  // ── 地圖聚光燈 / Map Spotlight ─────────────────────────────────────────────
+  // 新生成 / 被攻擊的地點顯示發光環的回合數
+  // Rounds a newly created / attacked place keeps its glowing ring
+  SPOTLIGHT_ROUNDS: 3,
+
+  // 聚光燈環幾何（覆蓋畫布）/ Spotlight ring geometry (overlay canvas)
+  // 環半徑 = scaleSize(節點尺寸) + OFFSET + PULSE_AMP * 脈動
+  // Ring radius = scaleSize(node size) + OFFSET + PULSE_AMP * pulse
+  // scaleSize 讓環隨鏡頭縮放，OFFSET 讓環永遠落在節點圓外
+  // scaleSize tracks zoom; OFFSET keeps the ring outside the node circle
+  SPOTLIGHT_RING_OFFSET: 4,        // 環與節點邊緣的間距（px）/ Gap outside the node edge (px)
+  SPOTLIGHT_RING_PULSE_AMP: 3,     // 脈動幅度（px）/ Pulse amplitude (px)
+  SPOTLIGHT_RING_PULSE_MS: 1000,   // 脈動半週期（毫秒）/ Half pulse period (ms)
+  SPOTLIGHT_RING_WIDTH: 2.5,       // 環線寬（px）/ Ring stroke width (px)
+  SPOTLIGHT_RING_SHADOW: 6,        // 發光模糊基礎強度 / Base glow blur strength
+  SPOTLIGHT_RING_SHADOW_PULSE: 8,  // 發光模糊脈動幅度 / Glow blur pulse amplitude
+
+  // ── 移動動畫 / Move Animation ──────────────────────────────────────────────
+  MOVE_ANIM_DURATION: 1500, // 移動點行進時間（毫秒）/ Travel time of the move dot (ms)
+  MOVE_ANIM_PAUSE: 2500, // 每週期停頓（毫秒）/ Pause between animation cycles (ms)
+
+  // ── 地名標籤顯示 / Place Label Visibility ──────────────────────────────────
+  // sigma labelThreshold：節點螢幕尺寸（px）低於此值時隱藏標籤。
+  // 縮小（節點變小）→ 低於門檻 → 標籤統一隱藏；放大 → 重新顯示。
+  // sigma labelThreshold: hide a node's label when its on-screen size (px)
+  // falls below this value. Zoom out (nodes shrink) → labels hide uniformly;
+  // zoom back in → they reappear.
+  LABEL_SIZE_THRESHOLD: 8,
 } as const;
 
 // ─── 動態佈局函數 / Dynamic Layout Functions ─────────────────────────────

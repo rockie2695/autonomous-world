@@ -160,11 +160,13 @@ autonomous-world/
 - Each character has: **Martial (wu)**, **Command (tong)**, **Strategy (jing)**, **Speed**
 - Stats range 5-30, with speed using normal distribution (μ=17, σ=5)
 - Characters age each round and eventually die of old age (50-80 years)
+- Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
 
 ### Factions
 - Characters can belong to a faction (kingdom/nation)
 - Each faction has a king, color, and set of territories
 - When a king dies, the faction enters "collapsing" state and dissolves
+- Only faction-controlled places can be assigned an administrator (auto-assign skips unowned places; the admin API returns 400 for them)
 
 ### Map Visualization
 
@@ -175,7 +177,10 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **ForceAtlas2** layout keeps connected places close together
 - **Incremental layout** — new places spawn near their parent
 - **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
-- Node size: `baseSize(5) + min(12, totalTroops / 15)`
+- Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
+- Node labels follow one zoom rule: shown only when zoom ≥ `LABEL_SIZE_THRESHOLD` (8), via Sigma's `labelRenderedSizeThreshold`; labels always paint above the spotlight overlay
+- **Spotlight rings** — places created or attacked within the last `SPOTLIGHT_ROUNDS` (3) rounds pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
+- **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
 
 ### Battles
 - Characters move 1 territory per turn

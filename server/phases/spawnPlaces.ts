@@ -19,7 +19,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
-import { generatePlaceName } from '@/lib/nameGenerator/place';
+import { generateUniquePlaceName } from '@/lib/nameGenerator/place';
 
 /**
  * 檢查新位置是否與既有節點碰撞。
@@ -75,6 +75,13 @@ export async function spawnPlaces(
     CONFIG.PLACE_MAX_COUNT - placeCount
   );
 
+  // 既有地名集合（整批產生時查重）/ Existing names (dedupe against this batch)
+  const existingNameRows = await prisma.place.findMany({
+    where: { worldId },
+    select: { name: true },
+  });
+  const takenNames = new Set<string>(existingNameRows.map((p) => p.name));
+
   let created = 0;
 
   for (let i = 0; i < newPlacesCount; i++) {
@@ -89,8 +96,9 @@ export async function spawnPlaces(
     const parent = rng.pick(parentPlaces) as { id: string; layoutX: number; layoutY: number } | undefined;
     if (!parent) continue;
 
-    // 產生唯一名稱 / Generate a unique name
-    const name = generatePlaceName(rng);
+    // 產生與既有地點不撞名的名稱 / Generate a name that doesn't collide with existing places
+    const name = generateUniquePlaceName(rng, takenNames) ?? `地${placeCount + created + 1}`;
+    takenNames.add(name);
 
     // ── 增量佈局：鄰居重心 + 隨機偏移 + 碰撞檢查 ──
     // Incremental layout: neighbor centroid + random offset + collision check
@@ -172,7 +180,8 @@ export async function spawnPlaces(
       layoutY = candidateY;
     }
 
-    // 建立地點 / Create the place
+    // 建立地點（新地點全建築 0 級、無駐軍）/
+    // Create the place (new places start with 0 building levels, no garrison)
     const place = await prisma.place.create({
       data: {
         worldId,
@@ -180,10 +189,10 @@ export async function spawnPlaces(
         layoutX,
         layoutY,
         createdAtRound: round,
-        fortress: CONFIG.PLACE_INITIAL_FORTRESS,
-        market: CONFIG.PLACE_INITIAL_MARKET,
-        barracks: CONFIG.PLACE_INITIAL_BARRACKS,
-        garrison: CONFIG.PLACE_INITIAL_GARRISON,
+        fortress: 0,
+        market: 0,
+        barracks: 0,
+        garrison: 0,
       },
     });
 

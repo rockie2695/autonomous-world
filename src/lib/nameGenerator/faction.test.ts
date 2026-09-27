@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createRng } from '../rng';
-import { generateFactionName, generateFactionNames } from './faction';
+import {
+  generateFactionName,
+  generateFactionNames,
+  generateUniqueFactionName,
+} from './faction';
 
 describe('Faction Name Generator', () => {
   describe('generateFactionName', () => {
@@ -60,6 +64,55 @@ describe('Faction Name Generator', () => {
         expect(len).toBeGreaterThanOrEqual(3);
         expect(len).toBeLessThanOrEqual(5);
       });
+    });
+  });
+
+  describe('generateUniqueFactionName', () => {
+    it('should avoid names already in the taken set', () => {
+      const rng = createRng('unique-faction-seed');
+      const taken = new Set<string>();
+
+      for (let i = 0; i < 100; i++) {
+        const name = generateUniqueFactionName(rng, taken);
+        expect(name).not.toBeNull();
+        if (name !== null) {
+          expect(taken.has(name)).toBe(false);
+          taken.add(name);
+        }
+      }
+      expect(taken.size).toBe(100);
+    });
+
+    it('should be deterministic with the same seed', () => {
+      const taken = new Set<string>(['蒼龍盟', '金鳳閣']);
+      const rng1 = createRng('same-unique-seed');
+      const rng2 = createRng('same-unique-seed');
+
+      for (let i = 0; i < 20; i++) {
+        expect(generateUniqueFactionName(rng1, taken)).toBe(
+          generateUniqueFactionName(rng2, taken)
+        );
+      }
+    });
+
+    it('should fall back to the deterministic scan when the fast path is exhausted', () => {
+      const seed = 'forced-scan-seed';
+      // 預先產生快速路徑會抽到的 64 個名稱 / Pre-fill the 64 names the fast
+      // path would draw so the call is forced into the deterministic scan
+      const taken = new Set<string>();
+      const probe = createRng(seed);
+      for (let i = 0; i < 64; i++) {
+        taken.add(generateFactionName(probe));
+      }
+
+      const name = generateUniqueFactionName(createRng(seed), taken);
+      expect(name).not.toBeNull();
+      if (name !== null) {
+        expect(taken.has(name)).toBe(false);
+        // 掃描起點來自 RNG → 同種子結果相同 / Scan start comes from the RNG,
+        // so the same seed must yield the same scan result
+        expect(generateUniqueFactionName(createRng(seed), taken)).toBe(name);
+      }
     });
   });
 

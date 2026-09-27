@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { createRng } from '../rng';
-import { generatePersonName, generatePersonNames } from './person';
+import {
+  generatePersonName,
+  generatePersonNames,
+  generateUniquePersonName,
+} from './person';
 
 describe('Person Name Generator', () => {
   describe('generatePersonName', () => {
@@ -54,6 +58,55 @@ describe('Person Name Generator', () => {
       for (let i = 0; i < 50; i++) {
         const name = generatePersonName(rng);
         expect(commonSurnames).toContain(name[0]);
+      }
+    });
+  });
+
+  describe('generateUniquePersonName', () => {
+    it('should avoid names already in the taken set', () => {
+      const rng = createRng('unique-person-seed');
+      const taken = new Set<string>();
+
+      for (let i = 0; i < 100; i++) {
+        const name = generateUniquePersonName(rng, taken);
+        expect(name).not.toBeNull();
+        if (name !== null) {
+          expect(taken.has(name)).toBe(false);
+          taken.add(name);
+        }
+      }
+      expect(taken.size).toBe(100);
+    });
+
+    it('should be deterministic with the same seed', () => {
+      const taken = new Set<string>(['王飛', '李雲']);
+      const rng1 = createRng('same-unique-seed');
+      const rng2 = createRng('same-unique-seed');
+
+      for (let i = 0; i < 20; i++) {
+        expect(generateUniquePersonName(rng1, taken)).toBe(
+          generateUniquePersonName(rng2, taken)
+        );
+      }
+    });
+
+    it('should fall back to the deterministic scan when the fast path is exhausted', () => {
+      const seed = 'forced-scan-seed';
+      // 預先產生快速路徑會抽到的 64 個名稱 / Pre-fill the 64 names the fast
+      // path would draw so the call is forced into the deterministic scan
+      const taken = new Set<string>();
+      const probe = createRng(seed);
+      for (let i = 0; i < 64; i++) {
+        taken.add(generatePersonName(probe));
+      }
+
+      const name = generateUniquePersonName(createRng(seed), taken);
+      expect(name).not.toBeNull();
+      if (name !== null) {
+        expect(taken.has(name)).toBe(false);
+        // 掃描起點來自 RNG → 同種子結果相同 / Scan start comes from the RNG,
+        // so the same seed must yield the same scan result
+        expect(generateUniquePersonName(createRng(seed), taken)).toBe(name);
       }
     });
   });
