@@ -94,6 +94,7 @@ model Place {
   layoutX         Float                    // Graph layout X position / 圖形佈局 X 位置
   layoutY         Float                    // Graph layout Y position / 圖形佈局 Y 位置
   createdAtRound  Int                     // Round when this place was created / 位置建立回合
+  adminChangedRound Int?                  // Last round the administrator changed (cooldown anchor) / 行政官上次異動回合（冷卻基準）
 
   world      World         @relation(fields: [worldId], references: [id])
   faction    Faction?      @relation(fields: [factionId], references: [id])
@@ -149,6 +150,7 @@ model Character {
   diedAtRound       Int?
   signalCooldown    Int      @default(0)     // Rounds before can send signal again / 再次發送訊號的冷卻回合數
   lastPromotedRound Int?                     // Last round when made administrator / 上次晉升為管理者回合
+  adminAmbitionRevertRound Int?              // Round when temporary admin ambition -1 reverts / 行政官野心暫時 -1 的回復回合
 
   world          World          @relation(fields: [worldId], references: [id])
   faction        Faction?       @relation(fields: [factionId], references: [id])

@@ -154,6 +154,7 @@ function EventGlyph({ type }: { type: string }) {
     case 'CHARACTER_SPAWNED':
     case 'ADMIN_ASSIGNED':
     case 'ADMIN_REMOVED':
+    case 'AMBITION_RECOVERED':
       body = (
         <>
           <circle cx="12" cy="8.5" r="3.2" />
@@ -1565,6 +1566,12 @@ function EventLog({
 
   function formatEvent(event: GameEvent): string {
     const p = event.data;
+    // 野心增減附註（-1 / +1），無資料時為空字串 /
+    // Ambition delta suffix (-1 / +1); empty when the event carries no delta
+    const ambitionNote = (delta: unknown): string =>
+      typeof delta === 'number' && delta !== 0
+        ? t('events.ambitionDelta').replace('{delta}', String(delta))
+        : '';
     switch (event.type) {
       case 'PLACE_CREATED':
         return t('events.newPlaceDesc').replace('{place}', p.placeName as string);
@@ -1600,14 +1607,27 @@ function EventLog({
           .replace('{building}', t(`map.${p.building as string}`))
           .replace('{level}', String(p.newLevel));
       case 'ADMIN_ASSIGNED':
-        return t('events.adminAssignedDesc')
-          .replace('{character}', p.charName as string)
-          .replace('{place}', p.placeName as string);
+        return (
+          t('events.adminAssignedDesc')
+            .replace('{character}', p.charName as string)
+            .replace('{place}', p.placeName as string) +
+          ambitionNote(p.ambitionDelta)
+        );
       case 'ADMIN_REMOVED':
-        return t('events.adminRemovedDesc')
-          .replace('{character}', p.charName as string)
-          .replace('{place}', p.placeName as string)
-          .replace('{newAdmin}', (p.newAdminName as string) ?? '?');
+        return (
+          t('events.adminRemovedDesc')
+            .replace('{character}', p.charName as string)
+            .replace('{place}', p.placeName as string)
+            .replace('{newAdmin}', (p.newAdminName as string) ?? '?') +
+          ambitionNote(p.ambitionDelta)
+        );
+      case 'AMBITION_RECOVERED':
+        return (
+          t('events.ambitionRecoveredDesc')
+            .replace('{character}', p.charName as string)
+            .replace('{place}', p.placeName as string) +
+          ambitionNote(p.ambitionDelta)
+        );
       case 'PLACE_CAPTURED':
         return t('events.placeCaptureDesc')
           .replace('{character}', p.charName as string)

@@ -117,6 +117,7 @@ autonomous-world/
 │                                  # （EventLog 與 StatsCharts 定義於 game/page.tsx）
 ├── server/
 │   ├── runRound.ts                # 主遊戲迴圈協調器（14 階段 + 佈局 + 快照）
+│   ├── adminAssign.ts             # grantAdmin/revokeAdmin — 共用的行政官任命規則（野心 + 冷卻）
 │   ├── graph/
 │   │   └── layout.ts              # ForceAtlas2 佈局計算
 │   └── phases/                    # 個別遊戲階段
@@ -161,6 +162,8 @@ autonomous-world/
 - 角色只會在勢力控制的地方生成（無主之地不會產生將領），且新生成的將領會立即加入該地所屬勢力
 - 同一回合生成的角色在該回合不移動（出生回合原地待命）
 - 生成時由該勢力國王指派新將領管理出生地：席位空缺（或現任已死亡）→ 直接指派；現任是國王本人 → 國王保留席位；否則比較總能力（武力+統領+智謀），**嚴格較高**者取得席位 —— 被免職者野心 **上升** `AMBITION_ADMIN_REPLACED_DELTA`（1），記錄 `ADMIN_REMOVED` 事件 + `AmbitionEvent`
+- 所有任命路徑（出生指派、自動指派、戰役奪取、管理員手動指派）都會讓新任者野心**暫時下降** `AMBITION_ADMIN_ASSIGNED_DELTA`（1），若 `AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS`（10）回合後仍在職則回復 +1（記錄 `AMBITION_RECOVERED` 事件）；若期間被免職，免職本身已給 `AMBITION_ADMIN_REPLACED_DELTA`，不再重複回復
+- 任一地點換過領導者後，`ADMIN_CHANGE_COOLDOWN_ROUNDS`（10）回合內 AI 不得再更換該地領導（僅限制 AI 路徑：戰役奪取與手動指派仍可進行）
 
 ### 勢力
 - 角色可歸屬於某個勢力（王國/國家）

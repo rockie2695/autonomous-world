@@ -29,6 +29,7 @@ import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
+import { grantAdmin } from '../adminAssign';
 
 /**
  * 解決所有交戰地點的戰鬥。
@@ -227,20 +228,16 @@ export async function battle(
         data: { factionId: attacker.factionId, garrison: 0 },
       });
 
-      // 若無總督，佔領者成為總督（先清除其他地點總督職避免唯一約束）/
-      // Capturer becomes admin if none (clear other admin posts to avoid unique conflict)
+      // 若無總督，佔領者成為總督（不受行政官冷卻限制：戰役奪取照常生效；
+      // 但仍會打上冷卻錨點，之後 AI 10 回合內不得再換）/
+      // Capturer becomes admin if none (not blocked by the admin cooldown:
+      // battle captures still apply, but they stamp the cooldown anchor)
       if (!place.administratorId) {
-        await prisma.place.updateMany({
-          where: {
-            worldId,
-            administratorId: attacker.id,
-            id: { not: place.id },
-          },
-          data: { administratorId: null },
-        });
-        await prisma.place.update({
-          where: { id: place.id },
-          data: { administratorId: attacker.id },
+        await grantAdmin({
+          worldId,
+          round,
+          place: { id: place.id, name: place.name },
+          char: { id: attacker.id, name: attacker.name },
         });
       }
 
@@ -537,22 +534,18 @@ export async function battle(
           data: { factionId: attacker.factionId },
         });
 
-        // 若無總督，攻擊者成為總督 / Attacker becomes admin if no admin
+        // 若無總督，攻擊者成為總督（不受行政官冷卻限制）/
+        // Attacker becomes admin if no admin (not blocked by the admin cooldown)
         if (!place.administratorId) {
-          // 先清除攻擊者在其他地點的總督職，避免 Place.administratorId 唯一約束衝突
-          // Clear the attacker's admin role at other places first to avoid the
-          // Place.administratorId unique constraint conflict
-          await prisma.place.updateMany({
-            where: {
-              worldId,
-              administratorId: attacker.id,
-              id: { not: place.id },
-            },
-            data: { administratorId: null },
-          });
-          await prisma.place.update({
-            where: { id: place.id },
-            data: { administratorId: attacker.id },
+          // grantAdmin 會先清除攻擊者在其他地點的總督職，避免
+          // Place.administratorId 唯一約束衝突 /
+          // grantAdmin clears the attacker's admin role at other places first
+          // to avoid the Place.administratorId unique constraint conflict
+          await grantAdmin({
+            worldId,
+            round,
+            place: { id: place.id, name: place.name },
+            char: { id: attacker.id, name: attacker.name },
           });
         }
       }

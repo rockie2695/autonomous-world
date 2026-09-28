@@ -152,6 +152,7 @@ src/
 server/
 ├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
 ├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (used by aiMove + battle escape)
+├── adminAssign.ts         # grantAdmin/revokeAdmin — the ONLY writers of Place.administratorId
 ├── graph/
 │   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
@@ -218,11 +219,24 @@ A place is "faction-controlled" when `place.factionId != null`. Unowned (無主�
 
 - `spawnCharacters.ts` returns `string[]` of IDs spawned this round (it also assigns admins, see below); `runRound.ts` passes them to `aiMove(worldId, round, rng, skipIds)` as a `Set` — **characters spawned in a round never move in that round** (no movement, no `CHARACTER_MOVED` event in the spawn round)
 - **Spawn admin assignment** (done inside `spawnCharacters.ts` right after creation, so economy/assignAdmins see it the same round):
-  1. Spawn place vacant (or its admin is dead) → assign the new leader directly (`lastPromotedRound = round`, `ADMIN_ASSIGNED` event)
+  1. Spawn place vacant (or its admin is dead) → assign the new leader directly
   2. Current admin is the living **king** → king keeps his seat, no comparison
   3. Otherwise compare **total ability `wu + tong + jing`** (new leader vs current admin); only a **strictly greater** total replaces the admin
   4. On replacement: old admin's ambition **increases** by `CONFIG.AMBITION_ADMIN_REPLACED_DELTA` (1, clamped to `CHAR_AMBITION_MAX`), logged as an `ADMIN_REMOVED` Event **and** an `AmbitionEvent`
 - `Place.administratorId` is globally unique (`@unique`) — a character administers at most one place
+
+### Administrator Assignment, Ambition & Cooldown
+
+All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` / `revokeAdmin` / `isAdminChangeCoolingDown`) so the rules live in one place. **Never write `Place.administratorId` directly** — go through the helpers.
+
+- **Grant** (`grantAdmin`, every path): sets `administratorId` + `Place.adminChangedRound = round`, `lastPromotedRound = round`, and applies a **temporary** `-CONFIG.AMBITION_ADMIN_ASSIGNED_DELTA` (1, clamped to `CHAR_AMBITION_MIN`) with an `AmbitionEvent`. The reduction auto-reverts **+1** at `round + CONFIG.AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS` (10) in phase 7 (logged as an `AMBITION_RECOVERED` Event)
+  - If the character already has a pending reduction (continuous service, e.g. a seat transfer) the expiry is **extended only** — never deducted twice
+  - If the clamped delta is 0 (already at the floor) nothing is deducted and **no revert is scheduled** (otherwise the revert would credit +1 for free)
+- **Revoke** (`revokeAdmin`): `+CONFIG.AMBITION_ADMIN_REPLACED_DELTA` (clamped to `CHAR_AMBITION_MAX`) + `AmbitionEvent`, and **clears** `adminAmbitionRevertRound` — removal already paid the +1, so a later revert would double-count (hence "skip revert if removed")
+- **Paths**: `spawnCharacters.ts` (phase 2, cooldown-gated) · `assignAdmins.ts` (phase 12, cooldown-gated) · `battle.ts` capture sites (phase 10, **not** gated — captures still apply) · `POST /api/admin/assign-admin` (manual, **not** gated)
+- **Cooldown** (`CONFIG.ADMIN_CHANGE_COOLDOWN_ROUNDS` = 10): any administrator change (assign, revoke, or the seat-clearing in `grantAdmin`) stamps `Place.adminChangedRound`. While `round - adminChangedRound < 10` the **AI paths only** (phase 2 assignment, phase 12 `assignAdmins`) skip that place. `assignAdmins` filters in its `where` clause (`adminChangedRound: null` OR `<= round - 10`); `spawnCharacters` uses `isAdminChangeCoolingDown()`
+- **The manual API revokes the outgoing admin** before granting (ambition +1 + `ADMIN_REMOVED` Event) and clears the incoming character's seat elsewhere for the unique constraint
+- Every ambition delta is written to both the `AmbitionEvent` ledger and the visible Event `data.ambitionDelta` (rendered by `formatEvent` in `game/page.tsx` via `events.ambitionDelta`)
 
 ### Map Spotlight & Move Animation
 

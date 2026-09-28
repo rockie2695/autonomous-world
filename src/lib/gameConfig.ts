@@ -122,6 +122,11 @@ export const CONFIG = {
   AMBITION_FRIEND_DEFECT_DELTA: 2, // 朋友叛變時 +2 野心 / +2 ambition when friend defects
   AMBITION_KING_TONG_DELTA: 0.5, // 國王強時 -0.5 × (king.tong/30) / -0.5 × (king.tong/30) when king strong
   AMBITION_ADMIN_REPLACED_DELTA: 1, // 被免去行政官職務時野心 +1 / +1 ambition when removed as administrator
+  AMBITION_ADMIN_ASSIGNED_DELTA: 1, // 取得行政官職務時野心 -1（暫時）/ -1 ambition when granted administrator post (temporary)
+  AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS: 10, // 減免持續回合數；到期若仍在職則 +1 回復 / Rounds before the -1 reverts if still in office
+
+  // ── 行政官冷卻 / Administrator Cooldown ────────────────────────────────────
+  ADMIN_CHANGE_COOLDOWN_ROUNDS: 10, // 換領導後 N 回合內 AI 不得再更換 / AI paths blocked for N rounds after a leader change
 
   // ── 友誼 / 不滿 ─────────────────────────────────────────────────────────
   // 關係每回合在附近角色間隨機形成

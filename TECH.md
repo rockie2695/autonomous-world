@@ -1172,6 +1172,18 @@ base = ambition × AMBITION_DEFECT_BASE_MULT(0.5)
 - `+ AMBITION_NO_PROMOTION_DELTA(0.5)`：若 ≥ 20 回合未升遷（`roundsSincePromotion ≥ 20`，從未升遷者以 `round` 計算）
 - `− 0.5 × (king.tong / 30)`：國王統率越高，部下野心降越多（tong 30 → −0.5）
 - 朋友叛逃 `+2`：**未實作**（程式碼標註 `TODO`，該區段被跳過）
+- **行政官暫時減免到期**：`adminAmbitionRevertRound <= round` 且仍存活、仍在職者 `+ AMBITION_ADMIN_ASSIGNED_DELTA` 回復，並記 `AMBITION_RECOVERED` 事件；已被免職（欄位已清空）或已死亡者只清欄位、不回復
+
+#### 行政官任命 / Administrator Assignment（`server/adminAssign.ts`）
+
+四條任命路徑共用 `grantAdmin` / `revokeAdmin` / `isAdminChangeCoolingDown`：
+
+- **任命 `grantAdmin`**：清除該角色在其他地點的職務（`administratorId` 全域 `@unique`）→ 寫入 `administratorId`、`Place.adminChangedRound = round`、`lastPromotedRound` → 野心**暫時** `− AMBITION_ADMIN_ASSIGNED_DELTA(1)`（`clamp` 到 `CHAR_AMBITION_MIN`）並記 `AmbitionEvent`；`AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS(10) 回合後於階段 7 自動 `+1` 回復
+  - 已有未到期減免（連任／換地點）→ **只順延到期回合**，不重複扣減
+  - 已處於最低值（實際扣減為 0）→ 不排定回復，避免到期憑空 `+1`
+- **免職 `revokeAdmin`**：野心 `+ AMBITION_ADMIN_REPLACED_DELTA(1)`（`clamp` 到 `CHAR_AMBITION_MAX`）並**清掉** `adminAmbitionRevertRound`（免職已回補，回復會重複計算）
+- **路徑**：階段 2 `spawnCharacters`（受冷卻限制）· 階段 12 `assignAdmins`（受冷卻限制）· 階段 10 `battle.ts` 奪取（**不受**冷卻限制）· `POST /api/admin/assign-admin` 手動指派（**不受**冷卻限制，且會先免職舊任者）
+- **冷卻 `ADMIN_CHANGE_COOLDOWN_ROUNDS(10)`**：任何行政官異動都寫入 `Place.adminChangedRound`；`round - adminChangedRound < 10` 時**僅 AI 路徑**跳過該地點（`assignAdmins` 以 `where` 過濾，`spawnCharacters` 以 `isAdminChangeCoolingDown()` 判斷）
 
 #### 老化與死亡 / Aging & Death（`server/phases/ageAndDeath.ts`）
 

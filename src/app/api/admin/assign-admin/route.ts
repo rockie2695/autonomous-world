@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth, isAdmin } from '@/lib/auth';
 import { AssignAdminBodySchema } from '@/lib/validations';
+import { grantAdmin, revokeAdmin } from '../../../../../server/adminAssign';
 
 export async function POST(request: Request) {
   // 檢查認證 / Check authentication
@@ -96,16 +97,43 @@ export async function POST(request: Request) {
     );
   }
 
-  // 更新地點的管理員 / Update the place's administrator
-  await prisma.place.update({
-    where: { id: placeId },
-    data: { administratorId: characterId },
-  });
+  // 手動指派不受行政官冷卻期限制（玩家可隨時更換），但仍會打上冷卻錨點，
+  // 使 AI 在 ADMIN_CHANGE_COOLDOWN_ROUNDS 回合內不得再更換該地點 /
+  // Manual assignment ignores the admin cooldown (players may always change it)
+  // but still stamps the cooldown anchor so the AI cannot change it for
+  // ADMIN_CHANGE_COOLDOWN_ROUNDS rounds afterwards
+  const newChar = { id: character.id, name: character.name };
+  const placeRef = { id: place.id, name: place.name };
 
-  // 更新角色的 lastPromotedRound / Update the character's lastPromotedRound
-  await prisma.character.update({
-    where: { id: characterId },
-    data: { lastPromotedRound: world.currentRound },
+  // 舊任者若被換下 → 免職（野心 +1、取消未到期減免）並記 ADMIN_REMOVED /
+  // A displaced outgoing admin is revoked (+1 ambition, pending reduction
+  // cancelled) and an ADMIN_REMOVED Event is logged
+  if (place.administratorId && place.administratorId !== character.id) {
+    const oldAdmin = await prisma.character.findUnique({
+      where: { id: place.administratorId },
+      select: { id: true, name: true },
+    });
+
+    if (oldAdmin) {
+      await revokeAdmin({
+        worldId: world.id,
+        round: world.currentRound,
+        place: placeRef,
+        char: { id: oldAdmin.id, name: oldAdmin.name },
+        newAdmin: newChar,
+        logEvent: true,
+      });
+    }
+  }
+
+  // 任命新行政官（同時清除他在其他地點的職務以符合唯一約束）/
+  // Grant the new administrator (also clearing his seat elsewhere to satisfy
+  // the unique constraint)
+  await grantAdmin({
+    worldId: world.id,
+    round: world.currentRound,
+    place: placeRef,
+    char: newChar,
   });
 
   return NextResponse.json({

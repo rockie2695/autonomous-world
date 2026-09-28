@@ -16,11 +16,19 @@
 // ============================================================================
 
 import { prisma } from '@/lib/prisma';
+import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
+import { grantAdmin } from '../adminAssign';
 
 /**
  * 自動為地點指派總督。
  * Auto-assign administrators to places.
+ *
+ * 冷卻規則 / Cooldown rule:
+ * - 地點在 ADMIN_CHANGE_COOLDOWN_ROUNDS 回合內換過領導者 → 本階段跳過
+ *   （佔領奪取與手動指派不受此限制，只有 AI 路徑受限）
+ *   Places that changed leader within ADMIN_CHANGE_COOLDOWN_ROUNDS are skipped
+ *   (battle captures and manual assignment are exempt — only AI paths block)
  *
  * @param worldId - 要處理的世界 ID / World to process
  * @param round - 當前回合數 / Current round number
@@ -31,13 +39,22 @@ export async function assignAdmins(
   round: number,
   rng: Rng
 ): Promise<void> {
-  // 取得所有「有勢力控制且」沒有總督的地點——無主之地不可被指派 /
-  // Get faction-controlled places without administrators — unowned places can never be assigned
+  // 取得所有「有勢力控制、沒有總督、且不在冷卻期」的地點——無主之地不可被指派 /
+  // Get faction-controlled, admin-less, non-cooling places — unowned places
+  // can never be assigned
   const unassignedPlaces = await prisma.place.findMany({
     where: {
       worldId,
       administratorId: null,
       factionId: { not: null },
+      OR: [
+        { adminChangedRound: null },
+        {
+          adminChangedRound: {
+            lte: round - CONFIG.ADMIN_CHANGE_COOLDOWN_ROUNDS,
+          },
+        },
+      ],
     },
   });
 
@@ -54,46 +71,16 @@ export async function assignAdmins(
     });
 
     if (bestCandidate) {
-      // 先清除該角色在其他地點的總督職，避免 Place.administratorId 唯一約束衝突
-      // (角色可能帶著總督身分移動到新地點，造成同時被兩地點指名)
-      // Clear the character's admin role at other places first to avoid the
-      // Place.administratorId unique constraint conflict (a character may have
-      // moved to a new place while still listed as admin of their old one)
-      await prisma.place.updateMany({
-        where: {
-          worldId,
-          administratorId: bestCandidate.id,
-          id: { not: place.id },
-        },
-        data: { administratorId: null },
-      });
-
-      await prisma.place.update({
-        where: { id: place.id },
-        data: {
-          administratorId: bestCandidate.id,
-        },
-      });
-
-      // 更新角色的 lastPromotedRound / Update character's lastPromotedRound
-      await prisma.character.update({
-        where: { id: bestCandidate.id },
-        data: { lastPromotedRound: round },
-      });
-
-      // 記錄管理員指派事件 / Log admin assignment event
-      await prisma.event.create({
-        data: {
-          worldId,
-          round,
-          type: 'ADMIN_ASSIGNED',
-          data: {
-            charId: bestCandidate.id,
-            charName: bestCandidate.name,
-            placeId: place.id,
-            placeName: place.name,
-          },
-        },
+      // grantAdmin 會先清除候選人在其他地點的總督職（避免 Place.administratorId
+      // 唯一約束衝突：角色可能帶著總督身分移動到新地點），再任命並記錄事件 /
+      // grantAdmin clears the candidate's seat at other places first to avoid
+      // the Place.administratorId unique constraint conflict (a character may
+      // have moved to a new place while still listed as admin of their old one)
+      await grantAdmin({
+        worldId,
+        round,
+        place: { id: place.id, name: place.name },
+        char: { id: bestCandidate.id, name: bestCandidate.name },
       });
     }
   }

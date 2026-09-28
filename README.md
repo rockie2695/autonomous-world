@@ -119,6 +119,7 @@ autonomous-world/
 │                                  # (EventLog & StatsCharts are defined in game/page.tsx)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
+│   ├── adminAssign.ts             # grantAdmin/revokeAdmin — shared admin assignment rules (ambition + cooldown)
 │   ├── graph/
 │   │   └── layout.ts              # ForceAtlas2 layout calculation
 │   └── phases/                    # Individual game phases
@@ -163,6 +164,8 @@ autonomous-world/
 - Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
 - Characters spawned in a round never move in that round (they stay put until the next round)
 - On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removed admin's ambition **increases** by `AMBITION_ADMIN_REPLACED_DELTA` (1), logged as an `ADMIN_REMOVED` event + an `AmbitionEvent`
+- Every administrator assignment — spawn, auto-assign, battle capture, or manual API — applies a **temporary** ambition **decrease** of `AMBITION_ADMIN_ASSIGNED_DELTA` (1), which reverts +1 after `AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS` (10) if the character is still in office (logged as an `AMBITION_RECOVERED` event). If they are removed before then, the removal already paid `AMBITION_ADMIN_REPLACED_DELTA` and no revert happens
+- After any leader change, that place cannot change leader again for `ADMIN_CHANGE_COOLDOWN_ROUNDS` (10) rounds — but this blocks **AI paths only**: battle captures and manual assignment still work
 
 ### Factions
 - Characters can belong to a faction (kingdom/nation)

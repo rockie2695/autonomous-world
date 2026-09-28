@@ -23,6 +23,11 @@ import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { generatePersonName } from '@/lib/nameGenerator/person';
+import {
+  grantAdmin,
+  isAdminChangeCoolingDown,
+  revokeAdmin,
+} from '../adminAssign';
 
 /**
  * 在隨機地點生成新角色，並由該地點所屬勢力的君王決定是否指派其為行政官。
@@ -52,7 +57,13 @@ export async function spawnCharacters(
   // Get all faction-controlled places — only owned places can spawn characters
   const places = await prisma.place.findMany({
     where: { worldId, factionId: { not: null } },
-    select: { id: true, name: true, factionId: true, administratorId: true },
+    select: {
+      id: true,
+      name: true,
+      factionId: true,
+      administratorId: true,
+      adminChangedRound: true,
+    },
   });
 
   if (places.length === 0) return [];
@@ -142,124 +153,90 @@ export async function spawnCharacters(
     // 3. 否則比較總能力（wu+tong+jing），新將領嚴格勝出才取代；
     //    被免職者野心 +1（配置），記錄 ADMIN_REMOVED 事件 + AmbitionEvent
     // 4. 否則不動 / Otherwise no change
-    if (place.administratorId === null) {
-      await prisma.place.update({
-        where: { id: place.id },
-        data: { administratorId: created.id },
+    // 5. 地點若在行政官冷卻期（剛換過領導）→ 一律不動 /
+    //    Place in the admin-change cooldown (leader just changed) → no change
+    if (!isAdminChangeCoolingDown(place.adminChangedRound, round)) {
+      await assignSpawnPlaceAdmin(worldId, round, place, {
+        id: created.id,
+        name,
+        wu,
+        tong,
+        jing,
       });
-      await prisma.character.update({
-        where: { id: created.id },
-        data: { lastPromotedRound: round },
-      });
-      await prisma.event.create({
-        data: {
-          worldId,
-          round,
-          type: 'ADMIN_ASSIGNED',
-          data: {
-            charId: created.id,
-            charName: name,
-            placeId: place.id,
-            placeName: place.name,
-          },
-        },
-      });
-    } else {
-      const currentAdmin = await prisma.character.findUnique({
-        where: { id: place.administratorId },
-        select: { id: true, name: true, wu: true, tong: true, jing: true, isKing: true, ambition: true, alive: true },
-      });
-
-      // 國王保留席位；（已死亡的行政官無法保有職位 → 視為空缺）/
-      // King keeps the seat; a dead admin cannot hold office → treated as vacant
-      const kingKeepsSeat = currentAdmin !== null && currentAdmin.isKing && currentAdmin.alive;
-      const seatVacant = currentAdmin === null || !currentAdmin.alive;
-
-      if (kingKeepsSeat) {
-        // 國王保留席位，不動 / King keeps seat, no change
-      } else if (seatVacant) {
-        await prisma.place.update({
-          where: { id: place.id },
-          data: { administratorId: created.id },
-        });
-        await prisma.character.update({
-          where: { id: created.id },
-          data: { lastPromotedRound: round },
-        });
-        await prisma.event.create({
-          data: {
-            worldId,
-            round,
-            type: 'ADMIN_ASSIGNED',
-            data: {
-              charId: created.id,
-              charName: name,
-              placeId: place.id,
-              placeName: place.name,
-            },
-          },
-        });
-      } else if (currentAdmin !== null) {
-        const newTotal = wu + tong + jing;
-        const oldTotal = currentAdmin.wu + currentAdmin.tong + currentAdmin.jing;
-
-        if (newTotal > oldTotal) {
-          // 取代現任行政官 / Replace the current administrator
-          await prisma.place.update({
-            where: { id: place.id },
-            data: { administratorId: created.id },
-          });
-          await prisma.character.update({
-            where: { id: created.id },
-            data: { lastPromotedRound: round },
-          });
-
-          // 被免職者野心上升（+配置值，套用上限）/
-          // Removed admin's ambition rises (+config value, clamped to max)
-          const ambitionDelta = CONFIG.AMBITION_ADMIN_REPLACED_DELTA;
-          const newAmbition = Math.min(
-            CONFIG.CHAR_AMBITION_MAX,
-            currentAdmin.ambition + ambitionDelta
-          );
-          const appliedDelta = newAmbition - currentAdmin.ambition;
-          await prisma.character.update({
-            where: { id: currentAdmin.id },
-            data: { ambition: newAmbition },
-          });
-
-          // 記錄免職事件 + 野心事件 / Log removal event + ambition event
-          await prisma.event.create({
-            data: {
-              worldId,
-              round,
-              type: 'ADMIN_REMOVED',
-              data: {
-                charId: currentAdmin.id,
-                charName: currentAdmin.name,
-                placeId: place.id,
-                placeName: place.name,
-                newAdminId: created.id,
-                newAdminName: name,
-                oldTotal,
-                newTotal,
-              },
-            },
-          });
-          await prisma.ambitionEvent.create({
-            data: {
-              worldId,
-              charId: currentAdmin.id,
-              round,
-              delta: appliedDelta,
-              reason: `Removed as administrator of ${place.name} by ${name}`,
-            },
-          });
-        }
-      }
     }
 
     spawnedIds.push(created.id);
   }
 
   return spawnedIds;
+}
+
+/**
+ * 依行政官規則決定出生地是否換領導（僅在冷卻期外呼叫）。
+ * Decide whether the spawn place changes leader (only called outside cooldown).
+ */
+async function assignSpawnPlaceAdmin(
+  worldId: string,
+  round: number,
+  place: { id: string; name: string; administratorId: string | null },
+  created: { id: string; name: string; wu: number; tong: number; jing: number }
+): Promise<void> {
+  const newChar = { id: created.id, name: created.name };
+  const placeRef = { id: place.id, name: place.name };
+
+  if (place.administratorId === null) {
+    await grantAdmin({ worldId, round, place: placeRef, char: newChar });
+  } else {
+    const currentAdmin = await prisma.character.findUnique({
+      where: { id: place.administratorId },
+      select: {
+        id: true,
+        name: true,
+        wu: true,
+        tong: true,
+        jing: true,
+        isKing: true,
+        alive: true,
+      },
+    });
+
+    // 國王保留席位；（已死亡的行政官無法保有職位 → 視為空缺）/
+    // King keeps the seat; a dead admin cannot hold office → treated as vacant
+    const kingKeepsSeat =
+      currentAdmin !== null && currentAdmin.isKing && currentAdmin.alive;
+    const seatVacant = currentAdmin === null || !currentAdmin.alive;
+
+    if (kingKeepsSeat) {
+      // 國王保留席位，不動 / King keeps seat, no change
+    } else if (seatVacant) {
+      await grantAdmin({ worldId, round, place: placeRef, char: newChar });
+    } else if (currentAdmin !== null) {
+      const newTotal = created.wu + created.tong + created.jing;
+      const oldTotal = currentAdmin.wu + currentAdmin.tong + currentAdmin.jing;
+
+      if (newTotal > oldTotal) {
+        // 取代現任行政官：先免職（+1 野心、取消未到期減免），再任命新領導；
+        // 只記 ADMIN_REMOVED，ADMIN_ASSIGNED 不重複記錄 /
+        // Replace the current administrator: revoke first (+1 ambition, cancels
+        // any pending reduction), then grant; only ADMIN_REMOVED is logged
+        const oldAdmin = { id: currentAdmin.id, name: currentAdmin.name };
+        await revokeAdmin({
+          worldId,
+          round,
+          place: placeRef,
+          char: oldAdmin,
+          newAdmin: newChar,
+          logEvent: true,
+          eventData: { oldTotal, newTotal },
+        });
+        await grantAdmin({
+          worldId,
+          round,
+          place: placeRef,
+          char: newChar,
+          logEvent: false,
+        });
+      }
+    }
+  }
 }
