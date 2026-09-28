@@ -38,7 +38,7 @@ body {
 }
 
 .font-orbitron {
-  font-family: var(--font-orbitron, 'Orbitron'), monospace;
+  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', 'Noto Sans TC', sans-serif;
 }
 
 /* ─── Starfield Background ────────────────────────────────────────────────── */
@@ -276,4 +276,593 @@ body {
 
 .animate-pulse-subtle {
   animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* ─── Deep Space Tokens v2 — homepage redesign layer ──────────────────────── */
+
+:root {
+  --ds-cyan: #22d3ee;
+  --ds-purple: #a855f7;
+  --ds-blue: #3b82f6;
+  --ds-panel: rgba(15, 23, 42, 0.55);
+  --ds-panel-strong: rgba(2, 6, 23, 0.82);
+  --ds-line: rgba(148, 163, 184, 0.16);
+  --ds-line-cyan: rgba(34, 211, 238, 0.35);
+  --ds-muted: #94a3b8;
+  --ds-section-y: clamp(4.5rem, 9vw, 8.5rem);
+  --ds-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ds-glow-cyan: 0 0 28px rgba(34, 211, 238, 0.25);
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+@layer components {
+
+.ds-eyebrow {
+  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--ds-cyan);
+}
+
+.ds-panel {
+  position: relative;
+  background: var(--ds-panel);
+  border: 1px solid var(--ds-line);
+  border-radius: 14px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.ds-hud {
+  position: relative;
+}
+
+.ds-hud::before,
+.ds-hud::after {
+  content: '';
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: var(--ds-line-cyan);
+  border-style: solid;
+  pointer-events: none;
+}
+
+.ds-hud::before {
+  top: -1px;
+  left: -1px;
+  border-width: 1px 0 0 1px;
+  border-top-left-radius: 14px;
+}
+
+.ds-hud::after {
+  bottom: -1px;
+  right: -1px;
+  border-width: 0 1px 1px 0;
+  border-bottom-right-radius: 14px;
+}
+
+.ds-hairline {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.45), transparent);
+}
+
+.ds-grid-bg {
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.06) 1px, transparent 1px);
+  background-size: 72px 72px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 20%, transparent 80%);
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, #000 20%, transparent 80%);
+}
+
+.ds-orb-glow {
+  background: radial-gradient(circle at 50% 50%, rgba(34, 211, 238, 0.2) 0%, rgba(59, 130, 246, 0.1) 38%, transparent 68%);
+}
+
+/* ─── Live feed ticker (sample event signal) ─────────────────────────────── */
+
+.ds-ticker {
+  overflow: hidden;
+}
+
+.ds-ticker-track {
+  display: flex;
+  width: max-content;
+  animation: ds-ticker 46s linear infinite;
+}
+
+.ds-ticker:hover .ds-ticker-track {
+  animation-play-state: paused;
+}
+
+@keyframes ds-ticker {
+  from {
+    transform: translate3d(0, 0, 0);
+  }
+  to {
+    transform: translate3d(-50%, 0, 0);
+  }
+}
+
+/* ─── Ambient motion ─────────────────────────────────────────────────────── */
+
+@keyframes ds-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+.ds-float {
+  animation: ds-float 7s var(--ds-ease) infinite;
+}
+
+@keyframes ds-ping {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.75;
+  }
+  80%,
+  100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
+
+@keyframes ds-cue {
+  0%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+  50% {
+    transform: translateY(6px);
+    opacity: 1;
+  }
+}
+
+.ds-cue {
+  animation: ds-cue 2.4s ease-in-out infinite;
+}
+
+/* ─── Game page — deep-space console ─────────────────────────────────────── */
+
+:where(button, a, input, select, [role='button']):focus-visible {
+  outline: 2px solid rgba(34, 211, 238, 0.8);
+  outline-offset: 2px;
+}
+
+.ds-gm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.ds-gm-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.17;
+  filter: saturate(1.1) contrast(1.04);
+}
+
+.ds-gm-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(2, 6, 23, 0.3) 0%, rgba(2, 6, 23, 0.78) 55%, rgba(2, 6, 23, 0.96) 100%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.1), rgba(2, 6, 23, 0.7));
+}
+
+.ds-gm-strip {
+  position: relative;
+  z-index: 10;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.22);
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.5), rgba(2, 6, 23, 0.84));
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.ds-gm-strip-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.55;
+}
+
+.ds-gm-strip-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(2, 6, 23, 0.97) 0%, rgba(2, 6, 23, 0.86) 45%, rgba(2, 6, 23, 0.62) 100%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.2), rgba(2, 6, 23, 0.68));
+}
+
+.ds-gm-kpi {
+  flex: 0 0 auto;
+  min-width: 6.5rem;
+  padding: 0.15rem 0 0.15rem 1.1rem;
+  border-left: 1px solid rgba(34, 211, 238, 0.22);
+}
+
+.ds-gm-kpi--first {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.ds-gm-kpi-label {
+  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(165, 243, 252, 0.92);
+}
+
+.ds-gm-kpi-value {
+  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  font-size: clamp(1.3rem, 2vw, 1.65rem);
+  font-weight: 700;
+  line-height: 1.25;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 18px rgba(34, 211, 238, 0.35);
+}
+
+.ds-gm-panel {
+  position: relative;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.74), rgba(2, 6, 23, 0.74));
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.ds-gm-panel::before {
+  content: '';
+  position: absolute;
+  top: -1px;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.55), transparent);
+  pointer-events: none;
+}
+
+.ds-gm-title {
+  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.ds-gm-rail {
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.74), rgba(2, 6, 23, 0.56));
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.ds-gm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #94a3b8;
+  cursor: pointer;
+  transition: color 0.2s var(--ds-ease), background-color 0.2s var(--ds-ease), border-color 0.2s var(--ds-ease);
+}
+
+/* 面板／側欄內的列按鈕與分頁鈕也是可點擊控制項 /
+   Row buttons and tabs inside panels/rails are clickable controls too */
+.ds-gm-panel button:not(:disabled),
+.ds-gm-rail button:not(:disabled) {
+  cursor: pointer;
+}
+
+.ds-gm-btn:hover {
+  color: #e2e8f0;
+  border-color: rgba(34, 211, 238, 0.45);
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.ds-gm-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.ds-gm-btn-accent {
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.35);
+  background: rgba(34, 211, 238, 0.08);
+}
+
+.ds-gm-btn-accent:hover {
+  color: #a5f3fc;
+  border-color: rgba(34, 211, 238, 0.6);
+  background: rgba(34, 211, 238, 0.16);
+}
+
+.ds-gm-btn-danger {
+  color: rgba(248, 113, 113, 0.85);
+}
+
+.ds-gm-btn-danger:hover {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.1);
+}
+
+.ds-gm-badge {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid rgba(34, 211, 238, 0.3);
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.07);
+}
+
+.ds-gm-frame {
+  position: absolute;
+  inset: 10px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.ds-gm-corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-color: rgba(34, 211, 238, 0.55);
+  border-style: solid;
+}
+
+.ds-gm-corner--tl {
+  top: 0;
+  left: 0;
+  border-width: 1px 0 0 1px;
+}
+
+.ds-gm-corner--tr {
+  top: 0;
+  right: 0;
+  border-width: 1px 1px 0 0;
+}
+
+.ds-gm-corner--bl {
+  bottom: 0;
+  left: 0;
+  border-width: 0 0 1px 1px;
+}
+
+.ds-gm-corner--br {
+  bottom: 0;
+  right: 0;
+  border-width: 0 1px 1px 0;
+}
+
+.ds-gm-vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, transparent 58%, rgba(2, 6, 23, 0.55) 100%);
+}
+
+.ds-gm-hudbar {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 12px;
+  background: rgba(2, 6, 23, 0.74);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.ds-gm-legend {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ds-gm-legend::-webkit-scrollbar {
+  display: none;
+}
+
+.ds-gm-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+
+.ds-gm-stat {
+  position: relative;
+  padding: 0.6rem 0.5rem;
+  text-align: center;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.ds-gm-stat::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 18%;
+  right: 18%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.55), transparent);
+}
+
+.ds-gm-stat-value {
+  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-gm-stat-label {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.ds-gm-modal {
+  border: 1px solid rgba(34, 211, 238, 0.28);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.97));
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.ds-gm-modal-photo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.45;
+}
+
+.ds-gm-modal-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.2) 0%, rgba(2, 6, 23, 0.9) 76%, rgba(2, 6, 23, 0.97) 100%);
+}
+
+.ds-gm-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(34, 211, 238, 0.35) transparent;
+}
+
+.ds-gm-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.ds-gm-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.ds-gm-scroll::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.3);
+  border-radius: 999px;
+}
+
+.ds-gm-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(34, 211, 238, 0.55);
+}
+
+.ds-gm-noscroll {
+  scrollbar-width: none;
+}
+
+.ds-gm-noscroll::-webkit-scrollbar {
+  display: none;
+}
+
+.ds-gm-live {
+  position: relative;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #22d3ee;
+  box-shadow: 0 0 10px rgba(34, 211, 238, 0.9);
+}
+
+.ds-gm-live::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: #22d3ee;
+  animation: ds-ping 1.9s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* 載入骨架（永不只顯示裸 spinner）/ Loading skeleton (never a bare spinner) */
+.ds-gm-skel {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.ds-gm-skel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.14), transparent);
+  animation: ds-gm-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes ds-gm-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* 觸控裝置最小觸控目標 44×44，滑鼠維持緊湊 HUD /
+   44×44 minimum touch targets on coarse pointers, compact HUD on mouse */
+@media (pointer: coarse) {
+  .ds-gm-btn,
+  [role='tab'] {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
+} /* /@layer components */
+
+@keyframes ds-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ─── Reduced motion: collapse every loop and transition ─────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
