@@ -10,6 +10,7 @@
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { t } from '@/lib/i18n';
 import { Parallax, Reveal } from '@/components/home/Motion';
 import PlanetCanvas from '@/components/home/PlanetCanvas';
@@ -378,13 +379,11 @@ export default async function HomePage() {
       <section id="saga" className="relative z-10 scroll-mt-20 overflow-hidden px-5 py-[var(--ds-section-y)] sm:px-6">
         <div className="absolute inset-0 -z-10" aria-hidden="true">
           <Parallax offset={54} className="absolute inset-y-[-8%] inset-x-[-4%]">
-            <img
+            <Image
               src="/space/deep-field.jpg"
               alt=""
-              width={1920}
-              height={1219}
-              loading="lazy"
-              decoding="async"
+              fill
+              sizes="100vw"
               className="h-full w-full object-cover opacity-30"
             />
           </Parallax>
@@ -449,13 +448,11 @@ export default async function HomePage() {
       <section className="relative z-10 overflow-hidden px-5 py-24 text-center sm:px-6 md:py-32">
         <div className="absolute inset-0 -z-10" aria-hidden="true">
           <Parallax offset={60} className="absolute inset-y-[-10%] inset-x-[-4%]">
-            <img
+            <Image
               src="/space/cosmic-cliffs.jpg"
               alt=""
-              width={1920}
-              height={1111}
-              loading="lazy"
-              decoding="async"
+              fill
+              sizes="100vw"
               className="h-full w-full object-cover opacity-40"
             />
           </Parallax>

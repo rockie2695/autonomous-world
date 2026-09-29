@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback, useRef, useSyncExternalStore, type Re
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import { motion, AnimatePresence, useReducedMotion, useSpring } from 'motion/react';
 import { Reveal, Parallax } from '@/components/home/Motion';
 import { t, setLocale, getLocale, getTranslations, DEFAULT_LOCALE } from '@/lib/i18n';
@@ -25,7 +26,14 @@ const SigmaMap = dynamic(
   { ssr: false }
 );
 
-// ─── 型別 / Types ─────────────────────────────────────────────────────────────────
+// ─── 型別 / Types ────────────────────────────────────────────────────────────────
+
+/** GET /api/world/current — 世界進度，用來定位最新已執行的回合 / World progress, used to resolve the latest executed round */
+interface WorldInfo {
+  id: string;
+  name: string;
+  currentRound: number;
+}
 
 interface WorldState {
   world: {
@@ -279,11 +287,11 @@ function TelemetryStrip({
       <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
         <Parallax offset={48} className="absolute -top-1/2 -left-[5%] h-[200%] w-[110%]">
           <PointerDrift depth={14} className="h-full w-full">
-            <img
+            <Image
               src="/space/deep-field.jpg"
-              width={1920}
-              height={1219}
               alt=""
+              fill
+              sizes="100vw"
               className="ds-gm-strip-photo"
             />
           </PointerDrift>
@@ -317,7 +325,8 @@ function TelemetryStrip({
 // ─── 頁面元件 / Page Component ────────────────────────────────────────────────
 
 export default function GamePage() {
-  const [selectedRound, setSelectedRound] = useState<number>(0);
+  /** 使用者選取的回合；null = 尚未選取 → 自動跟隨世界最新回合 / User-picked round; null = follow the world's latest round */
+  const [selectedRound, setSelectedRound] = useState<number | null>(null);
   const [selectedPlace, setSelectedPlace] = useState<WorldState['places'][0] | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const queryClient = useQueryClient();
@@ -334,19 +343,46 @@ export default function GamePage() {
     setLocale(locale === 'zh' ? 'en' : 'zh');
   }, [locale]);
 
+  // 先取得世界進度，才知道最新已執行的回合（快照存在 0..currentRound-1）/
+  // Fetch world progress first so we know the latest executed round (snapshots
+  // exist for 0..currentRound-1)
+  const { data: worldInfo, isError: worldInfoError } = useQuery<WorldInfo>({
+    queryKey: ['worldCurrent'],
+    queryFn: async () => {
+      const response = await apiFetch('/api/world/current');
+      if (!response.ok) throw new Error('Failed to fetch world');
+      return response.json();
+    },
+    staleTime: 30 * 1000,
+  });
+
+  // 進網頁即顯示「最新已執行回合」的資料，而不是第 0 回合：未選取時直接用
+  // latestRound 推導（純 render 推導，不在 effect 裡 setState）；使用者一旦
+  // 點了時間軸或執行新回合，就以選取值為準 /
+  // Land on the latest executed round instead of round 0: with no user pick we
+  // derive it during render (no setState in an effect); once the user picks a
+  // round from the timeline or runs a new one, their pick wins.
+  const latestRound = worldInfo ? Math.max(0, worldInfo.currentRound - 1) : 0;
+  const round = selectedRound ?? latestRound;
+  /** 世界進度尚未回應（且未曾選取回合）→ 暫不請求回合狀態，避免先抓 round=0 /
+   * Don't request round state until world progress resolves, so we never fetch round 0 first */
+  const canFetchRound =
+    selectedRound !== null || worldInfo !== undefined || worldInfoError;
+
   const {
     data: worldState,
     isLoading,
     error,
     refetch: fetchWorldState,
   } = useQuery<WorldState>({
-    queryKey: ['worldState', selectedRound],
+    queryKey: ['worldState', round],
     queryFn: async () => {
-      const response = await apiFetch(`/api/world/state?round=${selectedRound}`);
+      const response = await apiFetch(`/api/world/state?round=${round}`);
       if (!response.ok) throw new Error('Failed to fetch world state');
       return response.json();
     },
     staleTime: 30 * 1000,
+    enabled: canFetchRound,
   });
 
   const errorMessage = error instanceof Error ? error.message : null;
@@ -386,7 +422,9 @@ export default function GamePage() {
     if (!isPlaying) return;
     const timer = setInterval(() => {
       setSelectedRound((prev) => {
-        const next = prev + 1;
+        // prev 為 null 表示尚未選取（顯示最新回合）→ 從最新回合往下算 /
+        // prev null = no explicit pick (viewing the latest round) → start there
+        const next = (prev ?? lastRound) + 1;
         if (next > lastRound) {
           setIsPlaying(false);
           return prev;
@@ -422,7 +460,11 @@ export default function GamePage() {
 
   // ── 載入狀態 / Loading State ──────────────────────────────────────────────
 
-  if (isLoading && !worldState) {
+  // 世界進度尚未回應時仍在校正起始回合 → 顯示骨架畫面 /
+  // Still resolving the starting round while world progress is pending → skeleton
+  const worldInfoPending = worldInfo === undefined && !worldInfoError;
+
+  if ((isLoading || worldInfoPending) && !worldState) {
     return (
       <div className="relative min-h-screen flex flex-col bg-[#020617] overflow-hidden">
         <div className="stars" aria-hidden="true" />
@@ -523,11 +565,11 @@ export default function GamePage() {
       {/* ── 深空背景層（影像＋星域＋視差）/ Deep-space backdrop (photo + starfield + parallax) ── */}
       <div className="ds-gm-backdrop" aria-hidden="true">
         <PointerDrift depth={20} className="absolute inset-0">
-          <img
+          <Image
             src="/space/milky-way.jpg"
-            width={1920}
-            height={959}
             alt=""
+            fill
+            sizes="100vw"
             className="ds-gm-photo"
           />
         </PointerDrift>
@@ -564,7 +606,7 @@ export default function GamePage() {
           </span>
           <span className="ds-gm-badge hidden sm:flex items-center gap-2 text-xs font-orbitron tracking-wider text-cyan-300/90">
             <span className="ds-gm-live" aria-hidden="true" />
-            RND {String(selectedRound).padStart(4, '0')}
+            RND {String(round).padStart(4, '0')}
           </span>
         </div>
 
@@ -591,7 +633,7 @@ export default function GamePage() {
 
           <NextRoundButton
             isAdmin={isAdmin}
-            currentRound={selectedRound}
+            currentRound={round}
             onSuccess={(round) => {
               setSelectedRound(round);
               // 回合可能沒變（正在看最新回合）→ 快取不會失效，強制重新抓取
@@ -632,7 +674,7 @@ export default function GamePage() {
 
       {/* ── 世界觀測帶 / World Telemetry Band ──────────────────────────────────── */}
       <TelemetryStrip
-        round={selectedRound}
+        round={round}
         worldName={worldState?.world.name ?? ''}
         aliveFactions={aliveFactions}
         territories={territories}
@@ -646,7 +688,7 @@ export default function GamePage() {
         <aside className="hidden md:block w-64 shrink-0 border-r border-white/5 ds-gm-rail ds-gm-scroll p-3 space-y-3 overflow-y-auto">
           <Reveal delay={0.06} y={18}>
             <RoundTimeline
-              currentRound={selectedRound}
+              currentRound={round}
               maxRound={lastRound}
               isPlaying={isPlaying}
               playSpeed={playSpeed}
@@ -694,7 +736,7 @@ export default function GamePage() {
                 </button>
               </div>
               <RoundTimeline
-                currentRound={selectedRound}
+                currentRound={round}
                 maxRound={lastRound}
                 isPlaying={isPlaying}
                 playSpeed={playSpeed}
@@ -1151,7 +1193,15 @@ function DetailModal({
   // Remember the trigger on open and return focus on close; read onClose
   // through a ref so parent re-renders don't rebind and steal focus
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  // 最新 onClose 只在 effect 中同步（不可在 render 期間寫 ref，否則會觸發
+  // react-hooks/refs 錯誤，且 render 期間的寫入在並行模式下不安全）。
+  // 此 effect 宣告在鍵盤 effect 之前，因此每次 commit 後 ref 都是最新值 /
+  // Sync the latest onClose in an effect, never during render (the render-time
+  // write trips react-hooks/refs and is unsafe under concurrent rendering).
+  // Declared before the keydown effect so the ref is fresh after every commit.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
   useEffect(() => {
     if (!open) return;
     const trigger =
@@ -1855,12 +1905,11 @@ function PlaceDetail({
       >
         {/* 影像標頭 / Imagery header */}
         <div className="relative h-24 overflow-hidden">
-          <img
+          <Image
             src="/space/cosmic-cliffs.jpg"
-            width={1920}
-            height={1111}
             alt=""
-            loading="lazy"
+            fill
+            sizes="100vw"
             className="ds-gm-modal-photo"
           />
           <div className="ds-gm-modal-veil" aria-hidden="true" />
