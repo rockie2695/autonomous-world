@@ -45,6 +45,7 @@ export const zh = {
       step2Desc: '追蹤勢力消長、將領實力、經濟發展，洞察歷史走向。',
       step3: '見證演化',
       step3Desc: '觀察數百回合的演化，見證文明的興衰與傳奇的誕生。',
+      orbitLabel: '三維軌道圖：核心是真實的回合數，外圍三顆衛星對應觀察、分析、見證三個階段',
     },
     stats: {
       title: '世界概況',
@@ -140,7 +141,7 @@ export const zh = {
     // ── 頁尾 / Footer ────────────────────────────────────────────────────
     footer: {
       tagline: 'Autonomous World — Eternal Evolution Simulation',
-      credits: '星空影像：NASA / ESA / CSA / STScI',
+      credits: '星空影像：NASA / ESA / CSA / STScI（公有領域）',
       runTitle: '本機執行',
       runHint: '需要 Node.js 20 以上，以及一個 PostgreSQL 資料庫。',
       licenseTitle: '授權',

@@ -30,10 +30,11 @@ import Image from 'next/image';
 import { createTranslator, DEFAULT_LOCALE, LOCALES, type Locale } from '@/lib/i18n';
 import { Parallax, Reveal } from '@/components/home/Motion';
 import HomeNav from '@/components/home/HomeNav';
-import LiveRound from '@/components/home/LiveRound';
 import LiveStats from '@/components/home/LiveStats';
 import LiveWorld from '@/components/home/LiveWorld';
-import SagaChart from '@/components/home/SagaChart';
+import FactionNebula from '@/components/home/FactionNebula';
+import OrbitScene from '@/components/home/OrbitScene';
+import SagaConstellation from '@/components/home/SagaConstellation';
 import SignalFeed from '@/components/home/SignalFeed';
 import VoidCanvas from '@/components/home/VoidCanvas';
 import HeroReticle from '@/components/home/HeroReticle';
@@ -242,7 +243,17 @@ export default async function HomePage() {
                 框的比例 16/9 來自量測過的 public/hero-poster.jpg（1280×720），
                 所以 object-fit 不會切掉任何畫面內容。
                 The 16:9 frame ratio comes from the measured 1280×720 poster, so
-                object-fit crops nothing meaningful. */}
+                object-fit crops nothing meaningful.
+
+                這裡刻意沒有疊任何回合標籤。錄影是一段固定的歷史，而 LiveRound
+                顯示的是此刻的真實回合；兩者疊在一起會自相矛盾——一個寫著錄影
+                當時的 RND 0000，另一個寫著世界現在第幾回合。真實回合改由 #how
+                的軌道核心與 #live 的統計格呈現。
+                No round tag is overlaid here on purpose. The recording is a fixed
+                piece of history while the live round is the world's right now;
+                stacking them contradicts itself — one says the recorded RND 0000,
+                the other says which round it is now. The real round is carried by
+                the #how orbit core and the #live stat grid instead. */}
             <Parallax offset={110} className="min-w-0">
               <div className="relative aspect-[16/9] overflow-hidden rounded-ds-panel border border-ds-line bg-ds-void shadow-ds-hero">
                 <video
@@ -264,10 +275,6 @@ export default async function HomePage() {
                 <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,var(--ds-panel-strong)_0%,transparent_34%,rgba(2,6,23,0.45)_100%)]" />
 
                 <HeroReticle />
-
-                <p className="absolute top-3 left-3 flex items-center gap-2 rounded-lg border border-ds-line-cyan bg-ds-panel-strong px-2.5 py-1.5 font-orbitron text-[0.8125rem] font-semibold tracking-[0.16em] whitespace-nowrap text-cyan-200 uppercase backdrop-blur-[8px]">
-                  <LiveRound locale={locale} />
-                </p>
               </div>
             </Parallax>
           </div>
@@ -282,6 +289,19 @@ export default async function HomePage() {
           className="relative z-10 scroll-mt-20 px-5 py-[var(--ds-section-y)] sm:px-6"
         >
           <div className="ds-grid-bg pointer-events-none absolute inset-0" aria-hidden="true" />
+          {/* 星雲帶底部的星雲地面：星雲是扁的，所以用同樣扁的構圖當它的地面
+              A nebula ground under the nebula band: the clouds are flat, so the
+              ground beneath them is composed the same way */}
+          <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+            <Image
+              src="/space/veil-nebula.jpg"
+              alt=""
+              fill
+              sizes="100vw"
+              className="object-cover opacity-[0.2] saturate-[0.95]"
+            />
+            <div className="absolute inset-0 bg-gradient-to-b from-[#020617] via-[#020617]/90 to-[#020617]" />
+          </div>
           <div className="relative mx-auto max-w-6xl">
             <Reveal className="mb-10 max-w-2xl">
               <p className={`${EYEBROW} mb-4`}>{t('home.live.eyebrow')}</p>
@@ -296,6 +316,15 @@ export default async function HomePage() {
 
             <Reveal delay={0.05}>
               <LiveStats locale={locale} />
+            </Reveal>
+
+            {/* 勢力星雲：數字之下的密度視圖。片數與光點數都來自真實資料——
+                勢力各自擁有的據點越多，那一片就真的越大。
+                The faction nebula: a density view beneath the numbers. Both the
+                number of clouds and their point counts come from real data — the
+                more settlements a faction holds, the larger its cloud really is. */}
+            <Reveal delay={0.1} className="mt-10">
+              <FactionNebula locale={locale} />
             </Reveal>
           </div>
         </section>
@@ -384,12 +413,36 @@ export default async function HomePage() {
           className="relative z-10 scroll-mt-20 border-y border-ds-inset-line bg-ds-inset px-5 py-[var(--ds-section-y)] sm:px-6"
         >
           <div className="mx-auto max-w-6xl">
+            {/* 照片地面：刻意壓到 0.18，只給軌道一個深度感，不搶軌道的線
+                Photo ground: held at 0.18, it only gives the orbit depth and
+                never competes with its lines */}
+            <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
+              <Image
+                src="/space/pillars-of-creation.jpg"
+                alt=""
+                fill
+                sizes="100vw"
+                className="object-cover opacity-[0.18] saturate-[0.9]"
+              />
+              <div className="absolute inset-0 bg-gradient-to-b from-[#020617] via-[#020617]/92 to-[#020617]" />
+            </div>
+
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.howItWorks.eyebrow')}</p>
               <h2 className="font-orbitron text-3xl font-bold text-white md:text-4xl">
                 {t('home.howItWorks.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
+            </Reveal>
+
+            {/* 回合演算軌道：核心是真實回合數，外圍三顆衛星對應下面三個階段。
+                這是這一區唯一會動的東西，步驟名稱仍然只由下面的 HTML 卡片承載。
+                The round-compute orbit: a core carrying the real round number,
+                with three satellites matching the three stages below. It is the
+                only moving thing in this section, and the step names stay carried
+                by the HTML cards. */}
+            <Reveal className="mb-14">
+              <OrbitScene label={t('home.howItWorks.orbitLabel')} />
             </Reveal>
 
             <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
@@ -416,10 +469,10 @@ export default async function HomePage() {
           </div>
         </section>
 
-        {/* ── 傳奇星圖 / Faction saga star chart ───────────────────────────── */}
-        {/* 靜態照片地面：捲動繪製只留給星圖本身，背景不做視差
-             A static photo ground: scroll-driven drawing belongs to the chart
-             alone, the backdrop does not parallax */}
+        {/* ── 傳奇星座 / Faction saga constellation ─────────────────────────── */}
+        {/* 靜態照片地面：捲動繪製只留給星座本身，背景不做視差
+             A static photo ground: scroll-driven drawing belongs to the
+             constellation alone, the backdrop does not parallax */}
         <section
           id="saga"
           className="relative z-10 scroll-mt-20 overflow-hidden px-5 py-20 sm:px-6 md:py-28"
@@ -439,7 +492,7 @@ export default async function HomePage() {
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
             </Reveal>
 
-            <SagaChart locale={locale} />
+            <SagaConstellation locale={locale} />
           </div>
         </section>
 

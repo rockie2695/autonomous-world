@@ -45,6 +45,7 @@ export const en = {
       step2Desc: 'Track faction dynamics, character strengths, and economic development to understand the flow of history.',
       step3: 'Witness Evolution',
       step3Desc: 'Observe hundreds of rounds of evolution, witnessing the rise and fall of civilizations and the birth of legends.',
+      orbitLabel: 'A 3D orbit diagram: the core carries the real round number, and the three satellites match the observe, analyze, and witness stages.',
     },
     stats: {
       title: 'World Overview',
@@ -140,7 +141,7 @@ export const en = {
     // ── 頁尾 / Footer ────────────────────────────────────────────────────
     footer: {
       tagline: 'Autonomous World — Eternal Evolution Simulation',
-      credits: 'Space imagery: NASA / ESA / CSA / STScI',
+      credits: 'Space imagery: NASA / ESA / CSA / STScI (public domain)',
       runTitle: 'Run it locally',
       runHint: 'Needs Node.js 20 or newer and a PostgreSQL database.',
       licenseTitle: 'License',
