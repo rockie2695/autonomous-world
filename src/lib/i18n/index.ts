@@ -46,6 +46,17 @@ const translations: Record<Locale, TranslationDict> = { zh, en };
 const LOCALE_KEY = 'autonomous-world-locale';
 
 /**
+ * 語系 cookie 名稱。與 localStorage 同一個字串，讓 server component
+ * 也能讀到訪客選的語言（localStorage 對 server 不可見）。
+ * Locale cookie name — mirrors the localStorage key so server components
+ * can read the visitor's choice (localStorage is invisible to the server).
+ */
+const LOCALE_COOKIE = 'autonomous-world-locale';
+
+/** cookie 存活時間（一年）/ Cookie lifetime (one year) */
+const LOCALE_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+
+/**
  * 從 localStorage 取得當前語言，或從瀏覽器偵測。
  * Get the current locale from localStorage, or detect from browser.
  * 中文回傳 'zh'，其他語言回傳 'en'。
@@ -58,6 +69,13 @@ export function getLocale(): Locale {
     const stored = localStorage.getItem(LOCALE_KEY);
     if (stored && LOCALES.includes(stored as Locale)) {
       return stored as Locale;
+    }
+
+    // localStorage 沒有時退回 cookie（由 setLocale 同步寫入）
+    // Fall back to the cookie (written by setLocale alongside localStorage)
+    const fromCookie = readLocaleFromCookie();
+    if (fromCookie) {
+      return fromCookie;
     }
 
     // 從瀏覽器語言偵測 / Detect from browser language
@@ -79,10 +97,51 @@ export function getLocale(): Locale {
 export function setLocale(locale: Locale): void {
   if (typeof window !== 'undefined') {
     localStorage.setItem(LOCALE_KEY, locale);
+    // 同步寫入 cookie，讓 server component 下一次渲染讀得到同一語言
+    // Mirror into the cookie so the next server render sees the same locale
+    writeLocaleCookie(locale);
     // 重新載入以在所有元件套用語言變更
     // Reload to apply locale changes across all components
     window.location.reload();
   }
+}
+
+// ─── 語系 cookie / Locale Cookie ───────────────────────────────────────────
+
+/**
+ * 從 cookie 讀取語言。僅在瀏覽器可用；server 端呼叫時回傳 null，
+ * server component 請改用 `createTranslator(cookieLocale)`。
+ * Read the locale from the cookie. Browser only — returns null on the
+ * server, where a server component should use `createTranslator(cookieLocale)`.
+ */
+export function readLocaleFromCookie(): Locale | null {
+  if (typeof document === 'undefined') {
+    return null;
+  }
+  const prefix = `${LOCALE_COOKIE}=`;
+  for (const part of document.cookie.split(';')) {
+    const entry = part.trim();
+    if (!entry.startsWith(prefix)) continue;
+    const value = decodeURIComponent(entry.slice(prefix.length));
+    if (LOCALES.includes(value as Locale)) {
+      return value as Locale;
+    }
+  }
+  return null;
+}
+
+/**
+ * 把語言寫入 cookie（供 server 讀取）。path=/ 讓所有路由共用同一份。
+ * Write the locale into a cookie for the server to read. path=/ shares it
+ * across every route.
+ */
+export function writeLocaleCookie(locale: Locale): void {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  document.cookie = `${LOCALE_COOKIE}=${encodeURIComponent(
+    locale
+  )}; path=/; max-age=${LOCALE_COOKIE_MAX_AGE}; samesite=lax`;
 }
 
 // ─── 翻譯函數 / Translation Function ──────────────────────────────────────
@@ -106,8 +165,46 @@ export function t(
   params?: Record<string, string | number>
 ): string {
   const locale = getLocale();
-  const dict = translations[locale];
+  return translateIn(translations[locale], key, locale, params);
+}
 
+// ─── 綁定語言的翻譯器 / Locale-Bound Translator ───────────────────────────
+
+/**
+ * 建立一個綁定特定語言的翻譯函式，簽章與 `t()` 相同。
+ * Create a translation function bound to an explicit locale, with the same
+ * signature as `t()`.
+ *
+ * server component 必須用這個：`t()` 依賴 `getLocale()`，在 server 端
+ * 永遠回傳 DEFAULT_LOCALE，無法反映訪客的選擇。
+ * Server components must use this: `t()` depends on `getLocale()`, which
+ * always returns DEFAULT_LOCALE on the server and cannot see the visitor's
+ * choice.
+ *
+ * @example
+ * // app/page.tsx
+ * const locale = (await cookies()).get('autonomous-world-locale')?.value === 'en' ? 'en' : 'zh';
+ * const t = createTranslator(locale);
+ * t('home.hero.eyebrow');
+ */
+export function createTranslator(
+  locale: Locale
+): (key: string, params?: Record<string, string | number>) => string {
+  return (key, params) => translateIn(translations[locale], key, locale, params);
+}
+
+/**
+ * 查表 + 插值的共用核心。`t()` 與 `createTranslator()` 都走這裡，
+ * 確保兩條路徑的行為完全一致。
+ * Shared lookup + interpolation core. Both `t()` and `createTranslator()`
+ * route through it so the two paths behave identically.
+ */
+function translateIn(
+  dict: TranslationDict,
+  key: string,
+  locale: Locale,
+  params?: Record<string, string | number>
+): string {
   // 導覽點路徑：'events.battleDesc' → dict.events.battleDesc
   // Navigate dot path: 'events.battleDesc' → dict.events.battleDesc
   const keys = key.split('.');

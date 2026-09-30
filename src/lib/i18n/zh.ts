@@ -37,6 +37,7 @@ export const zh = {
       noVictoryDesc: '純觀察式體驗，觀看 AI 們書寫自己的傳奇。',
     },
     howItWorks: {
+      eyebrow: '運作流程',
       title: '運作方式',
       step1: '觀察世界',
       step1Desc: '觀看數百個 AI 角色在動態地圖上建立勢力、征戰、結盟、背叛。',
@@ -54,6 +55,97 @@ export const zh = {
     },
     startButton: '進入世界',
     learnMore: '了解更多',
+
+    // ── 首頁導覽 / Homepage navigation ───────────────────────────────────
+    nav: {
+      world: '世界',
+      how: '運作',
+      saga: '傳奇',
+      live: '即時',
+      enter: '進入系統',
+      openMenu: '開啟選單',
+      closeMenu: '關閉選單',
+      menuLabel: '首頁導覽',
+    },
+
+    // ── 首屏 / Hero ───────────────────────────────────────────────────────
+    hero: {
+      eyebrow: '瀏覽器內執行的自主模擬',
+      secondaryCta: '觀看世界運作',
+      scroll: '向下捲動',
+      roundTag: '第 {round} 回合',
+    },
+
+    // ── 訊號流 / Signal feed ─────────────────────────────────────────────
+    feed: {
+      label: '訊號流',
+      live: '即時',
+    },
+
+    // ── 真實世界圖譜 / Real world graph ──────────────────────────────────
+    world: {
+      eyebrow: '真實世界圖譜',
+      title: '世界沒有劇本',
+      body: '每一個光點都是一座真實據點，每一條線都是一條真實道路。這裡畫的就是此刻正在運作的這個世界，不是示意圖。',
+      cta: '了解運作方式',
+      legendTitle: '目前存活的勢力',
+      graphLabel: '以真實世界資料渲染的三維勢力圖：每個光點是一座據點，顏色代表所屬勢力',
+      graphEmpty: '這個世界還沒有據點。',
+    },
+
+    // ── 特色區段 / Features section ──────────────────────────────────────
+    featuresSection: {
+      eyebrow: '核心特色',
+      title: '四個不變的核心',
+    },
+
+    // ── 傳奇時間軸 / Faction saga ────────────────────────────────────────
+    saga: {
+      eyebrow: '勢力傳奇',
+      title: '沒有終局的傳奇',
+      s1Title: '起源',
+      s1Text: '一名國王、一座城，世界開始運轉。',
+      s2Title: '分裂',
+      s2Text: '第一個反叛勢力誕生，邊界首次被劃下。',
+      s3Title: '結盟',
+      s3Text: '宿敵握手，聯盟在一夜之間改寫地圖。',
+      s4Title: '背叛',
+      s4Text: '盟約比戰火更快崩塌，新王趁勢崛起。',
+      s5Title: '永恆',
+      s5Text: '沒有終局，只有下一回合。',
+    },
+
+    // ── 即時統計 / Live world readout ────────────────────────────────────
+    live: {
+      eyebrow: '即時資料',
+      title: '世界此刻的真實數字',
+      hint: '直接讀取正在運作的這個世界，未登入也能看見。',
+      roads: '道路',
+      unowned: '無主據點',
+      unownedFaction: '無主之地',
+      truncated: '顯示駐軍最多的 {shown} 座，共 {total} 座',
+      updated: '資料擷取於 {time}',
+      unavailable: '目前無法讀取世界資料',
+      unavailableHint: '世界可能還沒啟動，或資料來源暫時無法連線。',
+      eventFallback: '第 {round} 回合發生了一件事',
+    },
+
+    // ── 行動呼籲 / Call to action ────────────────────────────────────────
+    cta: {
+      eyebrow: '進入世界',
+      title: '準備好觀察了嗎？',
+      body: '進入自治世界，見證 AI 們書寫的永恆傳奇。',
+    },
+
+    // ── 頁尾 / Footer ────────────────────────────────────────────────────
+    footer: {
+      tagline: 'Autonomous World — Eternal Evolution Simulation',
+      credits: '星空影像：NASA / ESA / CSA / STScI',
+      runTitle: '本機執行',
+      runHint: '需要 Node.js 20 以上，以及一個 PostgreSQL 資料庫。',
+      licenseTitle: '授權',
+      license: '原始碼以 MIT 授權釋出。',
+    },
   },
 
   // ── 遊戲 / Game ─────────────────────────────────────────────────────────

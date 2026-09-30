@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // ==============================================================================
 // 主頁英雄區影片擷取 / Homepage hero video capture
-// Records the live game screen (Sigma map + interactions) to a .webm file,
-// which the homepage <video> element plays as its background.
+// Records the live game screen (Sigma map + interactions), then transcodes it
+// to public/hero.mp4, which the homepage <video> element plays as its
+// background. Playwright's .webm output is a temp-dir intermediate only — it is
+// never written to public/.
+// 錄製遊戲畫面後轉成 public/hero.mp4 供首頁 <video> 播放；Playwright 的 .webm
+// 只留在暫存目錄，不會進 public/。
 //
 // Usage:
 //   1. Dev server must be running:  pnpm dev   (http://localhost:3000)
-//   2. node scripts/capture-hero.mjs
+//   2. node scripts/capture-hero.mjs   (or: pnpm capture:hero)
 //
 // How auth works here: the game uses Auth.js JWT sessions (salt = cookie name
 // "authjs.session-token"), so we forge a session cookie locally with AUTH_SECRET
@@ -27,7 +31,10 @@ const BASE = process.env.CAPTURE_BASE_URL ?? 'http://localhost:3000';
 const W = 1280;
 const H = 720;
 const VIDEO_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'aw-capture-'));
-const OUT_WEBM = path.resolve('public', 'hero.webm');
+// Playwright can only record webm, so it stays an intermediate in the temp
+// dir and never lands in public/ — the shipped asset is the mp4 alone.
+// Playwright 只能錄 webm，所以它留在暫存目錄當中間檔，不進 public/；
+// 對外只出 mp4。
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -213,19 +220,18 @@ async function main() {
     await context.close(); // finalizes the .webm on disk
     const webmPath = await video.path();
 
-    fs.mkdirSync(path.dirname(OUT_WEBM), { recursive: true });
-    fs.copyFileSync(webmPath, OUT_WEBM);
-    const size = fs.statSync(OUT_WEBM).size;
-    console.log(`[capture] saved ${OUT_WEBM} (${(size / 1024 / 1024).toFixed(2)} MB)`);
+    const size = fs.statSync(webmPath).size;
+    console.log(`[capture] recorded webm ${(size / 1024 / 1024).toFixed(2)} MB (temp intermediate)`);
 
     // Transcode webm → mp4 (H.264, universal playback) + poster frame
     // 轉檔為 mp4（H.264，全瀏覽器通用）與海報幀
     const OUT_MP4 = path.resolve('public', 'hero.mp4');
     const OUT_POSTER = path.resolve('public', 'hero-poster.jpg');
+    fs.mkdirSync(path.dirname(OUT_MP4), { recursive: true });
     console.log('[capture] transcoding mp4 …');
     const mp4 = spawnSync(
       ffmpeg.path,
-      ['-y', '-i', OUT_WEBM, '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+      ['-y', '-i', webmPath, '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
         '-pix_fmt', 'yuv420p', '-movflags', '+faststart', OUT_MP4],
       { encoding: 'utf8' },
     );

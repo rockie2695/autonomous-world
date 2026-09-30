@@ -26,6 +26,146 @@ const SigmaMap = dynamic(
   { ssr: false }
 );
 
+// ============================================================================
+// 表面 utility / Surface utilities — Tailwind v4
+// ============================================================================
+// 這裡的每一條都對應到遷移前 globals.css 裡一條 .ds-gm-* 的**完全相同**計算值。
+// 這是一次架構遷移，不是改版：顏色、字級、間距、圓角、陰影、動效時長一個都沒變，
+// 只是從自訂元件類搬到 Tailwind utility，並把值集中在這裡避免重複。
+//
+// Every entry reproduces one former .ds-gm-* rule with an identical computed
+// value. This is an architecture migration, not a restyle: not one colour,
+// size, spacing, radius, shadow, or duration changed — the values simply moved
+// from bespoke component classes into Tailwind utilities and now live here so
+// they are written exactly once.
+//
+// 兩個性質要注意 / Two properties to watch:
+//  1. GM_TITLE 與 GM_BTN 帶著自己的 font-size 與 color。若某個呼叫端要改寫它，
+//     必須加 Tailwind 的 important 修飾符（`text-xs!`），因為兩者現在同在
+//     utilities 層，不再有「元件層永遠輸給 utility」那條保護。
+//     GM_TITLE and GM_BTN carry their own size and colour. A call site that
+//     overrides one must use Tailwind's important modifier (`text-xs!`),
+//     because both now sit in the utilities layer and the old
+//     "components always lose to utilities" guarantee is gone.
+//  2. pointer-coarse: 變體取代原本的 @media (pointer: coarse) 區塊。
+//     The pointer-coarse: variant replaces the old media query.
+// ============================================================================
+
+/** 固定全視窗背景 / the fixed full-viewport backdrop */
+const GM_BACKDROP = 'pointer-events-none fixed inset-0 z-0 overflow-hidden';
+const GM_PHOTO = 'size-full object-cover opacity-[0.17] [filter:saturate(1.1)_contrast(1.04)]';
+const GM_VEIL =
+  'absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,rgba(2,6,23,0.3)_0%,rgba(2,6,23,0.78)_55%,rgba(2,6,23,0.96)_100%),linear-gradient(180deg,rgba(2,6,23,0.1),rgba(2,6,23,0.7))]';
+
+/** 世界觀測帶 / the telemetry band */
+const GM_STRIP =
+  'relative z-10 overflow-hidden border-b border-[rgba(34,211,238,0.22)] ' +
+  'bg-[linear-gradient(180deg,rgba(2,6,23,0.5),rgba(2,6,23,0.84))] backdrop-blur-[8px]';
+const GM_STRIP_PHOTO = 'size-full object-cover opacity-[0.55]';
+const GM_STRIP_VEIL =
+  'absolute inset-0 bg-[linear-gradient(90deg,rgba(2,6,23,0.97)_0%,rgba(2,6,23,0.86)_45%,rgba(2,6,23,0.62)_100%),linear-gradient(180deg,rgba(2,6,23,0.2),rgba(2,6,23,0.68))]';
+
+/** 觀測帶的 KPI / the band's readouts */
+const GM_KPI =
+  'flex-none min-w-[6.5rem] border-l border-[rgba(34,211,238,0.22)] py-[0.15rem] pl-[1.1rem]';
+const GM_KPI_FIRST = 'flex-none min-w-[6.5rem] border-l-0 py-[0.15rem] pl-0';
+const GM_KPI_LABEL =
+  'font-orbitron text-xs font-semibold tracking-[0.14em] text-[rgba(165,243,252,0.92)] uppercase';
+const GM_KPI_VALUE =
+  'font-orbitron text-[clamp(1.3rem,2vw,1.65rem)] leading-[1.25] font-bold text-slate-50 ' +
+  'tabular-nums [text-shadow:0_0_18px_rgba(34,211,238,0.35)]';
+
+/** 面板與側軌 / panels and rails */
+const GM_PANEL =
+  'relative rounded-ds-panel border border-ds-line ' +
+  'bg-[linear-gradient(180deg,rgba(15,23,42,0.74),rgba(2,6,23,0.74))] backdrop-blur-[12px] ' +
+  // 頂緣那條漸層細線：原本是 .ds-gm-panel::before
+  // The top hairline, formerly .ds-gm-panel::before
+  "before:absolute before:-top-px before:left-4 before:right-4 before:h-px before:pointer-events-none " +
+  "before:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.55),transparent)] before:content-['']";
+const GM_TITLE =
+  'font-orbitron text-sm font-semibold tracking-[0.14em] text-slate-400 uppercase';
+const GM_RAIL = 'bg-[linear-gradient(180deg,rgba(2,6,23,0.74),rgba(2,6,23,0.56))] backdrop-blur-[10px]';
+
+/** HUD 按鈕 / HUD buttons。三條各自完整，沒有「基底 + 覆寫」的疊加關係，
+ *  因為疊加在 utilities 層已經不可靠。三態（停用）用 disabled: 變體。
+ * Three complete buttons, never base-plus-override: layering is unreliable in
+ * a single layer. The disabled state rides the disabled: variant. */
+const GM_BTN =
+  'inline-flex cursor-pointer items-center justify-center gap-[0.4rem] rounded-lg ' +
+  'border border-[rgba(148,163,184,0.3)] bg-[rgba(15,23,42,0.72)] text-slate-400 ' +
+  'transition-[color,background-color,border-color] duration-200 ease-ds ' +
+  'hover:border-[rgba(34,211,238,0.45)] hover:bg-[rgba(34,211,238,0.1)] hover:text-slate-200 ' +
+  'disabled:cursor-not-allowed disabled:opacity-55 pointer-coarse:min-h-11 pointer-coarse:min-w-11';
+const GM_BTN_ACCENT =
+  'inline-flex cursor-pointer items-center justify-center gap-[0.4rem] rounded-lg ' +
+  'border border-[rgba(34,211,238,0.35)] bg-[rgba(34,211,238,0.08)] text-cyan-300 ' +
+  'transition-[color,background-color,border-color] duration-200 ease-ds ' +
+  'hover:border-[rgba(34,211,238,0.6)] hover:bg-[rgba(34,211,238,0.16)] hover:text-cyan-200 ' +
+  'disabled:cursor-not-allowed disabled:opacity-55 pointer-coarse:min-h-11 pointer-coarse:min-w-11';
+const GM_BTN_DANGER =
+  'inline-flex cursor-pointer items-center justify-center gap-[0.4rem] rounded-lg ' +
+  'border border-[rgba(148,163,184,0.3)] bg-[rgba(15,23,42,0.72)] text-[rgba(248,113,113,0.85)] ' +
+  'transition-[color,background-color,border-color] duration-200 ease-ds ' +
+  'hover:border-[rgba(248,113,113,0.45)] hover:bg-[rgba(248,113,113,0.1)] hover:text-red-300 ' +
+  'disabled:cursor-not-allowed disabled:opacity-55 pointer-coarse:min-h-11 pointer-coarse:min-w-11';
+
+/** LIVE 徽章 / the LIVE badge */
+const GM_BADGE =
+  'rounded-full border border-[rgba(34,211,238,0.3)] bg-[rgba(34,211,238,0.07)] py-[0.15rem] px-2';
+
+/** 地圖 HUD 外框與角標 / the map HUD frame and its corner brackets */
+const GM_FRAME = 'pointer-events-none absolute inset-[10px] z-[5]';
+const GM_VIGNETTE =
+  'pointer-events-none absolute inset-0 z-[4] bg-[radial-gradient(ellipse_at_50%_50%,transparent_58%,rgba(2,6,23,0.55)_100%)]';
+const GM_HUDBAR =
+  'absolute top-3.5 left-3.5 right-3.5 z-[6] flex flex-wrap items-center gap-3 ' +
+  'rounded-xl border border-[rgba(34,211,238,0.28)] bg-[rgba(2,6,23,0.74)] ' +
+  'px-3 py-[0.55rem] backdrop-blur-[14px]';
+const GM_CORNER_BASE = 'absolute size-[26px] border-[rgba(34,211,238,0.55)] border-solid';
+const GM_CORNER_TL = `${GM_CORNER_BASE} top-0 left-0 border-w-[1px_0_0_1px]`;
+const GM_CORNER_TR = `${GM_CORNER_BASE} top-0 right-0 border-w-[1px_1px_0_0]`;
+const GM_CORNER_BL = `${GM_CORNER_BASE} bottom-0 left-0 border-w-[0_0_1px_1px]`;
+const GM_CORNER_BR = `${GM_CORNER_BASE} bottom-0 right-0 border-w-[0_1px_1px_0]`;
+
+/** 圖例 / the legend rail */
+const GM_LEGEND = 'flex items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
+const GM_LEGEND_ITEM = 'flex flex-none items-center gap-[0.4rem]';
+
+/** 統計格 / stat cells */
+const GM_STAT =
+  'relative rounded-[10px] border border-[rgba(148,163,184,0.14)] bg-[rgba(15,23,42,0.6)] ' +
+  'px-2 py-[0.6rem] text-center ' +
+  "before:absolute before:top-0 before:left-[18%] before:right-[18%] before:h-px " +
+  "before:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.55),transparent)] before:content-['']";
+const GM_STAT_VALUE = 'font-orbitron text-xl leading-[1.3] font-bold text-slate-50 tabular-nums';
+const GM_STAT_LABEL = 'mt-[0.15rem] text-xs tracking-[0.08em] text-slate-400 uppercase';
+
+/** 對話框 / the detail modal */
+const GM_MODAL =
+  'rounded-ds-panel border border-[rgba(34,211,238,0.28)] ' +
+  'bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(2,6,23,0.97))] backdrop-blur-[16px]';
+const GM_MODAL_PHOTO = 'absolute inset-0 size-full object-cover opacity-[0.45]';
+const GM_MODAL_VEIL =
+  'absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.2)_0%,rgba(2,6,23,0.9)_76%,rgba(2,6,23,0.97)_100%)]';
+
+/** 跳動的 LIVE 指示燈 / the pulsing LIVE dot。動畫時長沿用原本的 1.9s，
+ *  不是 Tailwind animate-ping 預設的 1s。
+ * The pulsing dot keeps the original 1.9s cycle, not Tailwind's animate-ping
+ * default of 1s. */
+const GM_LIVE =
+  'relative inline-block size-[7px] rounded-full bg-ds-cyan shadow-[0_0_10px_rgba(34,211,238,0.9)] ' +
+  "after:absolute after:inset-0 after:rounded-full after:bg-ds-cyan after:content-[''] " +
+  'after:[animation:ds-ping_1.9s_cubic-bezier(0,0,0.2,1)_infinite]';
+
+/** 載入骨架（永不只顯示裸 spinner）/ Loading skeleton, never a bare spinner */
+const GM_SKEL =
+  'relative overflow-hidden rounded-lg bg-[rgba(148,163,184,0.08)] ' +
+  "after:absolute after:inset-0 after:-translate-x-full after:content-[''] " +
+  'after:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.14),transparent)] ' +
+  'after:animate-ds-shimmer';
+
+
 // ─── 型別 / Types ────────────────────────────────────────────────────────────────
 
 /** GET /api/world/current — 世界進度，用來定位最新已執行的回合 / World progress, used to resolve the latest executed round */
@@ -283,7 +423,7 @@ function TelemetryStrip({
   ];
 
   return (
-    <section className="ds-gm-strip" aria-label={t('home.stats.title')}>
+    <section className={`${GM_STRIP}`} aria-label={t('home.stats.title')}>
       <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
         <Parallax offset={48} className="absolute -top-1/2 -left-[5%] h-[200%] w-[110%]">
           <PointerDrift depth={14} className="h-full w-full">
@@ -292,12 +432,12 @@ function TelemetryStrip({
               alt=""
               fill
               sizes="100vw"
-              className="ds-gm-strip-photo"
+              className={`${GM_STRIP_PHOTO}`}
             />
           </PointerDrift>
         </Parallax>
       </div>
-      <div className="ds-gm-strip-veil" aria-hidden="true" />
+      <div className={`${GM_STRIP_VEIL}`} aria-hidden="true" />
 
       <div className="relative flex items-center gap-4 md:gap-6 px-4 md:px-6 py-3 overflow-x-auto ds-gm-noscroll">
         <div className="hidden sm:block shrink-0 pr-4 md:pr-6 border-r border-cyan-400/20 max-w-[12rem]">
@@ -311,10 +451,10 @@ function TelemetryStrip({
             key={item.label}
             delay={0.05 * i}
             y={14}
-            className={i === 0 ? 'ds-gm-kpi ds-gm-kpi--first' : 'ds-gm-kpi'}
+            className={i === 0 ? GM_KPI_FIRST : GM_KPI}
           >
-            <div className="ds-gm-kpi-label">{item.label}</div>
-            <div className="ds-gm-kpi-value">{item.value}</div>
+            <div className={`${GM_KPI_LABEL}`}>{item.label}</div>
+            <div className={`${GM_KPI_VALUE}`}>{item.value}</div>
           </Reveal>
         ))}
       </div>
@@ -474,46 +614,46 @@ export default function GamePage() {
         {/* 指揮列骨架 / Command bar skeleton */}
         <div className="relative z-10 flex items-center justify-between flex-wrap gap-3 px-4 md:px-5 py-3 border-b border-white/5 bg-gray-950/70">
           <div className="flex items-center gap-3">
-            <div className="ds-gm-skel w-7 h-7" />
-            <div className="ds-gm-skel h-4 w-28" />
-            <div className="ds-gm-skel h-6 w-24" />
+            <div className={`${GM_SKEL} w-7 h-7`} />
+            <div className={`${GM_SKEL} h-4 w-28`} />
+            <div className={`${GM_SKEL} h-6 w-24`} />
           </div>
-          <div className="ds-gm-skel h-4 w-36 hidden sm:block" />
+          <div className={`${GM_SKEL} h-4 w-36 hidden sm:block`} />
           <div className="flex items-center gap-2">
-            <div className="ds-gm-skel h-9 w-24" />
-            <div className="ds-gm-skel h-9 w-16" />
+            <div className={`${GM_SKEL} h-9 w-24`} />
+            <div className={`${GM_SKEL} h-9 w-16`} />
           </div>
         </div>
 
         {/* 觀測帶骨架 / Telemetry strip skeleton */}
         <div className="relative z-10 flex items-center gap-6 px-4 md:px-6 py-3 border-b border-cyan-400/15 overflow-x-auto ds-gm-noscroll">
-          <div className="ds-gm-skel h-10 w-32 hidden sm:block" />
-          <div className="ds-gm-skel h-10 w-20" />
-          <div className="ds-gm-skel h-10 w-24" />
-          <div className="ds-gm-skel h-10 w-24" />
-          <div className="ds-gm-skel h-10 w-28" />
+          <div className={`${GM_SKEL} h-10 w-32 hidden sm:block`} />
+          <div className={`${GM_SKEL} h-10 w-20`} />
+          <div className={`${GM_SKEL} h-10 w-24`} />
+          <div className={`${GM_SKEL} h-10 w-24`} />
+          <div className={`${GM_SKEL} h-10 w-28`} />
         </div>
 
         {/* 內容骨架 / Content skeleton */}
         <div className="relative z-10 flex-1 flex min-h-0">
-          <div className="hidden md:block w-64 shrink-0 border-r border-white/5 ds-gm-rail p-3 space-y-3">
-            <div className="ds-gm-skel h-40 w-full" />
-            <div className="ds-gm-skel h-56 w-full" />
+          <div className={`hidden md:block w-64 shrink-0 border-r border-white/5 ${GM_RAIL} p-3 space-y-3`}>
+            <div className={`${GM_SKEL} h-40 w-full`} />
+            <div className={`${GM_SKEL} h-56 w-full`} />
           </div>
-          <div className="flex-1 relative ds-gm-rail min-h-64">
+          <div className={`flex-1 relative ${GM_RAIL} min-h-64`}>
             <div className="ds-grid-bg absolute inset-0" aria-hidden="true" />
-            <div className="ds-gm-hudbar">
-              <div className="ds-gm-skel h-5 w-48" />
+            <div className={`${GM_HUDBAR}`}>
+              <div className={`${GM_SKEL} h-5 w-48`} />
               <div className="ml-auto flex items-center gap-2">
-                <div className="ds-gm-skel w-9 h-9" />
-                <div className="ds-gm-skel w-9 h-9" />
-                <div className="ds-gm-skel w-9 h-9" />
+                <div className={`${GM_SKEL} w-9 h-9`} />
+                <div className={`${GM_SKEL} w-9 h-9`} />
+                <div className={`${GM_SKEL} w-9 h-9`} />
               </div>
             </div>
           </div>
-          <div className="hidden lg:block w-80 shrink-0 border-l border-white/5 ds-gm-rail p-3 space-y-3">
-            <div className="ds-gm-skel h-9 w-full" />
-            <div className="ds-gm-skel h-60 w-full" />
+          <div className={`hidden lg:block w-80 shrink-0 border-l border-white/5 ${GM_RAIL} p-3 space-y-3`}>
+            <div className={`${GM_SKEL} h-9 w-full`} />
+            <div className={`${GM_SKEL} h-60 w-full`} />
           </div>
         </div>
 
@@ -534,7 +674,7 @@ export default function GamePage() {
         <div className="stars" aria-hidden="true" />
         <div className="stars2" aria-hidden="true" />
         <div className="nebula" aria-hidden="true" />
-        <div className="relative text-center max-w-md ds-gm-panel border-red-500/30 px-8 py-8">
+        <div className={`relative text-center max-w-md ${GM_PANEL} border-red-500/30! px-8 py-8`}>
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center">
             <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
@@ -544,7 +684,7 @@ export default function GamePage() {
           <p className="text-gray-400 text-base mb-6">{errorMessage}</p>
           <button
             onClick={() => fetchWorldState()}
-            className="ds-gm-btn ds-gm-btn-accent px-6 py-2.5 text-base font-medium"
+            className={`${GM_BTN_ACCENT} px-6 py-2.5 text-base font-medium`}
           >
             重試
           </button>
@@ -563,20 +703,20 @@ export default function GamePage() {
   return (
     <div className="min-h-screen flex flex-col bg-[#020617]">
       {/* ── 深空背景層（影像＋星域＋視差）/ Deep-space backdrop (photo + starfield + parallax) ── */}
-      <div className="ds-gm-backdrop" aria-hidden="true">
+      <div className={`${GM_BACKDROP}`} aria-hidden="true">
         <PointerDrift depth={20} className="absolute inset-0">
           <Image
             src="/space/milky-way.jpg"
             alt=""
             fill
             sizes="100vw"
-            className="ds-gm-photo"
+            className={`${GM_PHOTO}`}
           />
         </PointerDrift>
         <div className="nebula" />
         <div className="stars" />
         <div className="stars2" />
-        <div className="ds-gm-veil" />
+        <div className={`${GM_VEIL}`} />
       </div>
 
       <a
@@ -604,8 +744,8 @@ export default function GamePage() {
           <span className="font-orbitron font-bold text-sm tracking-wider text-white truncate">
             {t('general.title')}
           </span>
-          <span className="ds-gm-badge hidden sm:flex items-center gap-2 text-xs font-orbitron tracking-wider text-cyan-300/90">
-            <span className="ds-gm-live" aria-hidden="true" />
+          <span className={`${GM_BADGE} hidden sm:flex items-center gap-2 text-xs font-orbitron tracking-wider text-cyan-300/90`}>
+            <span className={`${GM_LIVE}`} aria-hidden="true" />
             RND {String(round).padStart(4, '0')}
           </span>
         </div>
@@ -622,7 +762,7 @@ export default function GamePage() {
           {/* 左側邊欄切換按鈕（手機版）/ Left sidebar toggle (mobile) */}
           <button
             onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
-            className="ds-gm-btn md:hidden w-8 h-8"
+            className={`${GM_BTN} md:hidden w-8 h-8`}
             title="時間軸 & 排行"
             aria-label="時間軸 & 排行"
           >
@@ -650,7 +790,7 @@ export default function GamePage() {
           {/* 登出按鈕 / Logout button */}
           <button
             onClick={() => signOut({ callbackUrl: '/' })}
-            className="ds-gm-btn ds-gm-btn-danger px-3 py-1.5 text-xs font-orbitron tracking-wider"
+            className={`${GM_BTN_DANGER} px-3 py-1.5 text-xs font-orbitron tracking-wider`}
             title={t('general.logout')}
           >
             {t('general.logout')}
@@ -659,7 +799,7 @@ export default function GamePage() {
           {/* 右側邊欄切換按鈕（手機版）/ Right sidebar toggle (mobile) */}
           <button
             onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
-            className="ds-gm-btn lg:hidden w-8 h-8"
+            className={`${GM_BTN} lg:hidden w-8 h-8`}
             title="將領 & 事件"
             aria-label="將領 & 事件"
           >
@@ -685,7 +825,7 @@ export default function GamePage() {
       {/* ── 主要內容 / Main Content ────────────────────────────────────────── */}
       <div className="relative z-10 flex-1 flex min-h-0">
         {/* ── 左側邊欄（桌面版）/ Left Sidebar (desktop) ──────────────────────── */}
-        <aside className="hidden md:block w-64 shrink-0 border-r border-white/5 ds-gm-rail ds-gm-scroll p-3 space-y-3 overflow-y-auto">
+        <aside className={`hidden md:block w-64 shrink-0 border-r border-white/5 ${GM_RAIL} ds-gm-scroll p-3 space-y-3 overflow-y-auto`}>
           <Reveal delay={0.06} y={18}>
             <RoundTimeline
               currentRound={round}
@@ -719,7 +859,7 @@ export default function GamePage() {
             >
               <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setLeftSidebarOpen(false)} />
               <motion.div
-                className="relative w-72 ds-gm-rail border-r border-cyan-400/15 p-3 space-y-3 overflow-y-auto ds-gm-scroll"
+                className={`relative w-72 ${GM_RAIL} border-r border-cyan-400/15 p-3 space-y-3 overflow-y-auto ds-gm-scroll`}
                 initial={{ x: '-100%' }}
                 animate={{ x: 0 }}
                 exit={{ x: '-100%' }}
@@ -729,7 +869,7 @@ export default function GamePage() {
                 <span className="font-orbitron text-xs text-gray-400 tracking-wider">控制面板</span>
                 <button
                   onClick={() => setLeftSidebarOpen(false)}
-                  className="ds-gm-btn w-7 h-7"
+                  className={`${GM_BTN} w-7 h-7`}
                   aria-label="關閉"
                 >
                   <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
@@ -771,24 +911,24 @@ export default function GamePage() {
           </div>
 
           {/* HUD 框角與暗角 / HUD corner brackets + vignette */}
-          <div className="ds-gm-frame" aria-hidden="true">
-            <span className="ds-gm-corner ds-gm-corner--tl" />
-            <span className="ds-gm-corner ds-gm-corner--tr" />
-            <span className="ds-gm-corner ds-gm-corner--bl" />
-            <span className="ds-gm-corner ds-gm-corner--br" />
+          <div className={`${GM_FRAME}`} aria-hidden="true">
+            <span className={`${GM_CORNER_TL}`} />
+            <span className={`${GM_CORNER_TR}`} />
+            <span className={`${GM_CORNER_BL}`} />
+            <span className={`${GM_CORNER_BR}`} />
           </div>
-          <div className="ds-gm-vignette" aria-hidden="true" />
+          <div className={`${GM_VIGNETTE}`} aria-hidden="true" />
 
           {/* 統一 HUD 列：圖例（左）＋相機控制（右）/ Unified HUD bar: legend (left) + camera controls (right) */}
-          <div className="ds-gm-hudbar">
-            <div className="ds-gm-legend" aria-label={t('map.faction')}>
+          <div className={`${GM_HUDBAR}`}>
+            <div className={`${GM_LEGEND}`} aria-label={t('map.faction')}>
               {(worldState?.factions ?? []).filter((f) => f.alive).slice(0, 5).map((f) => (
-                <span key={f.id} className="ds-gm-legend-item">
+                <span key={f.id} className={`${GM_LEGEND_ITEM}`}>
                   <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: f.color }} />
                   <span className="text-sm text-gray-300 whitespace-nowrap">{f.name}</span>
                 </span>
               ))}
-              <span className="ds-gm-legend-item">
+              <span className={`${GM_LEGEND_ITEM}`}>
                 <span className="w-3 h-3 rounded-full bg-gray-500 shrink-0" />
                 <span className="text-sm text-gray-400 whitespace-nowrap">{t('place.unowned')}</span>
               </span>
@@ -799,7 +939,7 @@ export default function GamePage() {
                 onClick={() => mapControlsRef.current?.resetView()}
                 title="重設視圖 / Reset view"
                 aria-label="重設視圖 / Reset view"
-                className="ds-gm-btn w-9 h-9"
+                className={`${GM_BTN} w-9 h-9`}
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
@@ -812,7 +952,7 @@ export default function GamePage() {
                 onClick={() => mapControlsRef.current?.zoomIn()}
                 title="放大 / Zoom in"
                 aria-label="放大 / Zoom in"
-                className="ds-gm-btn w-9 h-9"
+                className={`${GM_BTN} w-9 h-9`}
               >
                 <Ic className="w-4 h-4"><path d="M12 6v12M6 12h12" /></Ic>
               </button>
@@ -820,7 +960,7 @@ export default function GamePage() {
                 onClick={() => mapControlsRef.current?.zoomOut()}
                 title="縮小 / Zoom out"
                 aria-label="縮小 / Zoom out"
-                className="ds-gm-btn w-9 h-9"
+                className={`${GM_BTN} w-9 h-9`}
               >
                 <Ic className="w-4 h-4"><path d="M6 12h12" /></Ic>
               </button>
@@ -829,7 +969,7 @@ export default function GamePage() {
         </main>
 
         {/* ── 右側邊欄（桌面版）/ Right Sidebar (desktop) ──────────────────────── */}
-        <aside className="hidden lg:flex flex-col w-80 shrink-0 border-l border-white/5 ds-gm-rail overflow-hidden">
+        <aside className={`hidden lg:flex flex-col w-80 shrink-0 border-l border-white/5 ${GM_RAIL} overflow-hidden`}>
           <RightSidebarTabs
             activeTab={rightTab}
             onTabChange={setRightTab}
@@ -860,12 +1000,12 @@ export default function GamePage() {
         {rightSidebarOpen && (
           <div className="lg:hidden fixed inset-0 z-40 flex justify-end">
             <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setRightSidebarOpen(false)} />
-            <div className="relative w-80 ds-gm-rail border-l border-cyan-400/15 flex flex-col overflow-hidden animate-slide-in-right">
+            <div className={`relative w-80 ${GM_RAIL} border-l border-cyan-400/15 flex flex-col overflow-hidden animate-slide-in-right`}>
               <div className="flex items-center justify-between px-3 pt-3 pb-0">
                 <span className="font-orbitron text-xs text-gray-400 tracking-wider">資訊面板</span>
                 <button
                   onClick={() => setRightSidebarOpen(false)}
-                  className="ds-gm-btn w-7 h-7"
+                  className={`${GM_BTN} w-7 h-7`}
                   aria-label="關閉"
                 >
                   <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
@@ -931,7 +1071,7 @@ function LanguageSwitch({
   return (
     <button
       onClick={onToggle}
-      className="ds-gm-btn px-3 py-1.5 text-xs font-orbitron tracking-wider text-cyan-300/90"
+      className={`${GM_BTN} px-3 py-1.5 text-xs font-orbitron tracking-wider text-cyan-300/90!`}
       title={t('general.language')}
       aria-label={t('general.language')}
     >
@@ -1047,12 +1187,14 @@ function NextRoundButton({
       <button
         onClick={handleRun}
         disabled={!isAdmin || loading}
-        className={`ds-gm-btn px-3 py-1.5 text-xs font-orbitron tracking-wider ${!isAdmin
-          ? 'cursor-not-allowed'
-          : loading
-            ? 'ds-gm-btn-accent cursor-not-allowed'
-            : 'ds-gm-btn-accent'
-          }`}
+        // 原本是「基底 + 條件式 accent 疊加」。疊加在單一 utilities 層不可靠，
+        // 所以改成二選一的完整按鈕。停用游標交給 GM_BTN 的 disabled: 變體——
+        // 鈕的停用條件恰好就是 !isAdmin || loading，行為與原式完全相同。
+        // Was base-plus-conditional-accent. Layering is unreliable in one
+        // utilities layer, so this picks one complete button. The disabled
+        // cursor rides GM_BTN's disabled: variant, whose condition matches the
+        // button's own disabled={!isAdmin || loading} exactly.
+        className={`${!isAdmin ? GM_BTN : GM_BTN_ACCENT} px-3 py-1.5 text-xs font-orbitron tracking-wider`}
         title={isAdmin ? t('admin.runRound') : t('game.adminOnly')}
       >
         {loading ? (
@@ -1097,14 +1239,14 @@ function RoundTimeline({
   const oldestRound = Math.max(0, maxRound - 199 - olderPages * 200);
 
   return (
-    <div className="ds-gm-panel p-3">
-      <h3 className="ds-gm-title mb-3">
+    <div className={`${GM_PANEL} p-3`}>
+      <h3 className={`${GM_TITLE} mb-3`}>
         {t('game.selectRound')}
       </h3>
       <div className="flex items-center gap-2 mb-3">
         <button
           onClick={onPlayToggle}
-          className="ds-gm-btn ds-gm-btn-accent px-3 py-1.5 text-sm font-medium"
+          className={`${GM_BTN_ACCENT} px-3 py-1.5 text-sm font-medium`}
         >
           {isPlaying ? (
             <>
@@ -1154,7 +1296,7 @@ function RoundTimeline({
           <button
             type="button"
             onClick={() => setOlderPages((pages) => pages + 1)}
-            className="ds-gm-btn w-full mt-1 py-1.5 text-xs font-orbitron tracking-wider"
+            className={`${GM_BTN} w-full mt-1 py-1.5 text-xs font-orbitron tracking-wider`}
           >
             載入更早回合（{oldestRound}）
           </button>
@@ -1230,21 +1372,21 @@ function DetailModal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-3xl max-h-[80vh] overflow-hidden ds-gm-modal shadow-2xl flex flex-col"
+        className={`w-full max-w-3xl max-h-[80vh] overflow-hidden ${GM_MODAL} shadow-2xl flex flex-col`}
         initial={{ opacity: 0, scale: 0.96, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         transition={{ duration: 0.15 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
-          <h3 className="ds-gm-title text-gray-200">
+          <h3 className={`${GM_TITLE} text-gray-200!`}>
             {title}
           </h3>
           <button
             type="button"
             autoFocus
             onClick={onClose}
-            className="ds-gm-btn w-7 h-7"
+            className={`${GM_BTN} w-7 h-7`}
             aria-label="關閉"
           >
             <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
@@ -1293,12 +1435,12 @@ function FactionRanking({
     );
 
   return (
-    <div className="ds-gm-panel p-3">
+    <div className={`${GM_PANEL} p-3`}>
       <button
         type="button"
         onClick={() => setShowDetail(true)}
         title={t('general.details')}
-        className="ds-gm-title mb-3 w-full flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150"
+        className={`${GM_TITLE} mb-3 w-full flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150`}
       >
         <span>{t('ranking.title')}</span>
         <Ic className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity duration-150">
@@ -1454,12 +1596,12 @@ function CharacterList({
   const aliveRows = characters.filter((c) => c.alive).sort((a, b) => b.troops - a.troops);
 
   return (
-    <div className="ds-gm-panel p-3">
+    <div className={`${GM_PANEL} p-3`}>
       <button
         type="button"
         onClick={() => setShowDetail(true)}
         title={t('general.details')}
-        className="ds-gm-title mb-3 w-full flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150"
+        className={`${GM_TITLE} mb-3 w-full flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150`}
       >
         <span>{t('faction.characters')}</span>
         <Ic className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity duration-150">
@@ -1504,7 +1646,7 @@ function CharacterList({
           <button
             type="button"
             onClick={() => setListShown((count) => count + 100)}
-            className="ds-gm-btn w-full py-2 text-xs font-orbitron tracking-wider"
+            className={`${GM_BTN} w-full py-2 text-xs font-orbitron tracking-wider`}
           >
             載入更多（{aliveRows.length - listShown}）
           </button>
@@ -1581,7 +1723,7 @@ function CharacterList({
           <button
             type="button"
             onClick={() => setRowsShown((count) => count + 100)}
-            className="ds-gm-btn w-full mt-3 py-2 text-xs font-orbitron tracking-wider"
+            className={`${GM_BTN} w-full mt-3 py-2 text-xs font-orbitron tracking-wider`}
           >
             載入更多（{detailRows.length - rowsShown}）
           </button>
@@ -1688,8 +1830,8 @@ function EventLog({
   }
 
   return (
-    <div className="ds-gm-panel p-3">
-      <h3 className="ds-gm-title mb-3 flex items-center justify-between">
+    <div className={`${GM_PANEL} p-3`}>
+      <h3 className={`${GM_TITLE} mb-3 flex items-center justify-between`}>
         <span>{t('events.title')}</span>
         <span className="text-cyan-300/85 text-xs tracking-widest font-normal">
           {events.length} {t('events.tab')}
@@ -1717,7 +1859,7 @@ function EventLog({
           <button
             type="button"
             onClick={() => setVisibleCount((count) => count + 60)}
-            className="ds-gm-btn w-full mt-2 py-2 text-xs font-orbitron tracking-wider"
+            className={`${GM_BTN} w-full mt-2 py-2 text-xs font-orbitron tracking-wider`}
           >
             載入更多（{events.length - visibleCount}）
           </button>
@@ -2146,9 +2288,9 @@ function ChartTypeSwitch({
           type="button"
           onClick={() => onChange(ct)}
           aria-pressed={value === ct}
-          className={`ds-gm-btn px-2 py-1 text-[10px] font-orbitron tracking-wider ${
-            value === ct ? 'ds-gm-btn-accent' : ''
-          }`}
+          // 同上：選中態換成完整的 accent 按鈕，而不是在基底上加一個類別
+          // Same reason: the selected state swaps in a complete accent button
+          className={`${value === ct ? GM_BTN_ACCENT : GM_BTN} px-2 py-1 text-[10px] font-orbitron tracking-wider`}
         >
           {t(CHART_TYPE_LABEL_KEYS[ct])}
         </button>
@@ -2193,9 +2335,9 @@ function StatsCharts({
 
   if (currentRound < 1 || !data || data.rounds.length === 0) {
     return (
-      <div className="ds-gm-panel p-3">
+      <div className={`${GM_PANEL} p-3`}>
         <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="ds-gm-title">{t('stats.title')}</h3>
+          <h3 className={`${GM_TITLE}`}>{t('stats.title')}</h3>
           <ChartTypeSwitch value={chartType} onChange={setChartType} />
         </div>
         <p className="text-gray-400 text-xs" role={fetchFailed ? 'alert' : undefined}>
@@ -2262,9 +2404,9 @@ function StatsCharts({
   }
 
   return (
-    <div className="ds-gm-panel p-3">
+    <div className={`${GM_PANEL} p-3`}>
       <div className="flex items-center justify-between gap-2 mb-3">
-        <h3 className="ds-gm-title">{t('stats.title')}</h3>
+        <h3 className={`${GM_TITLE}`}>{t('stats.title')}</h3>
         <ChartTypeSwitch value={chartType} onChange={setChartType} />
       </div>
       {factionCharts.map((chart) => (
@@ -2319,7 +2461,7 @@ function PlaceDetail({
       onClick={onClose}
     >
       <motion.div
-        className="relative max-w-md w-full mx-4 ds-gm-modal overflow-hidden shadow-2xl shadow-black/60"
+        className={`relative max-w-md w-full mx-4 ${GM_MODAL} overflow-hidden shadow-2xl shadow-black/60`}
         initial={{ opacity: 0, scale: 0.95, y: 12 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 12 }}
@@ -2333,9 +2475,9 @@ function PlaceDetail({
             alt=""
             fill
             sizes="100vw"
-            className="ds-gm-modal-photo"
+            className={`${GM_MODAL_PHOTO}`}
           />
-          <div className="ds-gm-modal-veil" aria-hidden="true" />
+          <div className={`${GM_MODAL_VEIL}`} aria-hidden="true" />
 
           {/* 標頭 / Header */}
           <div className="relative h-full flex items-end justify-between gap-3 p-4 pb-3">
@@ -2353,7 +2495,7 @@ function PlaceDetail({
             </div>
             <button
               onClick={onClose}
-              className="ds-gm-btn w-8 h-8 shrink-0"
+              className={`${GM_BTN} w-8 h-8 shrink-0`}
               aria-label="close"
             >
               <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
@@ -2365,7 +2507,7 @@ function PlaceDetail({
           {/* 相連地點 / Linked Places */}
           {linkedPlaceNames.length > 0 && (
             <div>
-              <div className="ds-gm-title text-xs mb-1.5 flex items-center gap-2">
+              <div className={`${GM_TITLE} text-xs! mb-1.5 flex items-center gap-2`}>
                 <span className="h-px w-4 bg-cyan-400/50" aria-hidden="true" />
                 {t('map.linkedPlaces')}
               </div>
@@ -2407,7 +2549,7 @@ function PlaceDetail({
 
           {/* 駐紮將領 / Stationed Characters */}
           <div>
-            <div className="ds-gm-title text-xs mb-1.5">
+            <div className={`${GM_TITLE} text-xs! mb-1.5`}>
               {t('place.characters')}
             </div>
             <div className="space-y-0.5 max-h-44 overflow-y-auto ds-gm-scroll">
@@ -2454,9 +2596,9 @@ function BuildingStat({
   value: number;
 }) {
   return (
-    <div className="ds-gm-stat">
-      <div className="ds-gm-stat-value">{value}</div>
-      <div className="ds-gm-stat-label">{label}</div>
+    <div className={`${GM_STAT}`}>
+      <div className={`${GM_STAT_VALUE}`}>{value}</div>
+      <div className={`${GM_STAT_LABEL}`}>{label}</div>
     </div>
   );
 }

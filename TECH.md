@@ -88,6 +88,8 @@ src/app/
 │   │   ├── rounds/        # GET /api/world/rounds
 │   │   ├── events/        # GET /api/world/events?round=N
 │   │   └── stats/         # GET /api/world/stats?from=A&to=B
+│   ├── public/            # 免登入唯讀端點（僅供首頁）/ unauthenticated read-only, homepage only
+│   │   └── world/         # GET /api/public/world
 │   └── admin/             # 管理員端點
 │       ├── run-round/     # POST /api/admin/run-round
 │       ├── reset-world/   # POST /api/admin/reset-world
@@ -143,6 +145,46 @@ export async function GET() {
   return NextResponse.json(world);
 }
 ```
+
+#### 認證分界 / The Authentication Boundary
+
+`/api/world/*` 與 `/api/admin/*` 全部需要登入。首頁只服務**未登入**訪客（已登入者
+會被 `redirect('/game')` 導走），所以首頁若要顯示真實世界資料，必須有一條不需
+認證的讀取路徑——這就是 `GET /api/public/world` 存在的原因。
+Every `/api/world/*` and `/api/admin/*` route requires a session. The homepage
+serves **signed-out** visitors only (a signed-in visitor is redirected to
+`/game`), so the homepage needs an unauthenticated read path to show real world
+data. That is the only reason `GET /api/public/world` exists.
+
+| 端點 / Endpoint | 認證 / Auth | 用途 / Purpose |
+|---|---|---|
+| `/api/world/*` | 需要 / required | 遊戲頁的完整世界狀態 / the game page's full state |
+| `/api/admin/*` | 管理員 / admin | 推進回合、重置世界 / run rounds, reset the world |
+| `/api/public/world` | **刻意不需要** / intentionally none | 首頁的聚合現況 / the homepage's aggregated snapshot |
+
+`/api/public/world` 的邊界 / The boundaries of `/api/public/world`:
+
+- **嚴格唯讀**：沒有任何寫入路徑，也沒有 admin 或 session 相關的表面。
+  Strictly read-only: no mutation path, no admin or session surface.
+- **不回傳個人資料**：只有據點名稱、勢力名稱與聚合計數。
+  No personal data: settlement names, faction names, and aggregate counts only.
+- **計數永遠完整，圖譜會下采樣**。世界最大可有 `CONFIG.PLACE_MAX_COUNT`（2000）
+  個據點，首頁只取 400 個（`graph.truncated` 標示是否被截斷）。抽樣方式是先把
+  佈局切成方格、格內依駐軍排序、再每格輪流取值——直接「依駐軍取前 400」會挑出
+  空間上散落的據點，圖會退化成一堆孤立光點。
+  Counts are always complete; the graph is down-sampled. The world can hold up to
+  `CONFIG.PLACE_MAX_COUNT` (2000) settlements and the homepage takes 400, with
+  `graph.truncated` saying so. Sampling buckets the layout into a grid, ranks each
+  bucket by garrison, then fills round-robin — taking the top 400 by garrison
+  directly would scatter them and collapse the graph into loose dots.
+- 這個取捨是為了讓首頁的輪詢成本可控。`response` 帶 `Cache-Control: no-store`。
+  The trade-off exists to keep the homepage's polling cost bounded. The response
+  carries `Cache-Control: no-store`.
+
+回應型別定義在 `src/lib/publicWorld.ts`，而不是 route 檔本身——元件不該從
+`app/api` 反向引入型別。
+The response type lives in `src/lib/publicWorld.ts` rather than in the route
+file, so components never import types back out of the API layer.
 
 ---
 
@@ -520,6 +562,108 @@ function getConfig(key: ConfigKey): number {
 @import 'tailwindcss';
 ```
 
+### 設計 token 層 / Design Token Layer
+
+本專案**不使用 CSS 變數搭配自訂元件類**。所有設計值只寫一次，放在
+`globals.css` 的 `@theme static` 區塊，由 Tailwind 產生原生 utility。
+This project does **not** use CSS variables paired with bespoke component
+classes. Every design value is written exactly once in the `@theme static`
+block in `globals.css`, and Tailwind turns it into native utilities.
+
+```css
+@theme static {
+  --color-ds-void: #020617;                              /* bg-ds-void   */
+  --color-ds-cyan: #22d3ee;                              /* text-ds-cyan */
+  --color-ds-amber: #f5b544;                             /* 結晶格環用 / lattice ring only */
+  --color-ds-panel: rgba(15, 23, 42, 0.55);              /* bg-ds-panel  */
+  --text-ds-label: 0.8125rem;                            /* text-ds-label */
+  --radius-ds-panel: 14px;                               /* rounded-ds-panel */
+  --shadow-ds-hero: 0 24px 70px rgba(2, 6, 23, 0.8);     /* shadow-ds-hero */
+  --ease-ds: cubic-bezier(0.22, 0.61, 0.36, 1);          /* ease-ds      */
+  --animate-ds-shimmer: ds-shimmer 1.6s ease-in-out infinite;
+}
+```
+
+**為什麼是 `static`**：Tailwind 預設會搖掉沒被任何 utility 用到的主題變數。
+若宣告成 `@theme`（非 static），一旦某個變數暫時沒有 utility 引用，它就不會被
+輸出到 `:root`，而下面那些相容別名就會指向未定義。`static` 強制全部輸出。
+**Why `static`**: by default Tailwind tree-shakes theme variables nothing uses. A
+plain `@theme` block would stop emitting a variable the moment no utility
+referenced it, and the compatibility aliases below would dangle. `static`
+forces every one of them out.
+
+### `:root` 相容別名 / `:root` Compatibility Aliases
+
+`:root` 裡的 `--ds-*` **不是**另一份值，而是指回 `@theme` 的別名。
+The `--ds-*` names in `:root` are not a second copy of the values — they are
+aliases pointing back at `@theme`.
+
+```css
+:root {
+  --ds-cyan: var(--color-ds-cyan);
+  --ds-panel: var(--color-ds-panel);
+  /* … */
+}
+```
+
+**唯一的例外是 `--ds-section-y`**（區段間距）。`@theme` 沒有對應的命名空間，
+所以它直接留在 `:root`。
+The one exception is `--ds-section-y` (section rhythm). `@theme` has no
+namespace for it, so it stays in `:root`.
+
+### 使用規則 / Rules
+
+1. **新增設計值 → 加在 `@theme static`**，不要在 TSX 裡寫死色票、字級、間距、
+   圓角、陰影或時長。
+   New design value → add it to `@theme static`. Never hardcode a colour, size,
+   spacing, radius, shadow, or duration in TSX.
+2. **用 utility 表達表面**，不要新增自訂元件類別。`src/app/page.tsx` 與
+   `src/app/game/page.tsx` 頂端各有一組模組層級的常數，把重複的 utility 字串
+   收在一處，避免同一串類別在多檔之間漂移。
+   Express surfaces with utilities; do not add bespoke component classes. Each
+   of `src/app/page.tsx` and `src/app/game/page.tsx` declares its repeated
+   utility strings once at module scope so the same class list cannot drift
+   between files.
+3. **同層覆寫要加 important 修飾符（後綴 `!`）**。過去自訂類別在
+   `@layer components`、utility 在 `utilities` 層，前者永遠輸給後者。現在兩者
+   同層，這條保護消失，刻意要覆寫時必須寫 `text-xs!`。
+   Intra-layer overrides need the important modifier (suffix `!`). Bespoke
+   classes used to live in `@layer components` and utilities in `utilities`, so
+   the class always lost. Both are now in one layer, so a deliberate override
+   must say `text-xs!`.
+4. **偽元素用 `before:` / `after:` 變體**，不要寫 `::before` 規則。
+   Pseudo-elements go through the `before:` / `after:` variants.
+5. **指標相關行為**用 `@media (hover: hover)` 包裹；觸控目標用 Tailwind 的
+   `pointer-coarse:` 變體。
+   Pointer-only behaviour goes inside `@media (hover: hover)`; touch targets use
+   Tailwind's `pointer-coarse:` variant.
+
+### 僅存的兩個自訂類別 / The Only Two Custom Classes
+
+整個專案只剩下兩條自訂類別，理由只有一個：捲軸偽元素不是 utility 能表達的東西。
+Only two custom classes remain in the whole project, for a single reason:
+scrollbar pseudo-elements are not something a utility can express.
+
+```css
+.ds-gm-scroll   /* scrollbar-width / scrollbar-color + ::-webkit-scrollbar */
+.ds-gm-noscroll /* 完全隱藏捲軸 / hides the scrollbar entirely */
+```
+
+另有三類規則以純 CSS 保留，因為它們本質上就是選擇器而非樣式：
+Three kinds of rule also stay as plain CSS, because they are selectors rather
+than styles:
+
+| 規則 / Rule | 為什麼 / Why |
+|---|---|
+| `:where(button, a, …):focus-visible` | 偽類別選擇器 / pseudo-class selector |
+| `@media (pointer: coarse) { [role='tab'] { … } }` | role 屬性選擇器 / role attribute selector |
+| `@layer base { button:not(:disabled) { cursor: pointer } }` | 全域預設值 / a global default |
+
+以及一個 `@utility`：`ds-nav-underline`。用 `@utility` 而非普通類別，是為了讓
+`aria-current` 變體仍然能疊加上它的 `::after`。
+And one `@utility`: `ds-nav-underline`. It is an `@utility` rather than a plain
+class so the `aria-current` variant still composes with its `::after`.
+
 ### 使用方式 / Usage
 
 ```typescript
@@ -546,6 +690,16 @@ export function Button({ onClick }: { onClick: () => void }) {
   );
 }
 ```
+
+### 字型 / Fonts
+
+`src/app/layout.tsx` 以 `next/font` 載入 **Orbitron**（顯示字體）與 **Inter**
+（內文），並透過 CSS 變數 `--font-orbitron` / `--font-inter` 暴露。中文 fallback
+為 `'PingFang TC', 'Microsoft JhengHei', sans-serif`。
+`src/app/layout.tsx` loads **Orbitron** (display) and **Inter** (body) through
+`next/font` and exposes them as `--font-orbitron` / `--font-inter`. The CJK
+fallback chain is `'PingFang TC', 'Microsoft JhengHei', sans-serif`.
+
 
 ---
 

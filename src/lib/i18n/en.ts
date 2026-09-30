@@ -37,11 +37,12 @@ export const en = {
       noVictoryDesc: 'Purely observational experience. Watch AIs write their own legends.',
     },
     howItWorks: {
+      eyebrow: 'The Loop',
       title: 'How It Works',
       step1: 'Observe the World',
       step1Desc: 'Watch hundreds of AI characters build factions, conquer territories, form alliances, and betray each other.',
       step2: 'Analyze the Situation',
-      step2Desc: 'Track faction dynamics, character strengths, and economic development to洞察 the flow of history.',
+      step2Desc: 'Track faction dynamics, character strengths, and economic development to understand the flow of history.',
       step3: 'Witness Evolution',
       step3Desc: 'Observe hundreds of rounds of evolution, witnessing the rise and fall of civilizations and the birth of legends.',
     },
@@ -54,6 +55,97 @@ export const en = {
     },
     startButton: 'Enter World',
     learnMore: 'Learn More',
+
+    // ── 首頁導覽 / Homepage navigation ───────────────────────────────────
+    nav: {
+      world: 'World',
+      how: 'How It Works',
+      saga: 'Saga',
+      live: 'Live',
+      enter: 'Enter World',
+      openMenu: 'Open menu',
+      closeMenu: 'Close menu',
+      menuLabel: 'Homepage navigation',
+    },
+
+    // ── 首屏 / Hero ───────────────────────────────────────────────────────
+    hero: {
+      eyebrow: 'Autonomous simulation, running in your browser',
+      secondaryCta: 'Watch the world run',
+      scroll: 'Scroll down',
+      roundTag: 'Round {round}',
+    },
+
+    // ── 訊號流 / Signal feed ─────────────────────────────────────────────
+    feed: {
+      label: 'Signal Feed',
+      live: 'LIVE',
+    },
+
+    // ── 真實世界圖譜 / Real world graph ──────────────────────────────────
+    world: {
+      eyebrow: 'Real World Graph',
+      title: 'The world has no script',
+      body: 'Every point is a real settlement, every line a real road. This is the world that is running right now — not an illustration of one.',
+      cta: 'See how it works',
+      legendTitle: 'Factions still alive',
+      graphLabel: 'A three-dimensional faction graph rendered from live world data: each point is a settlement, colored by the faction that holds it',
+      graphEmpty: 'This world has no settlements yet.',
+    },
+
+    // ── 特色區段 / Features section ──────────────────────────────────────
+    featuresSection: {
+      eyebrow: 'Core Features',
+      title: 'Four things that never change',
+    },
+
+    // ── 傳奇時間軸 / Faction saga ────────────────────────────────────────
+    saga: {
+      eyebrow: 'Faction Saga',
+      title: 'A legend with no ending',
+      s1Title: 'Origin',
+      s1Text: 'One king, one city. The world starts turning.',
+      s2Title: 'Rift',
+      s2Text: 'The first rebel faction appears, and a border is drawn for the first time.',
+      s3Title: 'Alliance',
+      s3Text: 'Old enemies shake hands, and a coalition redraws the map overnight.',
+      s4Title: 'Betrayal',
+      s4Text: 'The pact collapses faster than the war, and a new king rises in the gap.',
+      s5Title: 'Eternity',
+      s5Text: 'No finale. Only the next round.',
+    },
+
+    // ── 即時統計 / Live world readout ────────────────────────────────────
+    live: {
+      eyebrow: 'Live Data',
+      title: 'The real numbers, right now',
+      hint: 'Read straight from the world that is running. No sign-in required.',
+      roads: 'Roads',
+      unowned: 'Unclaimed',
+      unownedFaction: 'Unclaimed',
+      truncated: 'Showing the {shown} largest garrisons of {total} settlements',
+      updated: 'Read at {time}',
+      unavailable: 'World data is unavailable',
+      unavailableHint: 'The world may not have started yet, or the data source is temporarily unreachable.',
+      eventFallback: 'Something happened in round {round}',
+    },
+
+    // ── 行動呼籲 / Call to action ────────────────────────────────────────
+    cta: {
+      eyebrow: 'Enter The World',
+      title: 'Ready to observe?',
+      body: 'Step into Autonomous World and watch AIs write a legend with no ending.',
+    },
+
+    // ── 頁尾 / Footer ────────────────────────────────────────────────────
+    footer: {
+      tagline: 'Autonomous World — Eternal Evolution Simulation',
+      credits: 'Space imagery: NASA / ESA / CSA / STScI',
+      runTitle: 'Run it locally',
+      runHint: 'Needs Node.js 20 or newer and a PostgreSQL database.',
+      licenseTitle: 'License',
+      license: 'Source code released under the MIT license.',
+    },
   },
 
   // ── 遊戲 / Game ─────────────────────────────────────────────────────────

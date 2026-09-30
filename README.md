@@ -89,6 +89,8 @@ autonomous-world/
 │   │   │   │   ├── rounds/        # GET /api/world/rounds
 │   │   │   │   ├── events/        # GET /api/world/events?round=N
 │   │   │   │   └── stats/         # GET /api/world/stats?from=A&to=B
+│   │   │   ├── public/            # Unauthenticated read-only (homepage only)
+│   │   │   │   └── world/         # GET /api/public/world
 │   │   │   └── admin/             # Admin-only API endpoints
 │   │   │       ├── run-round/     # POST /api/admin/run-round
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
@@ -211,6 +213,21 @@ The game features an interactive force-directed graph map using Sigma.js:
 | GET | `/api/world/events?round=N` | Get events for a round |
 | GET | `/api/world/stats?from=A&to=B` | Get chart data |
 
+### Public (no authentication)
+
+The homepage is only shown to signed-out visitors, so it needs one read path
+that does not require a session. This endpoint is the only one.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/public/world` | Aggregated snapshot of the running world |
+
+It is strictly read-only: there is no mutation path and no admin or session
+surface, and it returns no personal data — only settlement names, faction names,
+and aggregate counts. Counts are always complete; the settlement graph is
+down-sampled to 400 nodes (`graph.truncated` reports whether it was cut down) to
+keep polling cheap on a world of up to 2,000 settlements.
+
 ### Admin only
 
 | Method | Endpoint | Description |
@@ -227,6 +244,11 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Well-documented**: Every file has a header explaining its purpose
 - **Type-safe**: Full TypeScript coverage with strict types
 - **Consistent**: Follows established patterns throughout
+- **Tailwind-first**: Design values live once in the `@theme static` block in
+  `src/app/globals.css` and become native utilities. Surfaces are expressed
+  with utilities, not bespoke CSS classes. A surface used more than once gets
+  its utility string declared as a module-scope constant in the file that owns
+  it. See [TECH.md](./TECH.md#tailwindcss-4) for the full rules.
 
 ### Adding New Features
 

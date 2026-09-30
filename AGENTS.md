@@ -180,6 +180,45 @@ src/app/game/page.tsx also defines locally:
 └── StatsCharts            # SVG line charts for faction stats over time
 ```
 
+### Styling surface (`src/components/home/`)
+
+```
+src/components/home/
+├── tokens.ts              # Shared Tailwind utility strings (EYEBROW, CTA_*, PANEL…)
+├── Motion.tsx             # Reveal / Parallax primitives; both collapse under reduced motion
+├── HomeNav.tsx            # Scroll-spy nav, mobile menu, language switch
+├── VoidCanvas.tsx         # dynamic(ssr:false) wrapper for the backdrop body
+├── VoidScene.tsx          # three.js black hole: thin-lens deflection + crystalline lattice
+├── HeroReticle.tsx        # SVG instrument frame over the hero product view
+├── SagaChart.tsx          # Self-drawing SVG star chart for #saga
+├── WorldGraph.tsx         # dynamic(ssr:false) frame; owns the graph's a11y semantics
+├── WorldGraphScene.tsx    # three.js real faction graph, built from live world data
+├── LiveWorld.tsx          # Graph + faction legend
+├── LiveStats.tsx          # Live counts from the public endpoint
+├── LiveRound.tsx          # "Round N" tag in the hero
+├── SignalFeed.tsx         # Ticker carrying real events
+└── usePublicWorld.ts      # Module-level singleton poller; one request chain, many subscribers
+```
+
+**Styling convention.** Design values live once in `@theme static` in
+`src/app/globals.css`. Surfaces are expressed with Tailwind utilities. A surface
+used more than once has its utility string declared as a module-scope `const` at
+the top of the file that owns it (`src/app/page.tsx`, `src/app/game/page.tsx`) —
+that is where the repeated class lists live, so the same string never appears in
+two files. **Do not add a bespoke CSS class for a surface.** The only two
+classes left in the project are `ds-gm-scroll` and `ds-gm-noscroll`, kept
+because scrollbar pseudo-elements cannot be expressed as utilities.
+
+**Two overrides need `!`.** Bespoke classes used to sit in `@layer components`
+while utilities sat in `utilities`, so a class always lost to a utility. Both are
+in one layer now, so a deliberate override must use Tailwind's important
+modifier: `text-xs!`, `text-gray-200!`, `border-red-500/30!`. Hover variants
+(`hover:`) already carry higher specificity and need nothing.
+
+**The one inline-style exception** is faction colour, which is runtime data read
+from the database. It is applied as an inline `style` on a swatch and annotated
+as such. Never use an inline style for a design token.
+
 ### Database
 
 ```
@@ -452,6 +491,34 @@ pnpm dev
 - Keep functions focused and small
 - Use meaningful variable names
 
+### Styling
+
+- **Add design values to `@theme static`** in `src/app/globals.css`. Never
+  hardcode a colour, font size, spacing, radius, shadow, or duration in TSX.
+- **Express surfaces with Tailwind utilities.** Do not add a bespoke CSS class
+  for a surface; the two that remain (`ds-gm-scroll`, `ds-gm-noscroll`) exist
+  only because scrollbar pseudo-elements have no utility equivalent.
+- **Repeated surfaces get a module-scope `const`** at the top of the owning file
+  (`src/app/page.tsx`, `src/app/game/page.tsx`), not a CSS class.
+- **Pseudo-elements go through `before:` / `after:`**, not hand-written `::`
+  rules. Use `@utility` when a pseudo-element must compose with a variant.
+- **Deliberate same-layer overrides need the important modifier** (suffix `!`),
+  e.g. `text-xs!`. Hover variants do not.
+- **Inline styles are for runtime data only** (faction colour). Never for a
+  design token.
+- Respect the contrast floor: body text ≥ 4.5:1, meaningful text ≥ 13px, body
+  ≥ 16px, touch targets ≥ 44×44.
+
+### Animation
+
+- Every animation loop must pause when it leaves the viewport
+  (`IntersectionObserver`) and when `document.hidden`, and must render a single
+  static frame under `prefers-reduced-motion`.
+- `three.js` scenes must dispose every geometry, material, and renderer on
+  unmount.
+- Scroll-driven motion belongs to the hero and the star chart; everything else
+  animates once on first view and then stops.
+
 ## Security Notes
 
 - Never expose API keys or secrets in code
@@ -491,6 +558,13 @@ pnpm lint
 6. **Data Fetching**: Use TanStack Query for client-side data fetching
 7. **Validation**: Use Zod for API input validation
 8. **Testing**: Run `pnpm test` to verify changes
+9. **Styling**: Design values go in `@theme static`; surfaces use Tailwind
+   utilities; do not add bespoke CSS classes. See "Styling" above.
+10. **Type checking**: `pnpm typecheck`. If it reports errors inside
+    `.next/**/types/`, that is a stale or half-written Next.js generated file,
+    not a source problem — delete `.next/dev/types` and let `next dev` or
+    `next build` regenerate it. Never reach for `tsconfig` changes or
+    `@ts-ignore` to silence it.
 
 ---
 

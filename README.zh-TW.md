@@ -87,6 +87,8 @@ autonomous-world/
 │   │   │   │   ├── rounds/        # GET /api/world/rounds
 │   │   │   │   ├── events/        # GET /api/world/events?round=N
 │   │   │   │   └── stats/         # GET /api/world/stats?from=A&to=B
+│   │   │   ├── public/            # 免登入唯讀端點（僅供首頁）
+│   │   │   │   └── world/         # GET /api/public/world
 │   │   │   └── admin/             # 管理員專屬 API 端點
 │   │   │       ├── run-round/     # POST /api/admin/run-round
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
@@ -209,6 +211,19 @@ autonomous-world/
 | GET | `/api/world/events?round=N` | 取得特定回合的事件 |
 | GET | `/api/world/stats?from=A&to=B` | 取得圖表資料 |
 
+### 公開（免認證）
+
+首頁只服務未登入訪客，因此需要一條不需要 session 的讀取路徑。這個端點是唯一的一條。
+
+| 方法 | 端點 | 說明 |
+|------|------|------|
+| GET | `/api/public/world` | 取得世界運作現況的聚合快照 |
+
+它嚴格唯讀：沒有任何寫入路徑，也沒有 admin 或 session 相關的表面，並且不回傳
+任何個人資料——只有據點名稱、勢力名稱與聚合計數。計數永遠是完整值；據點圖譜會
+下采樣到 400 個節點（`graph.truncated` 會標示是否被截斷），讓世界成長到 2000 個
+據點時輪詢成本仍然可控。
+
 ### 管理員專屬
 
 | 方法 | 端點 | 說明 |
@@ -225,6 +240,10 @@ autonomous-world/
 - **文件完善**：每個檔案都有標頭說明其用途
 - **型別安全**：完整的 TypeScript 覆蓋與嚴格型別
 - **一致性**：遵循既定模式
+- **Tailwind 優先**：設計值只寫一次於 `src/app/globals.css` 的 `@theme static`
+  區塊，並由 Tailwind 產生原生 utility。表面以 utility 表達，不使用自訂 CSS 類別。
+  重複使用的表面，utility 字串會以模組層級常數宣告在擁有它的檔案裡。完整規則見
+  [TECH.md](./TECH.md#tailwindcss-4)。
 
 ### 新增功能
 
