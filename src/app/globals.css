@@ -573,7 +573,7 @@ html {
 }
 
 
-} /* /@layer components */
+} /* @layer components */
 
 /* ============================================================================
    首頁僅存的兩個非 utility 結構 / The only two non-utility structures left
@@ -581,7 +581,6 @@ html {
    遷移後首頁幾乎全部由 Tailwind utility 表達。這裡只留兩件 utility 做不到的
    事：需要 ::after 偽元素的導覽底線（用 @utility 才能與 aria-current 變體
    疊加），以及一個指標裝置才該暫停的動畫（用 data 屬性當鉤子）。
-} /* @layer components */
    two things utilities cannot express remain: the nav underline, which needs an
    ::after pseudo-element (@utility so the aria-current variant still composes),
    and a hover-only animation pause, hooked through a data attribute. */
