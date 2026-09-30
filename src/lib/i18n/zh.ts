@@ -206,6 +206,18 @@ export const zh = {
     troopsOverTime: '兵力變化',
     goldOverTime: '金錢變化',
     charactersOverTime: '將領數變化',
+    // ── 圖表類型 / Chart types ──
+    chartType: '圖表類型',
+    line: '折線',
+    pie: '圓餅',
+    square: '長條',
+    peak: '峰值',
+    // ── 世界整體 / World-wide ──
+    aliveFactionsOverTime: '存活勢力數',
+    totalCharactersOverTime: '總將領數',
+    unownedPlacesOverTime: '無主之地',
+    garrisonOverTime: '總駐軍',
+    roadsOverTime: '道路數',
   },
 
   // ── 排行 / Ranking ──────────────────────────────────────────────────────

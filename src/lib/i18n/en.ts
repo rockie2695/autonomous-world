@@ -206,6 +206,18 @@ export const en = {
     troopsOverTime: 'Troops Over Time',
     goldOverTime: 'Gold Over Time',
     charactersOverTime: 'Characters Over Time',
+    // ── 圖表類型 / Chart types ──
+    chartType: 'Chart Type',
+    line: 'Line',
+    pie: 'Pie',
+    square: 'Bar',
+    peak: 'Peak',
+    // ── 世界整體 / World-wide ──
+    aliveFactionsOverTime: 'Alive Factions',
+    totalCharactersOverTime: 'Total Characters',
+    unownedPlacesOverTime: 'Unowned Places',
+    garrisonOverTime: 'Total Garrison',
+    roadsOverTime: 'Roads',
   },
 
   // ── 排行 / Ranking ──────────────────────────────────────────────────────

@@ -892,42 +892,91 @@ export class Rng {
 
 ### 名稱生成器 / Name Generators
 
+人名、勢力名與地名各有**兩種風格**，依 `gameConfig.ts` 的機率混合產生：
+
+| 風格 | 機率設定 | 人名 | 勢力名 | 地名 |
+|------|---------|------|--------|------|
+| 傳統 / classic | 預設 65% | 張飛（姓+名） | 蒼龍盟（修飾+名詞+後綴） | 青碧城（修飾×2+地形） |
+| 稱號 / epithet | 預設 35% | 霜狼·蓋爾（稱號+外來名） | 霜脊議會（稱號+組織類型） | 霜狼關（稱號+地形） |
+
+```typescript
+// src/lib/gameConfig.ts
+PERSON_EPITHET_NAME_RATE: 0.35,   // 設為 0 可完全關閉稱號風格
+FACTION_EPITHET_NAME_RATE: 0.35,
+PLACE_EPITHET_NAME_RATE: 0.35,
+```
+
+#### 共用稱號元件
+```typescript
+// src/lib/nameGenerator/epithet.ts
+export const EPITHET_SEPARATOR = '·';
+export const EPITHET_HEADS: readonly string[];  // 24 個自然／材質字（霜 赤 幽 鐵 灰 潮…）
+export const EPITHET_TAILS: readonly string[];  // 24 個動物／地形／力量字（狼 潮 光 壁 鷲 聲…）
+export const EPITHET_COUNT = EPITHET_HEADS.length * EPITHET_TAILS.length;  // 576
+
+export function epithetAt(index: number): string;  // 線性索引取稱號（掃描用，不消耗 RNG）
+export function generateEpithet(rng: Rng): string;  // 例：霜狼
+```
+
 #### 人名生成器
 ```typescript
 // src/lib/nameGenerator/person.ts
 export function generatePersonName(rng: Rng): string {
+  if (rng.chance(CONFIG.PERSON_EPITHET_NAME_RATE)) {
+    return generateEpithetPersonName(rng);  // 霜狼·蓋爾
+  }
   const surname = rng.pick(SURNAMES);  // 百家姓
   const given1 = rng.pick(GIVEN_CHARS);  // 常用名字字
-  
+
   if (rng.chance(0.2)) {
-    // 20% 機率產生 3 字名
     const given2 = rng.pick(GIVEN_CHARS);
-    return `${surname}${given1}${given2}`;
+    return `${surname}${given1}${given2}`;  // 3 字名
   }
   return `${surname}${given1}`;
 }
+
+// 專用產生器（測試與明確需求時直接呼叫）/ Explicit generator (tests, explicit needs)
+export function generateEpithetPersonName(rng: Rng): string;  // [稱號]·[兩字外來名]
+export function generatePersonNames(rng: Rng, count: number): string[];  // 允許重複
 ```
 
 #### 地名生成器
 ```typescript
 // src/lib/nameGenerator/place.ts
-export const PLACE_ADJECTIVES: readonly string[] = [/* 60 個形容詞 */];
-export const PLACE_TERRAINS: readonly string[] = [/* 51 個地形 */];
+export const PLACE_ADJECTIVES: readonly string[] = [/* 81 個修飾字：氛圍形容詞 + 具体地物（岩/狼/龍）*/];
+export const PLACE_TERRAINS: readonly string[] = [/* 57 個地形（含高地、前哨、津、埠、磯、峽）*/];
+
+// 傳統風格容量（m1 ≠ m2）/ Classic capacity (m1 !== m2)
 export const PLACE_NAME_CAPACITY =
-  PLACE_ADJECTIVES.length * (PLACE_ADJECTIVES.length - 1) * PLACE_TERRAINS.length; // 180,540（adj1 ≠ adj2）
+  PLACE_ADJECTIVES.length * (PLACE_ADJECTIVES.length - 1) * PLACE_TERRAINS.length; // 369,360
+// 稱號風格容量 / Epithet capacity
+export const PLACE_EPITHET_CAPACITY = EPITHET_COUNT * PLACE_TERRAINS.length;  // 32,832
+// 跨風格重疊（稱號首尾字都屬修飾字池）/ Cross-style overlap
+export const PLACE_EPITHET_OVERLAP;  // 10,659 — 例如「雲影城」兩種風格都組得出
+// 並集容量 = 369,360 + 32,832 − 10,659 / Union capacity
+export const PLACE_TOTAL_NAME_CAPACITY;  // 391,533
 
 export function generatePlaceName(rng: Rng): string {
-  const adj1Index = rng.int(0, PLACE_ADJECTIVES.length - 1);
-  let adj2Index = rng.int(0, PLACE_ADJECTIVES.length - 2); // 排除 adj1 / excludes adj1
-  if (adj2Index >= adj1Index) adj2Index++;
-  const terrain = rng.pick([...PLACE_TERRAINS]); // 地形
-  return `${PLACE_ADJECTIVES[adj1Index]}${PLACE_ADJECTIVES[adj2Index]}${terrain}`;  // 例如：青霞雲嶺
+  if (rng.chance(CONFIG.PLACE_EPITHET_NAME_RATE)) {
+    return generateEpithetPlaceName(rng);  // 霜狼關
+  }
+  const m1 = rng.int(0, PLACE_ADJECTIVES.length - 1);
+  let m2 = rng.int(0, PLACE_ADJECTIVES.length - 2);  // 排除 m1 / excludes m1
+  if (m2 >= m1) m2++;
+  return `${PLACE_ADJECTIVES[m1]}${PLACE_ADJECTIVES[m2]}${rng.pick([...PLACE_TERRAINS])}`;
+  // 例如：青碧城, 灰岩高地, 黑曜要塞
 }
 
-// 已取名集合存在時走 fast path（64 次重試），否則確定性索引掃描 → 保證唯一
+// 已取名集合存在時走 fast path（64 次重試），否則確定性掃描傳統空間再掃稱號空間 → 保證唯一
 export function generateUniquePlaceName(rng: Rng, taken: ReadonlySet<string>): string | null;
 export function generatePlaceNames(rng: Rng, count: number): string[]; // 批量唯一命名
 ```
+
+> `PLACE_TOTAL_NAME_CAPACITY` 必須是**並集**而非兩空間相加，否則「N 個不重複名稱」的
+> 保證會少算重疊的 10,659 個。`place.test.ts` 會實際填滿整個並集來驗證。
+> The total must be the union, not the sum, or the distinct-name guarantee
+> under-counts the 10,659 overlapping names. `place.test.ts` fills the whole
+> union to verify.
 
 #### 勢力名稱生成器
 ```typescript
@@ -943,11 +992,28 @@ export function generateFactionName(rng: Rng): string {
   // ...
 }
 
-// fast path（64 次重試）+ DESCRIPTORS×NOUNS×SUFFIXES 確定性掃描 → 保證唯一
-export function generateUniqueFactionName(rng: Rng, taken: ReadonlySet<string>): string;
-// person.ts 同理：SURNAMES×GIVEN_CHARS 掃描
-export function generateUniquePersonName(rng: Rng, taken: ReadonlySet<string>): string;
+// 稱號風格：[稱號][兩字組織類型] / Epithet style: [epithet][2-char org type]
+export function generateEpithetFactionName(rng: Rng): string;
+export function generateFactionNames(rng: Rng, count: number): string[];  // 批量唯一命名
 ```
+
+#### 名稱唯一性 / Unique Names
+
+兩種風格都在掃描空間內，因此存活名稱不會跨風格撞名。
+Both styles are covered by the scan spaces, so alive names never collide across styles.
+
+```typescript
+// fast path（64 次重試）+ 確定性掃描，掃描依序走兩個空間：
+// Fast path (64 retries) + deterministic scan over two spaces, in order:
+//   人名：SURNAMES×GIVEN_CHARS（8,000）→ 稱號×外來名（576×24 = 13,824）
+//   勢力：DESCRIPTORS×NOUNS×SUFFIXES（40,000）→ 稱號×組織類型（576×12 = 6,912）
+//   地名：PLACE_ADJECTIVES²（m1≠m2, 369,360）→ 稱號×地形（576×57 = 32,832）
+export function generateUniqueFactionName(rng: Rng, taken: ReadonlySet<string>): string | null;
+export function generateUniquePersonName(rng: Rng, taken: ReadonlySet<string>): string | null;
+```
+
+掃描起點取自 RNG，因此相同種子必定得到相同結果。
+Scan start comes from the RNG, so the same seed always yields the same result.
 
 #### 存活名稱唯一性 / Unique Alive Names
 

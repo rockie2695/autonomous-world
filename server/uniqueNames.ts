@@ -12,6 +12,7 @@
 // - 名稱唯一性只約束「存活」實體：死亡國王/解散勢力的名稱可被重用。
 // - RNG 流保持不變：taken 為空時第一個隨機嘗試即成功，消耗與舊版
 //   generateFactionName / generatePersonName 完全相同 → 種子重現性不受影響。
+// - 兩種名稱風格（傳統／稱號）都由產生器與確定性掃描涵蓋，存活名稱不會跨風格撞名。
 // - 回傳值永不為 null：理論上極端撞滿時退化為數字後綴（unreachable guard）。
 // ============================================================================
 
@@ -50,8 +51,8 @@ export async function uniqueAliveFactionName(
   const name = generateUniqueFactionName(rng, taken);
   if (name !== null) return name;
 
-  // unreachable guard：40,000 組合全部佔滿時退化為數字後綴
-  // unreachable guard: numeric suffix when all 40,000 combos are taken
+  // unreachable guard：40,000 傳統 + 6,912 稱號組合全部佔滿時退化為數字後綴
+  // unreachable guard: numeric suffix when all 40,000 classic + 6,912 epithet combos are taken
   const base = generateFactionName(rng);
   for (let i = 2; i < 1000; i++) {
     const candidate = `${base}${i}`;
@@ -93,8 +94,8 @@ export async function uniqueAliveKingName(
   const name = generateUniquePersonName(rng, taken);
   if (name !== null) return name;
 
-  // unreachable guard：8,000 組合全部佔滿時退化為數字後綴
-  // unreachable guard: numeric suffix when all 8,000 combos are taken
+  // unreachable guard：8,000 傳統 + 13,824 稱號組合全部佔滿時退化為數字後綴
+  // unreachable guard: numeric suffix when all 8,000 classic + 13,824 epithet combos are taken
   const base = generatePersonName(rng);
   for (let i = 2; i < 1000; i++) {
     const candidate = `${base}${i}`;

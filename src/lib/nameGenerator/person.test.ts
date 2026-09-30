@@ -4,23 +4,65 @@ import {
   generatePersonName,
   generatePersonNames,
   generateUniquePersonName,
+  generateEpithetPersonName,
 } from './person';
+import { EPITHET_COUNT, EPITHET_SEPARATOR, epithetAt } from './epithet';
+
+// 常見中文姓氏（百家姓前 100）/ Common Chinese surnames (top 100 from 百家姓)
+const SURNAMES = new Set([
+  '王', '李', '張', '劉', '陳', '楊', '黃', '趙', '吳', '周',
+  '徐', '孫', '馬', '朱', '胡', '郭', '林', '何', '高', '羅',
+  '鄭', '梁', '謝', '宋', '唐', '許', '韓', '馮', '鄧', '曹',
+  '彭', '曾', '蕭', '田', '董', '潘', '袁', '蔡', '蔣', '余',
+  '于', '杜', '葉', '程', '魏', '蘇', '呂', '丁', '任', '盧',
+  '姚', '沈', '鍾', '姜', '崔', '譚', '陸', '范', '汪', '廖',
+  '石', '金', '韋', '賈', '夏', '付', '方', '鄒', '熊', '白',
+  '孟', '秦', '邱', '侯', '江', '尹', '薛', '閆', '雷', '龍',
+  '段', '郝', '孔', '毛', '史', '黎', '賀', '顧', '龔', '邵',
+  '覃', '武', '錢', '戴', '嚴', '莫', '康', '萬', '溫', '牛',
+]);
+
+/** 全部合法稱號 / Every valid epithet */
+const EPITHETS = new Set(
+  Array.from({ length: EPITHET_COUNT }, (_, i) => epithetAt(i))
+);
+
+/** 稱號風格：[稱號]·[兩字外來名] / Epithet style: [epithet]·[2-char foreign name] */
+function isEpithetName(name: string): boolean {
+  const parts = name.split(EPITHET_SEPARATOR);
+  return (
+    parts.length === 2 &&
+    EPITHETS.has(parts[0] ?? '') &&
+    (parts[1]?.length ?? 0) === 2
+  );
+}
+
+/** 傳統風格：[姓][名] 或 [姓][名][名] / Classic style: [surname][given] with 1-2 given chars */
+function isClassicName(name: string): boolean {
+  return (
+    !name.includes(EPITHET_SEPARATOR) &&
+    name.length >= 2 &&
+    name.length <= 3 &&
+    SURNAMES.has(name[0] ?? '')
+  );
+}
 
 describe('Person Name Generator', () => {
   describe('generatePersonName', () => {
-    it('should generate a Chinese person name', () => {
+    it('should generate a Chinese person name in one of the two styles', () => {
       const rng = createRng('test-seed');
-      const name = generatePersonName(rng);
-      
-      expect(typeof name).toBe('string');
-      expect(name.length).toBeGreaterThanOrEqual(2);
-      expect(name.length).toBeLessThanOrEqual(3);
+
+      for (let i = 0; i < 200; i++) {
+        const name = generatePersonName(rng);
+        expect(typeof name).toBe('string');
+        expect(isClassicName(name) || isEpithetName(name)).toBe(true);
+      }
     });
 
     it('should be deterministic with the same seed', () => {
       const rng1 = createRng('same-seed');
       const rng2 = createRng('same-seed');
-      
+
       for (let i = 0; i < 10; i++) {
         expect(generatePersonName(rng1)).toBe(generatePersonName(rng2));
       }
@@ -29,35 +71,63 @@ describe('Person Name Generator', () => {
     it('should generate different names with different seeds', () => {
       const rng1 = createRng('seed-1');
       const rng2 = createRng('seed-2');
-      
+
       const names1 = Array.from({ length: 10 }, () => generatePersonName(rng1));
       const names2 = Array.from({ length: 10 }, () => generatePersonName(rng2));
-      
+
       // 至少部分名稱應不同 / At least some names should be different
       const hasDifferent = names1.some((name, i) => name !== names2[i]);
       expect(hasDifferent).toBe(true);
     });
 
-    it('should have a surname as the first character', () => {
+    it('should have a surname as the first character of classic names', () => {
       const rng = createRng('test-seed');
-      
-      // 常見中文姓氏（百家姓前 100）/ Common Chinese surnames (top 100 from 百家姓)
-      const commonSurnames = [
-        '王', '李', '張', '劉', '陳', '楊', '黃', '趙', '吳', '周',
-        '徐', '孫', '馬', '朱', '胡', '郭', '林', '何', '高', '羅',
-        '鄭', '梁', '謝', '宋', '唐', '許', '韓', '馮', '鄧', '曹',
-        '彭', '曾', '蕭', '田', '董', '潘', '袁', '蔡', '蔣', '余',
-        '于', '杜', '葉', '程', '魏', '蘇', '呂', '丁', '任', '盧',
-        '姚', '沈', '鍾', '姜', '崔', '譚', '陸', '范', '汪', '廖',
-        '石', '金', '韋', '賈', '夏', '付', '方', '鄒', '熊', '白',
-        '孟', '秦', '邱', '侯', '江', '尹', '薛', '閆', '雷', '龍',
-        '段', '郝', '孔', '毛', '史', '黎', '賀', '顧', '龔', '邵',
-        '覃', '武', '錢', '戴', '嚴', '莫', '康', '萬', '溫', '牛',
-      ];
-      
-      for (let i = 0; i < 50; i++) {
+      let classics = 0;
+
+      for (let i = 0; i < 200; i++) {
         const name = generatePersonName(rng);
-        expect(commonSurnames).toContain(name[0]);
+        if (name.includes(EPITHET_SEPARATOR)) continue;
+        classics++;
+        expect(SURNAMES.has(name[0] ?? '')).toBe(true);
+      }
+
+      expect(classics).toBeGreaterThan(0);
+    });
+
+    it('should mix both classic and epithet styles', () => {
+      const rng = createRng('mixed-style-seed');
+      const names = Array.from({ length: 300 }, () => generatePersonName(rng));
+
+      const epithets = names.filter((n) => n.includes(EPITHET_SEPARATOR));
+      const classics = names.filter((n) => !n.includes(EPITHET_SEPARATOR));
+
+      expect(epithets.length).toBeGreaterThan(0);
+      expect(classics.length).toBeGreaterThan(0);
+      // 兩種風格都在合理比例內 / Both styles appear in a sane proportion
+      expect(epithets.length / names.length).toBeGreaterThan(0.15);
+      expect(epithets.length / names.length).toBeLessThan(0.6);
+    });
+  });
+
+  describe('generateEpithetPersonName', () => {
+    it('should always produce [epithet]·[foreign name] names', () => {
+      const rng = createRng('epithet-seed');
+
+      for (let i = 0; i < 200; i++) {
+        const name = generateEpithetPersonName(rng);
+        expect(name).toContain(EPITHET_SEPARATOR);
+        expect(isEpithetName(name)).toBe(true);
+      }
+    });
+
+    it('should be deterministic with the same seed', () => {
+      const rng1 = createRng('same-epithet-seed');
+      const rng2 = createRng('same-epithet-seed');
+
+      for (let i = 0; i < 10; i++) {
+        expect(generateEpithetPersonName(rng1)).toBe(
+          generateEpithetPersonName(rng2)
+        );
       }
     });
   });
@@ -79,7 +149,7 @@ describe('Person Name Generator', () => {
     });
 
     it('should be deterministic with the same seed', () => {
-      const taken = new Set<string>(['王飛', '李雲']);
+      const taken = new Set<string>(['王飛', '李雲', '霜狼·蓋爾']);
       const rng1 = createRng('same-unique-seed');
       const rng2 = createRng('same-unique-seed');
 
@@ -109,21 +179,22 @@ describe('Person Name Generator', () => {
         expect(generateUniquePersonName(createRng(seed), taken)).toBe(name);
       }
     });
+
   });
 
   describe('generatePersonNames', () => {
     it('should generate the requested number of names', () => {
       const rng = createRng('test-seed');
       const names = generatePersonNames(rng, 10);
-      
+
       expect(names.length).toBe(10);
     });
 
     it('should return an array of strings', () => {
       const rng = createRng('test-seed');
       const names = generatePersonNames(rng, 5);
-      
-      names.forEach(name => {
+
+      names.forEach((name) => {
         expect(typeof name).toBe('string');
         expect(name.length).toBeGreaterThanOrEqual(2);
       });
@@ -133,7 +204,7 @@ describe('Person Name Generator', () => {
       const rng = createRng('test-seed');
       // 產生大量名稱 — 部分可能重複 / Generate many names - some may repeat
       const names = generatePersonNames(rng, 100);
-      
+
       expect(names.length).toBe(100);
       // 若有重複，集合可能小於陣列 / The set might be smaller than the array if there are duplicates
       const uniqueNames = new Set(names);

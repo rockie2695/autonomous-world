@@ -10,10 +10,20 @@
 //   to（必填）— 結束回合數 / to (required) — End round number
 // 回應 / Response: {
 //   rounds: number[],
-//   territories: number[],  // 每回合的勢力領地數 / Faction territory counts per round
-//   troops: number[],       // 每回合的總兵力 / Total troops per round
-//   gold: number[],         // 每回合的總金幣 / Total gold per round
-//   characters: number[],   // 每回合的角色數 / Character counts per round
+//   factions: Array<{
+//     id, name, color,
+//     troops: number[],       // 每回合的勢力兵力 / Faction troops per round
+//     gold: number[],         // 每回合的勢力金幣 / Faction gold per round
+//     territories: number[],  // 每回合的勢力領地數 / Faction territory counts per round
+//     characters: number[],   // 每回合的勢力存活將領數 / Alive characters per faction per round
+//   }>,
+//   world: {                 // 世界整體時間序列 / World-wide time series
+//     aliveFactions: number[],
+//     totalCharacters: number[],
+//     unownedPlaces: number[],
+//     totalGarrison: number[],
+//     totalRoads: number[],
+//   }
 // }
 // ============================================================================
 
@@ -79,17 +89,28 @@ export async function GET(request: NextRequest) {
     troops: number[];
     gold: number[];
     territories: number[];
+    characters: number[];
   }>();
+
+  // 世界整體時間序列 / World-wide time series
+  const worldSeries = {
+    aliveFactions: [] as number[],
+    totalCharacters: [] as number[],
+    unownedPlaces: [] as number[],
+    totalGarrison: [] as number[],
+    totalRoads: [] as number[],
+  };
 
   for (const snapshot of snapshots) {
     try {
       const state = decompressSnapshot(Buffer.from(snapshot.data));
       rounds.push(snapshot.round);
 
-      // 統計每個勢力的領地、兵力、金錢 / Count territories, troops, gold per faction
+      // 統計每個勢力的領地、兵力、金錢、將領 / Count territories, troops, gold, characters per faction
       const factionTroops = new Map<string, number>();
       const factionGold = new Map<string, number>();
       const factionTerritories = new Map<string, number>();
+      const factionCharacters = new Map<string, number>();
 
       // 計算領地數 / Count territories
       for (const place of state.places) {
@@ -101,7 +122,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      // 計算兵力和金錢 / Count troops and gold
+      // 計算兵力、金錢與存活將領數 / Count troops, gold and alive characters
       for (const char of state.characters) {
         if (char.alive && char.factionId) {
           factionTroops.set(
@@ -111,6 +132,10 @@ export async function GET(request: NextRequest) {
           factionGold.set(
             char.factionId,
             (factionGold.get(char.factionId) ?? 0) + char.gold
+          );
+          factionCharacters.set(
+            char.factionId,
+            (factionCharacters.get(char.factionId) ?? 0) + 1
           );
         }
       }
@@ -125,13 +150,24 @@ export async function GET(request: NextRequest) {
             troops: [],
             gold: [],
             territories: [],
+            characters: [],
           });
         }
         const fd = factionDataMap.get(faction.id)!;
         fd.troops.push(factionTroops.get(faction.id) ?? 0);
         fd.gold.push(factionGold.get(faction.id) ?? 0);
         fd.territories.push(factionTerritories.get(faction.id) ?? 0);
+        fd.characters.push(factionCharacters.get(faction.id) ?? 0);
       }
+
+      // 世界整體統計 / World-wide stats
+      worldSeries.aliveFactions.push(state.factions.filter((f) => f.alive).length);
+      worldSeries.totalCharacters.push(state.characters.filter((c) => c.alive).length);
+      worldSeries.unownedPlaces.push(state.places.filter((p) => !p.factionId).length);
+      worldSeries.totalGarrison.push(
+        state.places.reduce((sum, p) => sum + p.garrison, 0)
+      );
+      worldSeries.totalRoads.push(state.roads.length);
     } catch {
       // 跳過損壞的快照 / Skip corrupted snapshots
     }
@@ -140,5 +176,6 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     rounds,
     factions: Array.from(factionDataMap.values()),
+    world: worldSeries,
   });
 }

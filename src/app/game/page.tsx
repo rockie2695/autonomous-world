@@ -1727,6 +1727,436 @@ function EventLog({
   );
 }
 
+// ─── 統計圖表 / Stats Charts ─────────────────────────────────────────────────────
+
+/** 圖表類型 / Chart type */
+type ChartType = 'line' | 'pie' | 'square';
+
+const CHART_TYPES: readonly ChartType[] = ['line', 'pie', 'square'];
+
+/** 圖表類型的 i18n 鍵 / i18n keys for the chart types */
+const CHART_TYPE_LABEL_KEYS: Record<ChartType, string> = {
+  line: 'stats.line',
+  pie: 'stats.pie',
+  square: 'stats.square',
+};
+
+/** 長條圖最多顯示的回合數，較早的回合會被省略 / Max rounds in bar charts, older rounds are dropped */
+const BAR_MAX_ROUNDS = 24;
+
+const CHART_W = 280;
+const CHART_H = 120;
+const CHART_PAD = 26;
+
+/** 單一序列的圖表資料 / One series of chart data */
+interface ChartSeries {
+  values: number[];
+  color: string;
+  label: string;
+}
+
+/** 可圖表化的勢力欄位 / Per-faction fields that can be charted */
+type FactionStatKey = 'troops' | 'gold' | 'territories' | 'characters';
+
+/** 可圖表化的世界欄位 / World-wide fields that can be charted */
+type WorldStatKey =
+  | 'aliveFactions'
+  | 'totalCharacters'
+  | 'unownedPlaces'
+  | 'totalGarrison'
+  | 'totalRoads';
+
+/** GET /api/world/stats 回應格式 / GET /api/world/stats response shape */
+interface StatsPayload {
+  rounds: number[];
+  factions: Array<{
+    id: string;
+    name: string;
+    color: string;
+    troops: number[];
+    gold: number[];
+    territories: number[];
+    characters: number[];
+  }>;
+  world: Record<WorldStatKey, number[]>;
+}
+
+/** 圖表外框：標題 + 內容 / Chart frame: title + body */
+function ChartFrame({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="mb-4 last:mb-0">
+      <div className="text-xs text-gray-400 font-orbitron tracking-wider mb-1.5 uppercase">
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** 圖例：單一序列時隱藏 / Legend — hidden when there is a single series */
+function ChartLegend({ series, shares }: { series: ChartSeries[]; shares?: number[] }) {
+  if (series.length < 2) return null;
+  return (
+    <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+      {series.map((s, i) => (
+        <li
+          key={`${s.label}-${i}`}
+          className="inline-flex items-center gap-1 text-[10px] text-gray-400 font-mono"
+        >
+          <span
+            className="w-2 h-2 rounded-[1px] shrink-0"
+            style={{ backgroundColor: s.color }}
+          />
+          <span className="truncate max-w-[80px]">{s.label}</span>
+          {shares && <span className="text-gray-500">{shares[i].toFixed(0)}%</span>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** 水平格線 / Horizontal grid lines */
+function ChartGrid({ maxVal }: { maxVal: number }) {
+  const plotH = CHART_H - CHART_PAD * 2;
+  return (
+    <g>
+      {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
+        <line
+          key={pct}
+          x1={CHART_PAD}
+          y1={CHART_H - CHART_PAD - pct * plotH}
+          x2={CHART_W - CHART_PAD}
+          y2={CHART_H - CHART_PAD - pct * plotH}
+          stroke="#1e293b"
+          strokeWidth={0.5}
+        />
+      ))}
+      <text
+        x={2}
+        y={CHART_PAD - 8}
+        fill="#475569"
+        fontSize={8}
+        fontFamily="monospace"
+      >
+        {maxVal}
+      </text>
+    </g>
+  );
+}
+
+/** 折線圖：每個序列一條線 / Line chart — one line per series */
+function LineChart({
+  series,
+  title,
+  rounds,
+}: {
+  series: ChartSeries[];
+  title: string;
+  rounds: number[];
+}) {
+  const maxVal = Math.max(1, ...series.flatMap((s) => s.values));
+  const plotW = CHART_W - CHART_PAD * 2;
+  const plotH = CHART_H - CHART_PAD * 2;
+  const xScale = (i: number) =>
+    CHART_PAD + (i / Math.max(rounds.length - 1, 1)) * plotW;
+  const yScale = (v: number) => CHART_H - CHART_PAD - (v / maxVal) * plotH;
+
+  return (
+    <ChartFrame title={title}>
+      <svg
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        className="w-full"
+        role="img"
+        aria-label={title}
+      >
+        <ChartGrid maxVal={maxVal} />
+        {series.map((s, si) => (
+          <polyline
+            key={si}
+            points={s.values.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
+            fill="none"
+            stroke={s.color}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+            strokeLinecap="round"
+          />
+        ))}
+        {/* 標記最新一回合的端點 / Mark the latest round of each series */}
+        {series.map((s, si) => {
+          const last = s.values.length - 1;
+          if (last < 0) return null;
+          return (
+            <circle
+              key={si}
+              cx={xScale(last)}
+              cy={yScale(s.values[last] ?? 0)}
+              r={2}
+              fill={s.color}
+            />
+          );
+        })}
+      </svg>
+      <ChartLegend series={series} />
+    </ChartFrame>
+  );
+}
+
+/** 圓環扇形路徑 / Donut sector path */
+function donutSector(
+  cx: number,
+  cy: number,
+  rOuter: number,
+  rInner: number,
+  start: number,
+  end: number
+): string {
+  const largeArc = end - start > Math.PI ? 1 : 0;
+  const p = (r: number, a: number) => `${cx + r * Math.cos(a)} ${cy + r * Math.sin(a)}`;
+  return [
+    `M ${p(rOuter, start)}`,
+    `A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${p(rOuter, end)}`,
+    `L ${p(rInner, end)}`,
+    `A ${rInner} ${rInner} 0 ${largeArc} 0 ${p(rInner, start)}`,
+    'Z',
+  ].join(' ');
+}
+
+/** 圓餅圖：最新一回合的佔比 / Pie chart — share at the latest round */
+function PieChart({ series, title }: { series: ChartSeries[]; title: string }) {
+  const values = series.map((s) => s.values[s.values.length - 1] ?? 0);
+  const total = values.reduce((a, b) => a + b, 0);
+  const size = 120;
+  const cx = size / 2;
+  const cy = size / 2;
+  const rOuter = size / 2 - 2;
+  const rInner = rOuter * 0.55;
+  const startAngle = -Math.PI / 2;
+  // 累加前置總數取得每個扇形的起點角度 / Prefix sum gives each sector its start angle
+  const prefixAt = (i: number) => values.slice(0, i).reduce((a, b) => a + b, 0);
+
+  return (
+    <ChartFrame title={title}>
+      {total <= 0 ? (
+        <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
+      ) : (
+        <div className="flex items-center gap-3">
+          <svg
+            viewBox={`0 0 ${size} ${size}`}
+            className="w-24 shrink-0"
+            role="img"
+            aria-label={title}
+          >
+            {series.map((s, i) => {
+              const value = values[i] ?? 0;
+              if (value <= 0) return null;
+              const from = startAngle + (prefixAt(i) / total) * Math.PI * 2;
+              const sweep = (value / total) * Math.PI * 2;
+              return (
+                <path
+                  key={i}
+                  d={donutSector(cx, cy, rOuter, rInner, from, from + sweep)}
+                  fill={s.color}
+                  opacity={0.9}
+                />
+              );
+            })}
+            <text
+              x={cx}
+              y={cy + 5}
+              textAnchor="middle"
+              fill="#e2e8f0"
+              fontSize={15}
+              fontFamily="monospace"
+            >
+              {total}
+            </text>
+          </svg>
+          <ChartLegend
+            series={series}
+            shares={values.map((v) => (v / total) * 100)}
+          />
+        </div>
+      )}
+    </ChartFrame>
+  );
+}
+
+/** 進度環：目前值相對歷史峰值的比例（單一序列時取代圓餅圖）
+ *  Gauge ring — current value against its historical peak (replaces the pie for a single series) */
+function GaugeChart({ series, title }: { series: ChartSeries[]; title: string }) {
+  const s = series[0];
+  const values = s?.values ?? [];
+  const value = values[values.length - 1] ?? 0;
+  const peak = Math.max(1, ...values);
+  const ratio = Math.min(1, value / peak);
+  const size = 120;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = size / 2 - 9;
+  const circumference = 2 * Math.PI * r;
+
+  return (
+    <ChartFrame title={title}>
+      <svg
+        viewBox={`0 0 ${size} ${size}`}
+        className="w-24 mx-auto"
+        role="img"
+        aria-label={title}
+      >
+        <circle cx={cx} cy={cy} r={r} fill="none" stroke="#1e293b" strokeWidth={8} />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          fill="none"
+          stroke={s?.color ?? '#22d3ee'}
+          strokeWidth={8}
+          strokeLinecap="round"
+          strokeDasharray={`${circumference * ratio} ${circumference}`}
+          transform={`rotate(-90 ${cx} ${cy})`}
+        />
+        <text
+          x={cx}
+          y={cy + 2}
+          textAnchor="middle"
+          fill="#e2e8f0"
+          fontSize={17}
+          fontFamily="monospace"
+        >
+          {value}
+        </text>
+        <text
+          x={cx}
+          y={cy + 15}
+          textAnchor="middle"
+          fill="#64748b"
+          fontSize={8}
+          fontFamily="monospace"
+        >
+          {t('stats.peak')} {peak}
+        </text>
+      </svg>
+    </ChartFrame>
+  );
+}
+
+/** 長條圖：每回合一根堆疊長條 / Bar chart — one stacked bar per round */
+function BarChart({
+  series,
+  title,
+  rounds,
+}: {
+  series: ChartSeries[];
+  title: string;
+  rounds: number[];
+}) {
+  const start = Math.max(0, rounds.length - BAR_MAX_ROUNDS);
+  const visibleRounds = rounds.slice(start);
+  const totals = visibleRounds.map((_, i) =>
+    series.reduce((sum, s) => sum + (s.values[start + i] ?? 0), 0)
+  );
+  const maxVal = Math.max(1, ...totals);
+  const plotW = CHART_W - CHART_PAD * 2;
+  const plotH = CHART_H - CHART_PAD * 2;
+  const slot = plotW / Math.max(visibleRounds.length, 1);
+  const barW = Math.max(1.5, Math.min(16, slot * 0.6));
+  const lastRound = visibleRounds[visibleRounds.length - 1];
+  // 該回合前已堆疊的數值 / How much is already stacked below in that round
+  const stackedBelow = (roundIdx: number, upto: number) =>
+    series
+      .slice(0, upto)
+      .reduce((sum, s) => sum + (s.values[start + roundIdx] ?? 0), 0);
+
+  return (
+    <ChartFrame title={title}>
+      <svg
+        viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+        className="w-full"
+        role="img"
+        aria-label={title}
+      >
+        <ChartGrid maxVal={maxVal} />
+        {totals.map((_, i) => {
+          const x = CHART_PAD + i * slot + (slot - barW) / 2;
+          return (
+            <g key={i}>
+              {series.map((s, si) => {
+                const v = s.values[start + i] ?? 0;
+                if (v <= 0) return null;
+                const h = (v / maxVal) * plotH;
+                const y =
+                  CHART_H - CHART_PAD - ((stackedBelow(i, si) + v) / maxVal) * plotH;
+                return (
+                  <rect
+                    key={si}
+                    x={x}
+                    y={y}
+                    width={barW}
+                    height={Math.max(h, 0.5)}
+                    fill={s.color}
+                    opacity={0.9}
+                  />
+                );
+              })}
+            </g>
+          );
+        })}
+        {visibleRounds.length > 0 && (
+          <>
+            <text
+              x={CHART_PAD}
+              y={CHART_H - 6}
+              fill="#475569"
+              fontSize={8}
+              fontFamily="monospace"
+            >
+              {visibleRounds[0]}
+            </text>
+            <text
+              x={CHART_W - CHART_PAD}
+              y={CHART_H - 6}
+              textAnchor="end"
+              fill="#475569"
+              fontSize={8}
+              fontFamily="monospace"
+            >
+              {lastRound}
+            </text>
+          </>
+        )}
+      </svg>
+      <ChartLegend series={series} />
+    </ChartFrame>
+  );
+}
+
+/** 圖表類型切換（折線／圓餅／長條）/ Chart type switch (line / pie / bar) */
+function ChartTypeSwitch({
+  value,
+  onChange,
+}: {
+  value: ChartType;
+  onChange: (next: ChartType) => void;
+}) {
+  return (
+    <div className="flex gap-1 shrink-0" role="group" aria-label={t('stats.chartType')}>
+      {CHART_TYPES.map((ct) => (
+        <button
+          key={ct}
+          type="button"
+          onClick={() => onChange(ct)}
+          aria-pressed={value === ct}
+          className={`ds-gm-btn px-2 py-1 text-[10px] font-orbitron tracking-wider ${
+            value === ct ? 'ds-gm-btn-accent' : ''
+          }`}
+        >
+          {t(CHART_TYPE_LABEL_KEYS[ct])}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function StatsCharts({
   worldId,
   currentRound,
@@ -1734,17 +2164,8 @@ function StatsCharts({
   worldId: string;
   currentRound: number;
 }) {
-  const [chartData, setChartData] = useState<{
-    factions: Array<{
-      id: string;
-      name: string;
-      color: string;
-      troops: number[];
-      gold: number[];
-      territories: number[];
-    }>;
-    rounds: number[];
-  } | null>(null);
+  const [chartType, setChartType] = useState<ChartType>('line');
+  const [data, setData] = useState<StatsPayload | null>(null);
   const [fetchFailed, setFetchFailed] = useState(false);
 
   useEffect(() => {
@@ -1755,8 +2176,8 @@ function StatsCharts({
       try {
         const res = await apiFetch(`/api/world/stats?from=0&to=${currentRound}`);
         if (res.ok) {
-          const data = await res.json();
-          setChartData(data);
+          const payload: StatsPayload = await res.json();
+          if (!cancelled) setData(payload);
         } else if (!cancelled) {
           setFetchFailed(true);
         }
@@ -1770,12 +2191,13 @@ function StatsCharts({
     };
   }, [currentRound, worldId]);
 
-  if (currentRound < 1 || !chartData || chartData.factions.length === 0) {
+  if (currentRound < 1 || !data || data.rounds.length === 0) {
     return (
       <div className="ds-gm-panel p-3">
-        <h3 className="ds-gm-title mb-3">
-          {t('stats.title')}
-        </h3>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className="ds-gm-title">{t('stats.title')}</h3>
+          <ChartTypeSwitch value={chartType} onChange={setChartType} />
+        </div>
         <p className="text-gray-400 text-xs" role={fetchFailed ? 'alert' : undefined}>
           {fetchFailed ? t('general.error') : t('game.noData')}
         </p>
@@ -1783,77 +2205,78 @@ function StatsCharts({
     );
   }
 
-  const { factions, rounds } = chartData;
-  const width = 280;
-  const height = 120;
-  const padding = 30;
+  const { factions, rounds, world } = data;
 
-  function renderLineChart(
-    data: number[][],
-    colors: string[],
-    labels: string[],
-    title: string
-  ) {
-    const allValues = data.flat();
-    const maxVal = Math.max(...allValues, 1);
-    const minVal = 0;
-    const xScale = (i: number) =>
-      padding + (i / Math.max(rounds.length - 1, 1)) * (width - 2 * padding);
-    const yScale = (v: number) =>
-      height - padding - ((v - minVal) / (maxVal - minVal)) * (height - 2 * padding);
+  const factionSeries = (key: FactionStatKey): ChartSeries[] =>
+    factions.map((f) => ({ values: f[key], color: f.color, label: f.name }));
 
+  const worldSeries = (key: WorldStatKey): ChartSeries[] => [
+    { values: world[key] ?? [], color: '#22d3ee', label: t('stats.title') },
+  ];
+
+  // 勢力數據（每個勢力一條序列）/ Faction data — one series per faction
+  const factionCharts: Array<{ title: string; series: ChartSeries[] }> = [
+    { title: t('stats.territoriesOverTime'), series: factionSeries('territories') },
+    { title: t('stats.troopsOverTime'), series: factionSeries('troops') },
+    { title: t('stats.goldOverTime'), series: factionSeries('gold') },
+    { title: t('stats.charactersOverTime'), series: factionSeries('characters') },
+  ];
+
+  // 世界整體數據（單一序列）/ World-wide data — single series
+  const worldCharts: Array<{ title: string; series: ChartSeries[] }> = [
+    { title: t('stats.aliveFactionsOverTime'), series: worldSeries('aliveFactions') },
+    { title: t('stats.totalCharactersOverTime'), series: worldSeries('totalCharacters') },
+    { title: t('stats.unownedPlacesOverTime'), series: worldSeries('unownedPlaces') },
+    { title: t('stats.garrisonOverTime'), series: worldSeries('totalGarrison') },
+    { title: t('stats.roadsOverTime'), series: worldSeries('totalRoads') },
+  ];
+
+  function renderChart(chart: { title: string; series: ChartSeries[] }) {
+    if (chart.series.length === 0) return null;
+    if (chartType === 'pie') {
+      // 單一序列用進度環，其餘用圓餅圖 / Single series uses the gauge, otherwise a pie
+      return chart.series.length === 1 ? (
+        <GaugeChart key={chart.title} series={chart.series} title={chart.title} />
+      ) : (
+        <PieChart key={chart.title} series={chart.series} title={chart.title} />
+      );
+    }
+    if (chartType === 'square') {
+      return (
+        <BarChart
+          key={chart.title}
+          series={chart.series}
+          title={chart.title}
+          rounds={rounds}
+        />
+      );
+    }
     return (
-      <div className="mb-3">
-        <div className="text-xs text-gray-400 font-orbitron tracking-wider mb-1.5 uppercase">{title}</div>
-        <svg width={width} height={height} className="w-full">
-          {[0, 0.25, 0.5, 0.75, 1].map((pct) => (
-            <line
-              key={pct}
-              x1={padding}
-              y1={height - padding - pct * (height - 2 * padding)}
-              x2={width - padding}
-              y2={height - padding - pct * (height - 2 * padding)}
-              stroke="#1e293b"
-              strokeWidth={0.5}
-            />
-          ))}
-          {data.map((series, si) => (
-            <polyline
-              key={si}
-              points={series.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
-              fill="none"
-              stroke={colors[si]}
-              strokeWidth={1.5}
-              strokeLinejoin="round"
-            />
-          ))}
-          {labels.map((label, i) => (
-            <g key={i}>
-              <rect x={padding + i * 70} y={4} width={8} height={8} fill={colors[i]} rx={1} />
-              <text x={padding + i * 70 + 12} y={12} fill="#94a3b8" fontSize={8} fontFamily="monospace">
-                {label}
-              </text>
-            </g>
-          ))}
-        </svg>
-      </div>
+      <LineChart
+        key={chart.title}
+        series={chart.series}
+        title={chart.title}
+        rounds={rounds}
+      />
     );
   }
 
-  const troopData = factions.map((f) => f.troops);
-  const goldData = factions.map((f) => f.gold);
-  const territoryData = factions.map((f) => f.territories);
-  const factionColors = factions.map((f) => f.color);
-  const factionNames = factions.map((f) => f.name);
-
   return (
     <div className="ds-gm-panel p-3">
-      <h3 className="ds-gm-title mb-3">
-        {t('stats.title')}
-      </h3>
-      {renderLineChart(troopData, factionColors, factionNames, t('stats.troopsOverTime'))}
-      {renderLineChart(goldData, factionColors, factionNames, t('stats.goldOverTime'))}
-      {renderLineChart(territoryData, factionColors, factionNames, t('stats.territoriesOverTime'))}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <h3 className="ds-gm-title">{t('stats.title')}</h3>
+        <ChartTypeSwitch value={chartType} onChange={setChartType} />
+      </div>
+      {factionCharts.map((chart) => (
+        <div key={chart.title}>{renderChart(chart)}</div>
+      ))}
+      {factionCharts.some((c) => c.series.length > 0) && (
+        <div className="border-t border-white/5 pt-3 mt-1">
+          {worldCharts.map((chart) => (
+            <div key={chart.title}>{renderChart(chart)}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -2,19 +2,23 @@
 // 勢力名稱產生器
 // Faction Name Generator
 // ============================================================================
-// 以 3-5 字組合產生中文勢力名稱。
-// Generates Chinese faction names using 3-5 character combinations.
-// 例：蒼龍盟, 金鳳閣, 鐵血營, 風雷幫
-// Examples: 蒼龍盟, 金鳳閣, 鐵血營, 風雷幫
+// 產生中文勢力名稱，共兩種風格 / Generates Chinese faction names in two styles:
+// - 傳統 / classic：「蒼龍盟」（修飾詞 + 名詞 + 單字後綴）
+// - 稱號 / epithet：「霜脊議會」（兩字稱號 + 兩字組織類型）
 //
-// 勢力名稱混合以下元素：
-// Factions are named with a mix of:
+// 兩種風格依 CONFIG.FACTION_EPITHET_NAME_RATE 混合出現。
+// The two styles are mixed according to CONFIG.FACTION_EPITHET_NAME_RATE.
+//
+// 傳統風格混合以下元素：
+// The classic style mixes these elements:
 // - 描述性形容詞（顏色、大小、品質）/ Descriptive adjectives (color, size, quality)
 // - 象徵性名詞（動物、元素、概念）/ Symbolic nouns (animals, elements, concepts)
 // - 組織後綴（盟、閣、營、幫等）/ Organization suffixes (盟, 閣, 營, 幫, etc.)
 // ============================================================================
 
 import { type Rng } from '../rng';
+import { CONFIG } from '../gameConfig';
+import { EPITHET_COUNT, epithetAt, generateEpithet } from './epithet';
 
 // ─── 名稱元件 / Name Components ────────────────────────────────────────────
 
@@ -56,22 +60,55 @@ const SUFFIXES = [
   '殿',   // 寺廟 / Temple
 ];
 
+/**
+ * 稱號風格的組織類型（皆為兩字）。
+ * Organization types for the epithet style (all two characters).
+ * 例：議會, 軍團, 聯邦 / Examples: 議會, 軍團, 聯邦
+ */
+const ORG_TYPES = [
+  '議會', '軍團', '商盟', '聯邦', '王庭', '神殿',
+  '教團', '城邦', '商團', '騎團', '劍盟', '血盟',
+] as const;
+
 // ─── 產生器 / Generator ────────────────────────────────────────────────────
 
 /**
- * 產生隨機中文勢力名稱。
- * Generate a random Chinese faction name.
+ * 產生「稱號 + 組織類型」風格的勢力名稱。
+ * Generate a faction name in the "[epithet][organization type]" style.
  *
- * 格式變化（3-5 字）/ Format varies (3-5 characters):
- * - 40% 機率：[修飾詞][名詞][後綴]（3 字）—「蒼龍盟」/ 40% chance: [Descriptor][Noun][Suffix] (3 chars) — "蒼龍盟"
- * - 30% 機率：[修飾詞][名詞][名詞][後綴]（4 字）—「金龍鳳閣」/ 30% chance: [Descriptor][Noun][Noun][Suffix] (4 chars) — "金龍鳳閣"
- * - 30% 機率：[修飾詞][修飾詞][名詞][後綴]（4 字）—「蒼翠龍盟」/ 30% chance: [Descriptor][Descriptor][Noun][Suffix] (4 chars) — "蒼翠龍盟"
- * - 可選：[修飾詞][名詞][名詞][名詞][後綴]（5 字）/ Optional: [Descriptor][Noun][Noun][Noun][Suffix] (5 chars)
+ * 格式：[稱號][組織類型] — 例「霜脊議會」
+ * Format: [Epithet][Organization type] — e.g. 霜脊議會
  *
  * @param rng - 用於可重現性的種子 RNG 實例 / Seeded RNG instance for reproducibility
- * @returns 唯一勢力名稱（呼叫端應驗證唯一性）/ A unique faction name (caller should verify uniqueness)
+ * @returns 稱號風格勢力名稱 / An epithet-style faction name
+ */
+export function generateEpithetFactionName(rng: Rng): string {
+  const epithet = generateEpithet(rng);
+  const org = rng.pick([...ORG_TYPES]) ?? '議會';
+  return `${epithet}${org}`;
+}
+
+/**
+ * 產生隨機中文勢力名稱（兩種風格混合）。
+ * Generate a random Chinese faction name (mixing both styles).
+ *
+ * 格式變化 / Formats:
+ * - 稱號風格（機率 CONFIG.FACTION_EPITHET_NAME_RATE）：[稱號][組織類型]（4 字）—「霜脊議會」
+ * - 傳統風格（3-5 字）：
+ *   - 40%：[修飾詞][名詞][後綴]（3 字）—「蒼龍盟」
+ *   - 30%：[修飾詞][名詞][名詞][後綴]（4 字）—「金龍鳳閣」
+ *   - 20%：[修飾詞][修飾詞][名詞][後綴]（4 字）—「蒼翠龍盟」
+ *   - 10%：[修飾詞][名詞][名詞][名詞][後綴]（5 字）—「蒼龍鳳雲閣」
+ *
+ * @param rng - 用於可重現性的種子 RNG 實例 / Seeded RNG instance for reproducibility
+ * @returns 隨機勢力名稱（呼叫端應驗證唯一性）/ A random faction name (caller should verify uniqueness)
  */
 export function generateFactionName(rng: Rng): string {
+  // 稱號風格 / Epithet style
+  if (rng.chance(CONFIG.FACTION_EPITHET_NAME_RATE)) {
+    return generateEpithetFactionName(rng);
+  }
+
   const desc = rng.pick(DESCRIPTORS) ?? '蒼';
   const noun = rng.pick(NOUNS) ?? '龍';
   const suffix = rng.pick(SUFFIXES) ?? '盟';
@@ -126,14 +163,16 @@ export function generateFactionNames(rng: Rng, count: number): string[] {
 
 /**
  * 產生不與 taken 撞名的勢力名稱；隨機嘗試 64 次失敗後改以確定性掃描
- * [修飾詞][名詞][後綴] 組合空間（約 4 種），空間耗盡時回傳 null。
- * Generate a faction name not present in `taken`. After 64 random attempts
- * it falls back to a deterministic scan over the [Descriptor][Noun][Suffix]
- * cross product (~40k combinations); returns null when the space is exhausted.
+ * 兩個名稱空間：傳統 [修飾詞][名詞][後綴]（約 40,000 種）與稱號 [稱號][組織類型]
+ * （6,912 種），兩者都耗盡時回傳 null。
+ * Generate a faction name not present in `taken`. After 64 random attempts it
+ * falls back to a deterministic scan over both name spaces — classic
+ * [Descriptor][Noun][Suffix] (~40,000) and epithet [Epithet][Org type] (6,912) —
+ * returning null when both are exhausted.
  *
  * 空 taken 時第一個隨機嘗試即成功，RNG 消耗與 generateFactionName 相同。
  * With an empty `taken` the first random attempt succeeds, so RNG consumption
- * matches generateFactionName exactly (existing seed streams stay intact).
+ * matches generateFactionName exactly.
  *
  * @param rng - 種子 RNG 實例 / Seeded RNG instance
  * @param taken - 已佔用的名稱集合 / Set of names already in use
@@ -149,9 +188,9 @@ export function generateUniqueFactionName(
     if (!taken.has(name)) return name;
   }
 
-  // 確定性掃描：從隨機起點走過全部 [修飾詞][名詞][後綴] 組合
-  // Deterministic scan from a random start over every
-  // [Descriptor][Noun][Suffix] combination — guaranteed to find a free slot
+  // 確定性掃描 1：從隨機起點走過全部傳統 [修飾詞][名詞][後綴] 組合
+  // Deterministic scan 1: from a random start over every classic
+  // [Descriptor][Noun][Suffix] combination
   const nounCount = NOUNS.length;
   const suffixCount = SUFFIXES.length;
   const total = DESCRIPTORS.length * nounCount * suffixCount;
@@ -163,6 +202,19 @@ export function generateUniqueFactionName(
     const noun = Math.floor(rem / suffixCount);
     const suffix = rem % suffixCount;
     const name = `${DESCRIPTORS[desc]}${NOUNS[noun]}${SUFFIXES[suffix]}`;
+    if (!taken.has(name)) return name;
+  }
+
+  // 確定性掃描 2：稱號空間 [稱號][組織類型]
+  // Deterministic scan 2: the epithet space [Epithet][Organization type]
+  const orgCount = ORG_TYPES.length;
+  const epithetTotal = EPITHET_COUNT * orgCount;
+  const epithetStart = rng.int(0, epithetTotal - 1);
+  for (let i = 0; i < epithetTotal; i++) {
+    const idx = (epithetStart + i) % epithetTotal;
+    const epithet = epithetAt(Math.floor(idx / orgCount));
+    const org = ORG_TYPES[idx % orgCount];
+    const name = `${epithet}${org}`;
     if (!taken.has(name)) return name;
   }
   return null;

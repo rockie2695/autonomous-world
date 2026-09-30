@@ -43,6 +43,15 @@ export const CONFIG = {
   ROAD_NEW_PER_PLACE_MIN: 1, // 地點建立時最少新增道路數 / Min new roads when a place is created
   ROAD_NEW_PER_PLACE_MAX: 4, // 地點建立時最多新增道路數 / Max new roads when a place is created
 
+  // ── 命名 / Naming ─────────────────────────────────────────────────────────
+  // 名稱有兩種風格，兩者會混合產生 / Two name styles, mixed together:
+  //   傳統 / classic  — 人名「張飛」（姓+名）、勢力「蒼龍盟」（修飾+名詞+後綴）、地名「青碧城」（形容詞×2+地形）
+  //   稱號 / epithet  — 人名「霜狼·蓋爾」（稱號+外來名）、勢力「霜脊議會」（稱號+組織類型）、地名「霜狼關」（稱號+地形）
+  // 設為 0 可完全關閉稱號風格 / Set to 0 to disable the epithet style entirely
+  PERSON_EPITHET_NAME_RATE: 0.35, // 人名使用稱號風格的機率 / Chance a person name uses the epithet style
+  FACTION_EPITHET_NAME_RATE: 0.35, // 勢力名使用稱號風格的機率 / Chance a faction name uses the epithet style
+  PLACE_EPITHET_NAME_RATE: 0.35, // 地名使用稱號風格的機率 / Chance a place name uses the epithet style
+
   // ── 角色 / Characters ────────────────────────────────────────────────────
   // 屬性 (wu/tong/jing/speed) 使用均勻分佈 5-30。
   // Stats (wu/tong/jing/speed) use uniform distribution 5-30.
