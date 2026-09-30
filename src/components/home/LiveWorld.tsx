@@ -13,6 +13,7 @@
 import { useMemo } from 'react';
 import WorldGraph from './WorldGraph';
 import { usePublicWorld } from './usePublicWorld';
+import { UNOWNED_COLOR } from './tokens';
 import { createTranslator, type Locale } from '@/lib/i18n';
 
 type LiveWorldProps = {
@@ -86,7 +87,7 @@ export default function LiveWorld({ locale }: LiveWorldProps) {
               <li className={LEGEND_ITEM}>
                 <span
                   className="size-2.5 shrink-0 rounded-[3px] shadow-[0_0_8px_currentColor]"
-                  style={{ backgroundColor: '#64748b', color: '#64748b' }}
+                  style={{ backgroundColor: UNOWNED_COLOR, color: UNOWNED_COLOR }}
                   aria-hidden="true"
                 />
                 <span>{t('home.live.unownedFaction')}</span>

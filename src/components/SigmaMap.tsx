@@ -5,8 +5,9 @@
 // 功能 / Features:
 // - 節點 = 勢力色、大小 = 兵力 / Nodes = faction color, size = troops
 // - 道路 = 細線、半透明、hover 高亮 / Roads = thin lines, semi-transparent, hover highlight
+// - 節點發光 + 陰影（靜態裝飾層）/ Node glow + drop shadow (static decoration layer)
 // - hover 顯示：名字 + 勢力 + 兵力 + 建築 / Hover: name + faction + troops + buildings
-// - 可拖曳 / 縮放 / Draggable + zoomable
+// - 可拖曳 / 縮放 / Draggable + zoomable（鏡頭動畫：聚焦地點、全覽）/ animated camera: focus + fit
 // - 點擊顯示地方詳情 / Click shows place detail
 // ============================================================================
 
@@ -16,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
 import { drawDiscNodeHover } from 'sigma/rendering';
+import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
 
 /**
@@ -58,6 +60,92 @@ function hslToHex(hsl: string): string {
   };
 
   return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+/**
+ * 讀取 globals.css 的設計 token（設計值不 hardcode 在 TSX）。
+ * Read a design token from globals.css (design values never hardcoded in TSX).
+ *
+ * @param name - CSS 自訂屬性名稱（不含 --）/ CSS custom property name (without --)
+ * @param fallback - 讀不到時的後備值 / Fallback when the token is missing
+ * @returns token 值（已 trim）/ The trimmed token value
+ */
+function readDesignToken(name: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  const value = getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+  return value.length > 0 ? value : fallback;
+}
+
+/** 發光／陰影 sprite 的像素尺寸 / Pixel size of the glow/shadow sprites */
+const SPRITE_SIZE = 64;
+
+/**
+ * 建立一張中心向外淡出的徑向漸層 sprite，並依色票快取。
+ * 對同一種顏色只建立一次，之後每次重繪都只是 drawImage ——
+ * 遠比每幀 createRadialGradient 便宜（地圖最多 2000 個節點）。
+ * Build a radial-gradient sprite that fades from the centre outwards, cached
+ * per colour. Each redraw is then just a drawImage, far cheaper than calling
+ * createRadialGradient per node per frame (the map can hold 2000 nodes).
+ *
+ * @param cache - 以顏色為鍵的 sprite 快取 / Sprite cache keyed by colour
+ * @param color - 中心色（CSS 色碼）/ Centre colour (any CSS colour string)
+ * @param alpha - 中心不透明度 / Opacity at the centre
+ * @returns 快取的 sprite 畫布 / The cached sprite canvas
+ */
+function getGlowSprite(
+  cache: Map<string, HTMLCanvasElement>,
+  color: string,
+  alpha: number
+): HTMLCanvasElement {
+  const key = `${color}|${alpha}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const sprite = document.createElement('canvas');
+  sprite.width = SPRITE_SIZE;
+  sprite.height = SPRITE_SIZE;
+  const sctx = sprite.getContext('2d');
+  if (sctx) {
+    const half = SPRITE_SIZE / 2;
+    const gradient = sctx.createRadialGradient(half, half, 0, half, half, half);
+    gradient.addColorStop(0, withAlpha(color, alpha));
+    gradient.addColorStop(0.45, withAlpha(color, alpha * 0.32));
+    gradient.addColorStop(1, withAlpha(color, 0));
+    sctx.fillStyle = gradient;
+    sctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
+  }
+
+  cache.set(key, sprite);
+  return sprite;
+}
+
+/**
+ * 把 CSS 色碼轉成帶透明度的 rgba()。
+ * Sigma 的節點色是 hex，所以這裡只需處理 #rgb / #rrggbb。
+ * Convert a CSS colour to rgba() with the given alpha. Node colours arrive as
+ * hex from hslToHex, so only #rgb / #rrggbb need handling.
+ *
+ * @param color - hex 色碼 / A hex colour
+ * @param alpha - 0-1 的不透明度 / Opacity between 0 and 1
+ * @returns rgba() 色字串 / An rgba() colour string
+ */
+function withAlpha(color: string, alpha: number): string {
+  let hex = color.trim();
+  if (hex.startsWith('#')) hex = hex.slice(1);
+  if (hex.length === 3) {
+    hex = hex
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  if (hex.length !== 6) return color;
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return color;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 interface Place {
@@ -153,6 +241,7 @@ export function SigmaMap({
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const glowRef = useRef<HTMLCanvasElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
@@ -161,6 +250,13 @@ export function SigmaMap({
   const selectedPlaceIdRef = useRef(selectedPlaceId);
   const onPlaceClickRef = useRef(onPlaceClick);
   const onControlsReadyRef = useRef(onControlsReady);
+  // 尊重「減少動態效果」偏好：鏡頭直接跳轉，不做過場動畫
+  // Respect prefers-reduced-motion: the camera jumps instead of animating
+  const reducedMotion = useReducedMotion();
+  const reducedMotionRef = useRef(reducedMotion);
+  useEffect(() => {
+    reducedMotionRef.current = reducedMotion;
+  }, [reducedMotion]);
 
   // 選中地點變更時（開啟或關閉彈窗）立即清除殘留的 tooltip。
   // Clear the lingering tooltip immediately when the selected place changes
@@ -295,10 +391,63 @@ export function SigmaMap({
       }
     });
 
+    // ── 鏡頭動畫 / Camera Animation ─────────────────────────────────────────
+    // reducedMotion 用 ref 讀取：建立 Sigma 的 effect 依賴陣列是空的，
+    // 直接閉包捕捉會拿到首次渲染的值。
+    // reducedMotion is read through a ref: the effect that builds Sigma has an
+    // empty dependency array, so closing over the value would freeze the first
+    // render's answer.
+
+    const animMs = () => (reducedMotionRef.current ? 0 : CONFIG.MAP_CAMERA_ANIM_MS);
+
+    /** 鏡頭移到某節點並置中；若目前拉太遠則一併放大到可辨識的比例 */
+    /** Move the camera to a node and centre it; zoom in first if it is too far out */
+    const focusNode = (node: string) => {
+      if (!graph.hasNode(node)) return;
+      const attrs = graph.getNodeAttributes(node);
+      const camera = sigma.getCamera();
+      const ratio = Math.min(camera.ratio, CONFIG.MAP_FOCUS_MIN_RATIO);
+      void camera.animate(
+        { x: attrs.x as number, y: attrs.y as number, ratio, angle: 0 },
+        { duration: animMs() }
+      );
+    };
+
+    /** 鏡頭動畫到「整個世界剛好放得下」/ Animate the camera to fit the whole world */
+    const fitWorld = () => {
+      const camera = sigma.getCamera();
+      const { x: xExtent, y: yExtent } = sigma.getBBox();
+      const [minX, maxX] = xExtent as [number, number];
+      const [minY, maxY] = yExtent as [number, number];
+      const graphWidth = Math.max(maxX - minX, 1e-6);
+      const graphHeight = Math.max(maxY - minY, 1e-6);
+
+      // ratio 是「每像素對應多少圖座標」，取兩軸較大者才能同時容納寬與高
+      // ratio is graph-units-per-pixel; take the larger axis so both fit
+      const { width, height } = sigma.getDimensions();
+      const fitRatio = Math.max(
+        graphWidth / Math.max(width, 1),
+        graphHeight / Math.max(height, 1)
+      );
+
+      void camera.animate(
+        {
+          x: (minX + maxX) / 2,
+          y: (minY + maxY) / 2,
+          ratio: camera.getBoundedRatio(fitRatio * CONFIG.MAP_FIT_PADDING),
+          angle: 0,
+        },
+        { duration: animMs() }
+      );
+    };
+
     // ── 點擊事件 / Click Event ─────────────────────────────────────────────
 
     sigma.on('clickNode', (event: { node: string }) => {
       const attrs = graph.getNodeAttributes(event.node);
+      // 點擊後鏡頭滑向該地點，長地圖上尤其明顯
+      // Slide the camera to the clicked place — very noticeable on a large map
+      focusNode(event.node);
       onPlaceClickRef.current?.(attrs.placeData);
     });
 
@@ -308,15 +457,17 @@ export function SigmaMap({
     // Hand camera controls to the parent (used by floating zoom / reset buttons)
     onControlsReadyRef.current?.({
       zoomIn: () => {
-        void sigma.getCamera().animatedZoom();
+        void sigma.getCamera().animatedZoom({ duration: animMs() });
       },
       zoomOut: () => {
-        void sigma.getCamera().animatedUnzoom();
+        void sigma.getCamera().animatedUnzoom({ duration: animMs() });
       },
       resetView: () => {
-        // 回到預設視角：置中、ratio 1、角度 0（同時重設拖曳位置與縮放）
-        // Return to default view: centered, ratio 1, angle 0 (resets pan and zoom)
-        void sigma.getCamera().animatedReset();
+        // 全覽整個世界（而非回到 ratio 1）：世界通常遠大於視窗，
+        // animatedReset 會讓地圖塞得滿滿的
+        // Fit the whole world (rather than ratio 1): the world is normally much
+        // larger than the viewport, so animatedReset crops it
+        fitWorld();
       },
     });
 
@@ -423,13 +574,166 @@ export function SigmaMap({
     sigmaRef.current?.refresh();
   }, [selectedPlaceId]);
 
+  // ── 節點發光 + 陰影（靜態裝飾層）───────────────────────────────────────
+  // 第二張覆蓋畫布，位於聚光燈層之下、sigma 容器之上：先鋪一層往右下
+  // 偏移的暗影，再鋪一層依勢力色的柔和發光。節點圓盤由 WebGL 畫在更上面，
+  // 所以看起來像「從地圖發亮起來」而不是貼圖。
+  // A second overlay canvas below the spotlight layer and above the sigma
+  // container: an offset dark shadow pass, then a soft faction-coloured glow
+  // pass. Sigma paints the node discs on top, so the map reads as lit from
+  // within rather than as flat stickers.
+  //
+  // 只在 sigma 重繪（鏡頭移動 / 資料變更 / refresh）或視窗縮放時重繪，閒置時零成本；
+  // 沒有額外 rAF。掛 afterRender 而非 camera 'updated'，兵力變化導致節點大小改變
+  // 時也能跟著重繪。
+  // Redraws only when sigma renders (camera moves, data changes, refresh) or on
+  // resize — no extra rAF, so an idle map costs nothing. Hooking afterRender
+  // rather than the camera event also covers node resizes from troop changes.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    const graph = graphRef.current;
+    const canvas = glowRef.current;
+    if (!sigma || !graph || !canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // 以色票快取的 sprite（同一勢力只建立一次）/ Sprites cached per colour
+    const sprites = new Map<string, HTMLCanvasElement>();
+    // 快取畫布尺寸，避免每幀讀 getBoundingClientRect 造成版面重排 /
+    // Cached canvas size — reading getBoundingClientRect every frame thrashes layout
+    let viewWidth = 0;
+    let viewHeight = 0;
+
+    const resize = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      viewWidth = rect.width;
+      viewHeight = rect.height;
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      draw();
+    };
+
+    const draw = () => {
+      ctx.clearRect(0, 0, viewWidth, viewHeight);
+      if (graph.order === 0) return;
+
+      // 陰影色取自設計 token，而非 hardcode 在 TSX
+      // The shadow colour comes from a design token, never hardcoded here
+      const shadowColor = readDesignToken('--color-ds-void', '#020617');
+
+      // 只畫視窗內的節點：2000 個節點時這是明顯的省流 /
+      // Only nodes inside the viewport — a real saving at 2000 nodes
+      const topLeft = sigma.viewportToGraph({ x: 0, y: 0 });
+      const bottomRight = sigma.viewportToGraph({ x: viewWidth, y: viewHeight });
+      const minX = Math.min(topLeft.x, bottomRight.x);
+      const maxX = Math.max(topLeft.x, bottomRight.x);
+      const minY = Math.min(topLeft.y, bottomRight.y);
+      const maxY = Math.max(topLeft.y, bottomRight.y);
+
+      // ── 第一層：陰影（往右下偏移）/ Pass 1: drop shadow, offset down-right ──
+      for (const node of graph.nodes()) {
+        const attrs = graph.getNodeAttributes(node);
+        const { x, y, size } = attrs as {
+          x: number;
+          y: number;
+          size: number;
+        };
+        if (x < minX || x > maxX || y < minY || y > maxY) continue;
+
+        const radius = sigma.scaleSize(size);
+        const outer = radius * CONFIG.MAP_SHADOW_SCALE;
+        if (outer < CONFIG.MAP_GLOW_MIN_RADIUS_PX) continue;
+
+        const vp = sigma.graphToViewport({ x, y });
+        const sprite = getGlowSprite(
+          sprites,
+          shadowColor,
+          CONFIG.MAP_SHADOW_ALPHA
+        );
+        ctx.drawImage(
+          sprite,
+          vp.x - outer + CONFIG.MAP_SHADOW_OFFSET_PX,
+          vp.y - outer + CONFIG.MAP_SHADOW_OFFSET_PX,
+          outer * 2,
+          outer * 2
+        );
+      }
+
+      // ── 第二層：發光（依節點大小調整強度）/ Pass 2: glow, scaled by node size ──
+      for (const node of graph.nodes()) {
+        const attrs = graph.getNodeAttributes(node);
+        const { x, y, size, color } = attrs as {
+          x: number;
+          y: number;
+          size: number;
+          color: string;
+        };
+        if (x < minX || x > maxX || y < minY || y > maxY) continue;
+
+        const radius = sigma.scaleSize(size);
+        const outer = radius * CONFIG.MAP_GLOW_SCALE;
+        if (radius < CONFIG.MAP_GLOW_MIN_RADIUS_PX) continue;
+
+        // 大節點全亮，小節點降到下限 —— 讓勢力重心自然浮現 /
+        // Big nodes glow fully, small ones fade to a floor, so the map's
+        // centres of gravity emerge without everything hazing over
+        const strength = Math.min(
+          1,
+          Math.max(
+            CONFIG.MAP_GLOW_MIN_ALPHA / CONFIG.MAP_GLOW_ALPHA,
+            radius / CONFIG.MAP_GLOW_REFERENCE_PX
+          )
+        );
+        const alpha = CONFIG.MAP_GLOW_ALPHA * strength;
+
+        const vp = sigma.graphToViewport({ x, y });
+        ctx.drawImage(getGlowSprite(sprites, color, alpha), vp.x - outer, vp.y - outer, outer * 2, outer * 2);
+      }
+    };
+
+    // sigma 每次重繪都會觸發（拖曳 / 縮放 / 鏡頭動畫 / refresh）/
+    // Fires on every sigma render (drag, zoom, camera animation, refresh)
+    sigma.on('afterRender', draw);
+    sigma.on('resize', resize);
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+
+    resize();
+
+    return () => {
+      sigma.off('afterRender', draw);
+      sigma.off('resize', resize);
+      resizeObserver.disconnect();
+      // 清空 sprite 快取，避免關閉的畫布留在記憶體 /
+      // Drop the sprite cache so detached canvases are not retained
+      sprites.clear();
+      ctx.clearRect(0, 0, viewWidth, viewHeight);
+    };
+    // 只在掛載時建立：節點資料從 graph 讀取，變更由 afterRender 觸發重繪
+    // Built once on mount: node data is read from the graph, and changes
+    // trigger a redraw through afterRender
+  }, []);
+
   // ── 聚光燈環 + 移動動畫（覆蓋畫布）────────────────────────────────────────
   // 每幀用當前鏡頭座標重繪：新生成 / 被攻擊地點顯示脈動發光環；
   // 本回合的移動以光點沿起點 → 終點行進（週期：行進 → 停頓）。
   // Spotlight rings + move animation (overlay canvas): every frame redraws
   // with current camera coordinates — newly created/attacked places get a
   // pulsing glow ring; this round's moves travel as glowing dots from → to
-  // (cycle: travel → pause). ────────────────────────────────────────────────
+  // (cycle: travel → pause).
+  //
+  // 這是地圖上唯一的 rAF 迴圈，因此必須照 AGENTS.md 的動畫規範：
+  // 捲出視窗（IntersectionObserver）、分頁在背景（document.hidden）都暫停，
+  // 並在 prefers-reduced-motion 下只畫一幀靜態圖。
+  // This is the map's only rAF loop, so it follows the animation rules: pause
+  // when scrolled out of view (IntersectionObserver) or when the tab is hidden
+  // (document.hidden), and draw a single static frame under
+  // prefers-reduced-motion. ─────────────────────────────────────────────────
 
   useEffect(() => {
     const sigma = sigmaRef.current;
@@ -448,14 +752,17 @@ export function SigmaMap({
     );
 
     // 高解析度畫布同步（devicePixelRatio）/ Sync canvas backing store (dpr)
+    // 初次呼叫必須留到 isAnimating / renderFrame 宣告之後，否則會撞到 TDZ
+    // The first call must come after isAnimating / renderFrame are declared,
+    // otherwise it hits the temporal dead zone.
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
       const rect = canvas.getBoundingClientRect();
       canvas.width = Math.max(1, Math.round(rect.width * dpr));
       canvas.height = Math.max(1, Math.round(rect.height * dpr));
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!isAnimating()) renderFrame(STATIC_FRAME_MS);
     };
-    resize();
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
 
@@ -470,11 +777,19 @@ export function SigmaMap({
       factionColors.set(faction.id, hslToHex(faction.color));
     }
 
-    let raf = 0;
-    const start = performance.now();
+    /** 靜態幀的時間點：脈動與光點都停在一個代表性的中間相位 / A representative mid-animation phase for the static frame */
+    const STATIC_FRAME_MS = CONFIG.MOVE_ANIM_DURATION / 2;
 
-    const tick = (now: number) => {
-      const t = now - start;
+    let raf = 0;
+    let onScreen = true;
+    let start = performance.now();
+
+    /** 只有「在畫面上 + 分頁可見 + 允許動態」才跑 / Animate only when on screen, the tab is visible, and motion is allowed */
+    const isAnimating = () =>
+      onScreen && !document.hidden && !reducedMotionRef.current;
+
+    /** 依經過時間畫一幀 / Draw one frame for the given elapsed time */
+    const renderFrame = (t: number) => {
       const rect = canvas.getBoundingClientRect();
       ctx.clearRect(0, 0, rect.width, rect.height);
 
@@ -546,12 +861,84 @@ export function SigmaMap({
         }
       }
 
+      // 脈動環在暫停時仍留一幀，畫面不會變空白 /
+      // A paused ring still leaves one frame on screen, so it never blanks out
+    };
+
+    const tick = (now: number) => {
+      if (!isAnimating()) {
+        raf = 0;
+        return;
+      }
+      renderFrame(now - start);
       raf = requestAnimationFrame(tick);
     };
-    raf = requestAnimationFrame(tick);
+
+    /** 開始／續播 / Start or resume the loop */
+    const play = () => {
+      if (raf !== 0 || !isAnimating()) return;
+      start = performance.now();
+      raf = requestAnimationFrame(tick);
+    };
+
+    /** 暫停 / Pause the loop */
+    const pause = () => {
+      if (raf === 0) return;
+      cancelAnimationFrame(raf);
+      raf = 0;
+    };
+
+    // 先把畫布尺寸與 transform 設定好，再決定要播還是畫一幀 /
+    // Size the backing store first, then decide whether to animate or draw a frame
+    resize();
+
+    // 捲出視窗就停，回到畫面才續播（離開時補一幀，回來不會看到空白）/
+    // Pause when scrolled out of view and resume on return (a frame is drawn on
+    // the way out so the canvas is never blank when it comes back)
+    const intersectionObserver = new IntersectionObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (!entry) return;
+      onScreen = entry.isIntersecting;
+      if (onScreen) play();
+      else {
+        pause();
+        renderFrame(STATIC_FRAME_MS);
+      }
+    });
+    intersectionObserver.observe(canvas);
+
+    // 分頁切到背景就停 / Pause while the tab is in the background
+    const onVisibilityChange = () => {
+      if (document.hidden) pause();
+      else play();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    // 使用者中途開啟「減少動態效果」也要立刻停 / Honour a mid-session switch
+    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const onMotionChange = () => {
+      if (motionQuery.matches) {
+        pause();
+        renderFrame(STATIC_FRAME_MS);
+      } else {
+        play();
+      }
+    };
+    motionQuery.addEventListener('change', onMotionChange);
+
+    if (isAnimating()) {
+      play();
+    } else {
+      // 減少動態效果：只畫一幀，不啟動迴圈 /
+      // Reduced motion: one static frame, no loop
+      renderFrame(STATIC_FRAME_MS);
+    }
 
     return () => {
-      cancelAnimationFrame(raf);
+      pause();
+      intersectionObserver.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      motionQuery.removeEventListener('change', onMotionChange);
       resizeObserver.disconnect();
       ctx.clearRect(0, 0, canvas.width, canvas.height);
     };
@@ -563,7 +950,20 @@ export function SigmaMap({
     // Sigma's kill() empties the whole container, so the tooltip must be a
     // SIBLING of the sigma container — otherwise React later tries to remove
     // an already-deleted node and throws 'removeChild' errors.
-    <div className="w-full h-full relative">
+    // 四內陰影讓世界聚焦在中央（token 在 globals.css 的 @theme static）/
+    // The inner vignette frames the world and focuses the centre (token lives in
+    // globals.css @theme static)
+    <div className="w-full h-full relative shadow-ds-map-vignette">
+      {/* 節點發光 + 陰影（最底層裝飾）/ Node glow + drop shadow (bottom decoration layer)
+          w-full h-full 理由同覆蓋層：canvas 是替換元素 / same reason as the overlay: canvas is a replaced element
+          DOM 順序：發光層 → 聚光燈層 → sigma container。發光要在聚光燈環之下，
+          sigma 的節點與標籤又在最上面。
+          DOM order: glow → spotlight overlay → sigma container. The glow sits under
+          the spotlight rings, and sigma's nodes and labels sit above both. */}
+      <canvas
+        ref={glowRef}
+        className="absolute inset-0 w-full h-full pointer-events-none"
+      />
       {/* 聚光燈環 + 移動動畫覆蓋層（不攔截滑鼠事件）/ Spotlight rings + move animation overlay (never intercepts mouse events)
           w-full h-full 必須：canvas 是替換元素，absolute inset-0 不會自動撐滿（intrinsic 300×150）
           w-full h-full is required: canvas is a replaced element — absolute inset-0 alone leaves it at its intrinsic 300×150

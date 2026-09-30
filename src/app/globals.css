@@ -331,6 +331,9 @@ body {
   /* ── 陰影 / Shadow ───────────────────────────────────────────────────── */
   --shadow-ds-glow: 0 0 28px rgba(34, 211, 238, 0.25);
   --shadow-ds-hero: 0 24px 70px rgba(2, 6, 23, 0.8);
+  /* 地圖四周的內陰影，讓注視焦點落在世界中央 / the map's inner vignette, which
+     frames the world and pulls the eye toward the centre */
+  --shadow-ds-map-vignette: inset 0 0 170px 34px rgba(2, 6, 23, 0.66);
 
   /* ── 缓動 / Easing ───────────────────────────────────────────────────── */
   --ease-ds: cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -360,6 +363,7 @@ body {
   --ds-muted: var(--color-ds-muted);
   --ds-ease: var(--ease-ds);
   --ds-glow-cyan: var(--shadow-ds-glow);
+  --ds-map-vignette: var(--shadow-ds-map-vignette);
 }
 
 html {

@@ -244,6 +244,27 @@ export const CONFIG = {
   // falls below this value. Zoom out (nodes shrink) → labels hide uniformly;
   // zoom back in → they reappear.
   LABEL_SIZE_THRESHOLD: 8,
+
+  // ── 節點發光與陰影 / Node Glow & Shadow ────────────────────────────────────
+  // 靜態裝飾層（第二張覆蓋畫布）：節點後方先畫陰影再畫發光，營造「發亮」的層次。
+  // Static decoration layer (a second overlay canvas): a shadow pass then a glow
+  // pass behind every node, so the map reads as lit rather than flat.
+  // 螢幕半徑低於 GLOW_MIN_RADIUS_PX 的節點不畫（太小看不出來，且省下 drawImage）。
+  // Nodes whose on-screen radius is below GLOW_MIN_RADIUS_PX are skipped (invisible
+  // at that size, and it saves a drawImage each).
+  MAP_GLOW_SCALE: 3.2,           // 發光外徑 = 節點螢幕半徑 × 此值 / Glow diameter = node screen radius × this
+  MAP_GLOW_ALPHA: 0.55,          // 發光峰值透明度（再依節點大小縮放）/ Glow peak alpha (then scaled by node size)
+  MAP_GLOW_MIN_ALPHA: 0.18,      // 小節點的發光下限，避免整片糊成霧 / Floor for small nodes so the map doesn't haze over
+  MAP_GLOW_MIN_RADIUS_PX: 2,     // 低於此螢幕半徑就不畫發光 / Skip glow below this screen radius
+  MAP_GLOW_REFERENCE_PX: 10,     // 節點螢幕半徑達此值時發光達到峰值 / Screen radius at which glow reaches full strength
+  MAP_SHADOW_SCALE: 1.5,         // 陰影外徑 = 節點螢幕半徑 × 此值 / Shadow diameter = node screen radius × this
+  MAP_SHADOW_ALPHA: 0.5,         // 陰影峰值透明度 / Shadow peak alpha
+  MAP_SHADOW_OFFSET_PX: 2,       // 陰影往右下偏移（px），製造立體感 / Shadow offset down-right (px) for depth
+
+  // ── 鏡頭動畫 / Camera Animation ─────────────────────────────────────────────
+  MAP_CAMERA_ANIM_MS: 480,       // 聚焦地點 / 全覽的鏡頭動畫時間（毫秒）/ Camera animation duration (ms)
+  MAP_FOCUS_MIN_RATIO: 0.06,     // 聚焦時若還很遠看，就先放大到至少此 ratio / If zoomed out, focus zooms in to at least this ratio
+  MAP_FIT_PADDING: 1.18,         // 全覽時的留白倍數（>1 = 四周留白）/ Padding factor when fitting the whole world (>1 = margin)
 } as const;
 
 // ─── 動態佈局函數 / Dynamic Layout Functions ─────────────────────────────

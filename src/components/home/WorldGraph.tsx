@@ -13,6 +13,7 @@
 // ============================================================================
 
 import dynamic from 'next/dynamic';
+import { SKELETON } from './tokens';
 import type { PublicPlace, PublicRoad } from '@/lib/publicWorld';
 
 type WorldGraphProps = {
@@ -30,7 +31,7 @@ const WorldGraphScene = dynamic(() => import('./WorldGraphScene'), {
   ssr: false,
   loading: () => (
     // 絕不只顯示裸 spinner / never a bare spinner
-    <div className="ds-gm-skel size-full rounded-ds-panel" aria-hidden="true" />
+    <div className={`${SKELETON} size-full rounded-ds-panel`} aria-hidden="true" />
   ),
 });
 

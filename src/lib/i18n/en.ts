@@ -304,7 +304,12 @@ export const en = {
     line: 'Line',
     pie: 'Pie',
     square: 'Bar',
+    treemap: 'Treemap',
     peak: 'Peak',
+    // ── 雷達圖 / Radar ──
+    attributes: 'Character Attributes',
+    worldAverage: 'World average',
+    factionPower: 'Faction Power',
     // ── 世界整體 / World-wide ──
     aliveFactionsOverTime: 'Alive Factions',
     totalCharactersOverTime: 'Total Characters',

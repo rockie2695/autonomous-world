@@ -1427,6 +1427,58 @@ nodeSize = 4 + log(troops + 1) × 2     // troops = garrison + 該地點所有�
 - ForceAtlas2 全域重算每 `LAYOUT_RECALC_INTERVAL(100)` 回合
 - 新節點：鄰居重心 + 隨機偏移 `radius ∈ [20, 50]`；最小節點間距 15，碰撞重試 10 次
 
+#### 統計圖表 / Stats Charts（`src/app/game/page.tsx`）
+
+統計分頁畫兩件獨立的東西：九張時間序列圖（可切四種樣式），加上一張勢力力量區塊圖
+與一張將領雷達圖。
+
+The stats tab renders two independent things: nine time-series charts in four switchable
+styles, plus a faction-power treemap and a character radar.
+
+```
+// 圖表類型只有一個 union，renderChart() 依此分派 / one union, dispatch in renderChart()
+type ChartType = 'line' | 'pie' | 'square' | 'treemap';
+
+line    → LineChart   折線（每個勢力一條 + 最新點標記）
+pie     → PieChart    圓餅（最新回合佔比）／單一序列改用 GaugeChart 進度環
+square  → BarChart    長條（每回合一根堆疊長條，最後 BAR_MAX_ROUNDS=24 回合）
+treemap → FactionTreemap  勢力力量區塊圖（取代上面九張）
+```
+
+九張圖 = 勢力 4 張（領地／兵力／金錢／將領）＋ 世界 5 張（存活勢力／總將領／無主之地／
+總駐軍／道路數）。資料來自 `GET /api/world/stats?from=0&to=N`，每個勢力一條時間序列，
+外加 `world` 物件的世界整體序列。
+
+##### 區塊圖 / Treemap
+
+外層面積 = 領地數，區塊內再切兵力／金幣／將領。三個指標量級差很多（兵力可以是將領數的
+千倍），所以**各指標先除以自己的世界最大值**再取比例 —— 不正規化的話將領那一段會薄到
+看不見。這代表區塊面積同時混入了勢力的「量級」與「內部組成」，是刻意的取捨。
+
+```typescript
+// slice-and-dice：沿較長的一邊切，父節點遞迴切自己的矩形
+// Slice-and-dice along the longer side, recursing into each parent's rectangle
+function layoutTreemap(nodes, rect) {
+  const usable = nodes.filter((n) => n.value > 0);   // 零值略過 → 全零時顯示「無資料」
+  const horizontal = rect.width >= rect.height;
+  // ...
+}
+// 上限 TREEMAP_MAX_FACTIONS = 12（依領地數取前 12）
+```
+
+##### 雷達圖 / Radar
+
+每個勢力一個多邊形，畫的是該勢力**存活將領的平均屬性**，六個軸
+`wu`／`tong`／`jing`／`speed`／`ambition`／`age`，虛線是全世界的平均值當參考。
+上限 `RADAR_MAX_FACTIONS = 6`（依存活將領人數取前 6），再多就只是互相蓋住。
+
+雷達圖讀的是 `WorldState.characters` / `.factions`（不是 stats 端點），所以要把這兩個
+prop 從遊戲頁傳進 `StatsCharts`（桌面側軌與手機覆蓋層兩處都要）。
+
+**雷達圖的先天限制**：每個軸用自己的最大值正規化（年齡上限本來就遠高於能力值），
+所以邊長**不能跨軸比較** —— 看的是形狀，不是絕對數字。軸標籤沿用既有的
+`character.*` i18n 鍵，不另開一套。
+
 ---
 
 ## 地圖視覺化 / Map Visualization
@@ -1608,6 +1660,52 @@ const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y }); // 每幀用當前
 ```
 
 時序常數位於 `src/lib/gameConfig.ts`：`SPOTLIGHT_ROUNDS`、`MOVE_ANIM_DURATION`、`MOVE_ANIM_PAUSE`。
+
+##### 節點發光與陰影 / Node Glow & Shadow
+
+第二張覆蓋 `<canvas>`，位於聚光燈層**之下**、sigma 容器**之上**：先鋪一層往右下偏移的
+暗影，再鋪一層依勢力色的柔和發光。節點圓盤由 WebGL 畫在更上面，因此看起來像「從地圖
+發亮起來」，而不是一張張貼圖。
+
+這一層**不是動畫**：只掛在 sigma 的 `afterRender` 與 `resize` 上重繪，閒置時零成本，
+也沒有額外 rAF（地圖上唯一的 rAF 是聚光燈層）。
+
+```typescript
+// 以「色碼 + 透明度」快取 sprite，每次重繪只是 drawImage
+// Sprites are cached per `color|alpha`; each redraw is just a drawImage.
+// 2000 個節點時，若每幀 createRadialGradient 會慢到不可用。
+// A per-frame createRadialGradient per node would be far too slow at 2000 nodes.
+const sprite = getGlowSprite(sprites, color, alpha);
+
+// 發光強度隨節點螢幕半徑變化，避免小節點把地圖糊成一片霧
+// Glow strength scales with on-screen radius so small nodes don't haze the map
+const strength = Math.min(1, Math.max(MAP_GLOW_MIN_ALPHA / MAP_GLOW_ALPHA,
+  radius / MAP_GLOW_REFERENCE_PX));
+
+sigma.on('afterRender', draw);  // 鏡頭移動 / 兵力變化 / refresh 都會觸發
+```
+
+效能守則 / performance rules:
+
+- 只畫視窗內的節點（`viewportToGraph` 求邊界），並跳過 `MAP_GLOW_MIN_RADIUS_PX` 以下的節點
+- 畫布尺寸快取起來，不要每幀讀 `getBoundingClientRect`（會觸發版面重排）
+- 陰影色取自 `--color-ds-void` 設計 token（`readDesignToken`），**不在 TSX hardcode 顏色**
+- 幾何常數：`MAP_GLOW_SCALE`、`MAP_GLOW_ALPHA`、`MAP_GLOW_MIN_ALPHA`、`MAP_GLOW_MIN_RADIUS_PX`、`MAP_GLOW_REFERENCE_PX`、`MAP_SHADOW_SCALE`、`MAP_SHADOW_ALPHA`、`MAP_SHADOW_OFFSET_PX`
+- 地圖內陰影是設計 token `--shadow-ds-map-vignette`（`globals.css` 的 `@theme static`），以 `shadow-ds-map-vignette` 使用
+
+##### 鏡頭動畫 / Camera Animation
+
+```typescript
+// 點擊節點 → 鏡頭動畫置中；太遠時一併放大
+camera.animate({ x: node.x, y: node.y, ratio, angle: 0 }, { duration: MAP_CAMERA_ANIM_MS });
+// 重設 → 動畫到「整個世界剛好放得下」
+const { x: [minX, maxX], y: [minY, maxY] } = sigma.getBBox();
+const ratio = Math.max(graphW / width, graphH / height) * MAP_FIT_PADDING;
+```
+
+`resetView` 走 `getBBox()` 而不是 `animatedReset()`：世界通常遠大於視窗，ratio 1 會把地圖
+裁掉。`prefers-reduced-motion` 時 `duration` 為 0（直接跳轉），值透過 `reducedMotionRef`
+讀取，因為建立 Sigma 的 effect 依賴陣列是空的。
 
 ---
 

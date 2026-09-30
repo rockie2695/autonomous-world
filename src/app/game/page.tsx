@@ -19,6 +19,7 @@ import { t, setLocale, getLocale, getTranslations, DEFAULT_LOCALE } from '@/lib/
 import type { Locale } from '@/lib/i18n';
 import type { MapCameraControls } from '@/components/SigmaMap';
 import { apiFetch } from '@/lib/api';
+import { CONFIG } from '@/lib/gameConfig';
 import { signOut } from 'next-auth/react';
 
 const SigmaMap = dynamic(
@@ -991,6 +992,8 @@ export default function GamePage() {
               <StatsCharts
                 worldId={worldState?.world.id ?? ''}
                 currentRound={worldState?.world.currentRound ?? 0}
+                characters={worldState?.characters ?? []}
+                worldFactions={worldState?.factions ?? []}
               />
             )}
           </div>
@@ -1032,6 +1035,8 @@ export default function GamePage() {
                   <StatsCharts
                     worldId={worldState?.world.id ?? ''}
                     currentRound={worldState?.world.currentRound ?? 0}
+                    characters={worldState?.characters ?? []}
+                    worldFactions={worldState?.factions ?? []}
                   />
                 )}
               </div>
@@ -1872,15 +1877,16 @@ function EventLog({
 // ─── 統計圖表 / Stats Charts ─────────────────────────────────────────────────────
 
 /** 圖表類型 / Chart type */
-type ChartType = 'line' | 'pie' | 'square';
+type ChartType = 'line' | 'pie' | 'square' | 'treemap';
 
-const CHART_TYPES: readonly ChartType[] = ['line', 'pie', 'square'];
+const CHART_TYPES: readonly ChartType[] = ['line', 'pie', 'square', 'treemap'];
 
 /** 圖表類型的 i18n 鍵 / i18n keys for the chart types */
 const CHART_TYPE_LABEL_KEYS: Record<ChartType, string> = {
   line: 'stats.line',
   pie: 'stats.pie',
   square: 'stats.square',
+  treemap: 'stats.treemap',
 };
 
 /** 長條圖最多顯示的回合數，較早的回合會被省略 / Max rounds in bar charts, older rounds are dropped */
@@ -2272,7 +2278,389 @@ function BarChart({
   );
 }
 
-/** 圖表類型切換（折線／圓餅／長條）/ Chart type switch (line / pie / bar) */
+/** treemap 最多顯示的勢力數，太多會糊成一片 / Max factions drawn in the treemap before it turns to mush */
+const TREEMAP_MAX_FACTIONS = 12;
+
+/** 雷達圖最多疊加的勢力數 / Max faction polygons overlaid in the radar */
+const RADAR_MAX_FACTIONS = 6;
+
+const TREEMAP_W = 280;
+const TREEMAP_H = 190;
+
+/** treemap 的三個內部分段（依序列值）/ The treemap's three inner segments, in series order */
+const TREEMAP_SEGMENT_KEYS = ['troops', 'gold', 'characters'] as const;
+
+/** treemap 分段色票取自設計 token（兵力/金幣/將領）/ Segment swatches come from design tokens (troops / gold / characters) */
+const TREEMAP_SEGMENT_VARS = [
+  'var(--color-ds-cyan)',
+  'var(--color-ds-amber)',
+  'var(--color-ds-purple)',
+] as const;
+
+/** treemap 的節點 / One treemap node; `children` turns it into a subdivided block */
+interface TreemapNode {
+  key: string;
+  label: string;
+  value: number;
+  color: string;
+  children?: TreemapNode[];
+}
+
+/**
+ * slice-and-dice 佈局：把節點依價值比例切成長條，父節點遞迴切分自己的矩形。
+ * Slice-and-dice: split nodes proportionally along the longer axis, recursing
+ * into each parent's own rectangle. Cheap, deterministic, and good enough for
+ * the ~12 blocks the treemap caps itself at.
+ *
+ * @param nodes - 要排列的節點（值 <= 0 的會被忽略）/ Nodes to lay out (non-positive values are skipped)
+ * @param rect - 可用矩形 / The rectangle to fill
+ * @returns 每個節點（含父與子）分到的矩形 / The rectangle assigned to each node, parents included
+ */
+function layoutTreemap(
+  nodes: TreemapNode[],
+  rect: { x: number; y: number; width: number; height: number }
+): Array<{ node: TreemapNode; x: number; y: number; width: number; height: number }> {
+  const usable = nodes.filter((n) => n.value > 0);
+  const total = usable.reduce((sum, n) => sum + n.value, 0);
+  if (total <= 0 || rect.width <= 0 || rect.height <= 0) return [];
+
+  const placed: Array<{
+    node: TreemapNode;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }> = [];
+  // 沿較長的那一邊切，切出來的長條才不會立刻變細 /
+  // Cut along the longer side so the strips do not immediately go sliver-thin
+  const horizontal = rect.width >= rect.height;
+  const span = horizontal ? rect.width : rect.height;
+  let offset = 0;
+
+  for (const node of usable) {
+    const slice = (node.value / total) * span;
+    const box = horizontal
+      ? { x: rect.x + offset, y: rect.y, width: slice, height: rect.height }
+      : { x: rect.x, y: rect.y + offset, width: rect.width, height: slice };
+    placed.push({ node, ...box });
+    if (node.children && node.children.length > 0) {
+      placed.push(...layoutTreemap(node.children, box));
+    }
+    offset += slice;
+  }
+
+  return placed;
+}
+
+/**
+ * 勢力力量區塊圖：每個勢力一個區塊，面積是領地數，區塊內再依兵力/金幣/將領細分。
+ * Faction power treemap: one block per faction sized by territory count, each
+ * subdivided into troops / gold / characters.
+ *
+ * 三個指標量級差很多（兵力可以是將領數的千倍），所以各指標先除以「全世界的最大值」
+ * 再取比例 — 區塊大小同時反映勢力量級與內部組成。這個正規化是刻意的取捨。
+ * The three metrics differ by orders of magnitude, so each is divided by its own
+ * world maximum before the split: block area reflects both a faction's scale
+ * and its internal mix. That normalisation is a deliberate trade-off.
+ */
+function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
+  const at = (f: StatsPayload['factions'][number], key: (typeof TREEMAP_SEGMENT_KEYS)[number] | 'territories') => {
+    const series = f[key];
+    return series[series.length - 1] ?? 0;
+  };
+
+  // 只畫有領地的勢力，並依領地數取前 N 個 /
+  // Only factions holding land, capped to the largest N
+  const ranked = [...factions]
+    .filter((f) => at(f, 'territories') > 0)
+    .sort((a, b) => at(b, 'territories') - at(a, 'territories'))
+    .slice(0, TREEMAP_MAX_FACTIONS);
+
+  // 各指標的正規化基準 / Each metric's normalisation base
+  const maxOf = (key: (typeof TREEMAP_SEGMENT_KEYS)[number]) =>
+    Math.max(1, ...ranked.map((f) => at(f, key)));
+
+  const maxTroops = maxOf('troops');
+  const maxGold = maxOf('gold');
+  const maxCharacters = maxOf('characters');
+
+  const nodes: TreemapNode[] = ranked.map((f) => {
+    const children: TreemapNode[] = [
+      { key: `${f.id}-troops`, label: t('stats.troopsOverTime'), value: at(f, 'troops') / maxTroops, color: TREEMAP_SEGMENT_VARS[0] },
+      { key: `${f.id}-gold`, label: t('stats.goldOverTime'), value: at(f, 'gold') / maxGold, color: TREEMAP_SEGMENT_VARS[1] },
+      { key: `${f.id}-characters`, label: t('stats.charactersOverTime'), value: at(f, 'characters') / maxCharacters, color: TREEMAP_SEGMENT_VARS[2] },
+    ];
+    return {
+      key: f.id,
+      label: f.name,
+      value: at(f, 'territories'),
+      color: f.color,
+      // 沒有任何數值時不細分，只留勢力色的大區塊 /
+      // With nothing to split, keep the plain faction-coloured block
+      children: children.some((c) => c.value > 0) ? children : undefined,
+    };
+  });
+
+  const placed = layoutTreemap(nodes, {
+    x: 0,
+    y: 0,
+    width: TREEMAP_W,
+    height: TREEMAP_H,
+  });
+
+  return (
+    <ChartFrame title={t('stats.factionPower')}>
+      {placed.length === 0 ? (
+        <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
+      ) : (
+        <>
+          <svg
+            viewBox={`0 0 ${TREEMAP_W} ${TREEMAP_H}`}
+            className="w-full"
+            role="img"
+            aria-label={t('stats.factionPower')}
+          >
+            {placed.map(({ node, x, y, width, height }) => {
+              // 父區塊畫勢力色底，子區塊疊在它上面 /
+              // Parents paint the faction colour; children sit on top
+              const isParent = node.children !== undefined;
+              return (
+                <rect
+                  key={node.key}
+                  x={x}
+                  y={y}
+                  width={Math.max(0, width)}
+                  height={Math.max(0, height)}
+                  fill={node.color}
+                  fillOpacity={isParent ? 0.22 : 0.62}
+                  stroke={node.color}
+                  strokeWidth={isParent ? 1 : 0.5}
+                />
+              );
+            })}
+          </svg>
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+            {ranked.map((f) => (
+              <li
+                key={f.id}
+                className="inline-flex items-center gap-1 text-[10px] text-gray-400 font-mono"
+              >
+                <span
+                  className="w-2 h-2 rounded-[1px] shrink-0"
+                  style={{ backgroundColor: f.color }}
+                />
+                <span className="truncate max-w-[80px]">{f.name}</span>
+                <span className="text-gray-500">{at(f, 'territories')}</span>
+              </li>
+            ))}
+          </ul>
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+            {TREEMAP_SEGMENT_KEYS.map((key, i) => (
+              <li
+                key={key}
+                className="inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono"
+              >
+                <span
+                  className="w-2 h-2 rounded-[1px] shrink-0"
+                  style={{ backgroundColor: TREEMAP_SEGMENT_VARS[i] }}
+                />
+                {key === 'troops'
+                  ? t('stats.troopsOverTime')
+                  : key === 'gold'
+                    ? t('stats.goldOverTime')
+                    : t('stats.charactersOverTime')}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </ChartFrame>
+  );
+}
+
+/** 雷達圖的六個軸：五項能力 + 年齡 / The radar's six axes: five abilities plus age */
+const RADAR_AXES = [
+  { key: 'wu', label: 'character.wu', max: CONFIG.CHAR_ABILITY_MAX },
+  { key: 'tong', label: 'character.tong', max: CONFIG.CHAR_ABILITY_MAX },
+  { key: 'jing', label: 'character.jing', max: CONFIG.CHAR_ABILITY_MAX },
+  { key: 'speed', label: 'character.speed', max: CONFIG.CHAR_SPEED_MAX },
+  { key: 'ambition', label: 'character.ambition', max: CONFIG.CHAR_AMBITION_MAX },
+  { key: 'age', label: 'character.age', max: CONFIG.CHAR_MAX_AGE_MAX },
+] as const;
+
+const RADAR_SIZE = 210;
+const RADAR_RADIUS = 68;
+
+/**
+ * 將一組數值轉成雷達多邊形的點字串。
+ * Turn one series of axis values into an SVG polygon point list.
+ *
+ * @param values - 每個軸的值（與 RADAR_AXES 同序）/ One value per axis, in RADAR_AXES order
+ * @returns "x,y x,y …" / A "x,y x,y …" point list
+ */
+function radarPoints(values: number[]): string {
+  const cx = RADAR_SIZE / 2;
+  const cy = RADAR_SIZE / 2;
+  return RADAR_AXES.map((axis, i) => {
+    const ratio = Math.max(0, Math.min(1, (values[i] ?? 0) / axis.max));
+    const angle = -Math.PI / 2 + (i / RADAR_AXES.length) * Math.PI * 2;
+    const r = ratio * RADAR_RADIUS;
+    return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
+  }).join(' ');
+}
+
+/**
+ * 將領雷達圖：每個勢力一個多邊形，畫的是該勢力存活將領的平均屬性，
+ * 虛線是全世界的平均值當參考基準。
+ * Character radar: one polygon per faction showing its living characters' mean
+ * attributes, with the world average as a dashed reference.
+ *
+ * 各軸用不同的最大值正規化（年齡上限本來就遠高於能力值），所以邊長不能跨軸比較，
+ * 這是雷達圖的慣例：看的是「這個形狀像什麼」，不是絕對數值。
+ * Each axis normalises against its own maximum (age tops out far above the
+ * ability stats), so edge lengths are not comparable across axes — the usual
+ * radar caveat: read the shape, not the absolute numbers.
+ */
+function CharacterRadar({
+  characters,
+  factions,
+}: {
+  characters: WorldState['characters'];
+  factions: WorldState['factions'];
+}) {
+  const living = characters.filter((c) => c.alive);
+
+  /** 依所給角色算每個軸的平均值 / Mean of every axis over the given characters */
+  const means = (group: WorldState['characters']): number[] | null => {
+    if (group.length === 0) return null;
+    return RADAR_AXES.map((axis) => {
+      const sum = group.reduce((acc, c) => acc + (c[axis.key] as number), 0);
+      return sum / group.length;
+    });
+  };
+
+  // 依存活將領數取前 N 個勢力，太多多邊形會互相蓋住 /
+  // Cap to the factions with the most living characters; more polygons just overlap
+  const bySize = factions
+    .map((faction) => {
+      const members = living.filter((c) => c.factionId === faction.id);
+      return { faction, members, values: means(members) };
+    })
+    .filter((entry) => entry.values !== null)
+    .sort((a, b) => b.members.length - a.members.length)
+    .slice(0, RADAR_MAX_FACTIONS);
+
+  const worldAverage = means(living);
+  const cx = RADAR_SIZE / 2;
+  const cy = RADAR_SIZE / 2;
+
+  return (
+    <ChartFrame title={t('stats.attributes')}>
+      {living.length === 0 || bySize.length === 0 ? (
+        <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
+      ) : (
+        <>
+          <svg
+            viewBox={`0 0 ${RADAR_SIZE} ${RADAR_SIZE}`}
+            className="w-full max-w-[240px] mx-auto"
+            role="img"
+            aria-label={t('stats.attributes')}
+          >
+            {/* 同心格線 / Concentric grid */}
+            {[0.25, 0.5, 0.75, 1].map((pct) =>
+              RADAR_AXES.map((axis, i) => {
+                const angle = -Math.PI / 2 + (i / RADAR_AXES.length) * Math.PI * 2;
+                const r = pct * RADAR_RADIUS;
+                const x = cx + r * Math.cos(angle);
+                const y = cy + r * Math.sin(angle);
+                return (
+                  <line
+                    key={`${pct}-${i}`}
+                    x1={cx}
+                    y1={cy}
+                    x2={x}
+                    y2={y}
+                    stroke="var(--color-ds-void)"
+                    strokeWidth={0.5}
+                  />
+                );
+              })
+            )}
+            {/* 勢力多邊形 / Faction polygons */}
+            {bySize.map(({ faction, values }) => (
+              <polygon
+                key={faction.id}
+                points={radarPoints(values ?? [])}
+                fill={faction.color}
+                fillOpacity={0.14}
+                stroke={faction.color}
+                strokeWidth={1.5}
+                strokeLinejoin="round"
+              />
+            ))}
+            {/* 世界平均參考線 / World-average reference */}
+            {worldAverage && (
+              <polygon
+                points={radarPoints(worldAverage)}
+                fill="none"
+                stroke="var(--color-ds-cyan)"
+                strokeWidth={1}
+                strokeDasharray="3 2"
+              />
+            )}
+            {/* 軸標籤 / Axis labels */}
+            {RADAR_AXES.map((axis, i) => {
+              const angle = -Math.PI / 2 + (i / RADAR_AXES.length) * Math.PI * 2;
+              const r = RADAR_RADIUS + 15;
+              const x = cx + r * Math.cos(angle);
+              const y = cy + r * Math.sin(angle);
+              return (
+                <text
+                  key={axis.key}
+                  x={x}
+                  y={y}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  fontSize={9}
+                  fontFamily="monospace"
+                  style={{ fill: 'var(--color-ds-muted)' }}
+                >
+                  {t(axis.label)}
+                </text>
+              );
+            })}
+          </svg>
+          <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+            {bySize.map(({ faction, members }) => (
+              <li
+                key={faction.id}
+                className="inline-flex items-center gap-1 text-[10px] text-gray-400 font-mono"
+              >
+                <span
+                  className="w-2 h-2 rounded-[1px] shrink-0"
+                  style={{ backgroundColor: faction.color }}
+                />
+                <span className="truncate max-w-[80px]">{faction.name}</span>
+                <span className="text-gray-500">{members.length}</span>
+              </li>
+            ))}
+            {worldAverage && (
+              <li className="inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono">
+                <span
+                  className="w-3 h-0 border-t border-dashed"
+                  style={{ borderColor: 'var(--color-ds-cyan)' }}
+                />
+                {t('stats.worldAverage')}
+              </li>
+            )}
+          </ul>
+        </>
+      )}
+    </ChartFrame>
+  );
+}
+
+/** 圖表類型切換（折線／圓餅／長條／區塊圖）/ Chart type switch (line / pie / bar / treemap) */
 function ChartTypeSwitch({
   value,
   onChange,
@@ -2302,9 +2690,13 @@ function ChartTypeSwitch({
 function StatsCharts({
   worldId,
   currentRound,
+  characters,
+  worldFactions,
 }: {
   worldId: string;
   currentRound: number;
+  characters: WorldState['characters'];
+  worldFactions: WorldState['factions'];
 }) {
   const [chartType, setChartType] = useState<ChartType>('line');
   const [data, setData] = useState<StatsPayload | null>(null);
@@ -2409,16 +2801,30 @@ function StatsCharts({
         <h3 className={`${GM_TITLE}`}>{t('stats.title')}</h3>
         <ChartTypeSwitch value={chartType} onChange={setChartType} />
       </div>
-      {factionCharts.map((chart) => (
-        <div key={chart.title}>{renderChart(chart)}</div>
-      ))}
-      {factionCharts.some((c) => c.series.length > 0) && (
-        <div className="border-t border-white/5 pt-3 mt-1">
-          {worldCharts.map((chart) => (
+      {chartType === 'treemap' ? (
+        // 區塊圖是「勢力力量」的整合視角，不是任何單一指標的另一種畫法，
+        // 所以這個模式下不畫那 9 張時間序列圖。
+        // The treemap is a combined view of faction power, not another rendering
+        // of any single metric, so it replaces the nine time-series charts.
+        <FactionTreemap factions={factions} />
+      ) : (
+        <>
+          {factionCharts.map((chart) => (
             <div key={chart.title}>{renderChart(chart)}</div>
           ))}
-        </div>
+          {factionCharts.some((c) => c.series.length > 0) && (
+            <div className="border-t border-white/5 pt-3 mt-1">
+              {worldCharts.map((chart) => (
+                <div key={chart.title}>{renderChart(chart)}</div>
+              ))}
+            </div>
+          )}
+        </>
       )}
+      {/* 雷達圖是自己的面板，不受圖表類型影響 / The radar is its own panel and ignores the type toggle */}
+      <div className="border-t border-white/5 pt-3 mt-1">
+        <CharacterRadar characters={characters} factions={worldFactions} />
+      </div>
     </div>
   );
 }

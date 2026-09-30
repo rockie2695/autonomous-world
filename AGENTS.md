@@ -169,15 +169,27 @@ src/components/
                            # - Nodes: faction-colored (HSL→hex), sized by troops
                            # - Edges: semi-transparent roads
                            # - Dynamic labels with faction-colored backgrounds
-                           # - Overlay <canvas> animation layer (pointer-events-none):
-                           #   pulsing spotlight rings (cyan=created, red=attacked) +
-                           #   faction-colored travel dot for the displayed round's moves.
+                           # - TWO overlay <canvas> layers (both pointer-events-none),
+                           #   stacked under the sigma container so WebGL paints the
+                           #   node discs and labels on top:
+                           #     1. glow/shadow (bottom): offset drop shadow then a
+                           #        faction-colored radial glow per node. Sprites are
+                           #        cached per colour and blitted with drawImage, and
+                           #        it redraws on sigma's `afterRender` + `resize` —
+                           #        no rAF, so an idle map costs nothing.
+                           #     2. spotlight/move (top): pulsing rings (cyan=created,
+                           #        red=attacked) + faction-colored travel dot for the
+                           #        displayed round's moves; this is the only rAF loop.
                            #   NOTE: canvas is a replaced element — keep `w-full h-full`
                            #   (inset-0 alone leaves it at intrinsic 300×150).
+                           # - Camera: clicking a node animates the view to centre it;
+                           #   resetView animates to fit the whole graph (getBBox), not
+                           #   ratio 1. Duration is CONFIG.MAP_CAMERA_ANIM_MS, or 0 when
+                           #   prefers-reduced-motion is set.
 
 src/app/game/page.tsx also defines locally:
 ├── EventLog               # Bilingual event log (i18n t() with parameter substitution); header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
-└── StatsCharts            # SVG line charts for faction stats over time
+└── StatsCharts            # Stats panel: 9 time-series charts in 4 switchable styles, plus a faction-power treemap and a character radar. See "Stats Charts" below.
 ```
 
 ### Styling surface (`src/components/home/`)
@@ -197,7 +209,8 @@ src/components/home/
 ├── LiveStats.tsx          # Live counts from the public endpoint
 ├── LiveRound.tsx          # "Round N" tag in the hero
 ├── SignalFeed.tsx         # Ticker carrying real events
-└── usePublicWorld.ts      # Module-level singleton poller; one request chain, many subscribers
+├── usePublicWorld.ts      # Module-level singleton poller; one request chain, many subscribers. Read through `useSyncExternalStore` — do NOT reintroduce a `setState` inside the subscribe effect
+└── useChangedKeys.ts      # Flags which numbers moved since the last poll so LiveStats/FactionNebula can flash them. Diffs during render (React's "adjust state" pattern), never a synchronous setState in an effect
 ```
 
 **Styling convention.** Design values live once in `@theme static` in
@@ -302,9 +315,69 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - `moves` includes only `CHARACTER_MOVED` events with `round === N` (the displayed round exactly)
 - `CHARACTER_MOVED` events are written by `server/moveEvent.ts#recordMove()` from all four `aiMove.ts` movement sites and the three `battle.ts` escape sites; no-op when `fromPlaceId === toPlaceId`
 - Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 1`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
-- **Z-order**: the overlay `<canvas>` paints first (below), the sigma container div paints last (above) — so place labels always render on top of spotlight rings. Keep that DOM order.
+- The spotlight layer is the map's **only** rAF loop and it obeys the animation rules: it pauses when the canvas leaves the viewport (`IntersectionObserver`) and when `document.hidden`, and under `prefers-reduced-motion` it renders a single static frame (`STATIC_FRAME_MS`) with no loop at all. It listens for a mid-session `matchMedia` change too. Keep the gate in `isAnimating()` and keep the initial `resize()` call **after** `isAnimating`/`renderFrame` are declared (an earlier call hits the temporal dead zone)
+- **Z-order**: the two overlay `<canvas>` elements paint first (below, glow then spotlight), the sigma container div paints last (above) — so place labels always render on top of both. Keep that DOM order.
 - **Label visibility**: node labels use one zoom rule — `labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD` (8) in `SigmaMap.tsx`. Tune the threshold in `gameConfig.ts`, not inline.
 - `GET /api/world/events?round=N` applies read-time enrichment to `CHARACTER_MOVED`: adds `fromPlaceName`/`toPlaceName` by joining `places` (events themselves store only placeIds)
+
+### Map Glow, Shadow & Camera
+
+- The glow layer is **decoration, not animation**: it redraws on sigma's `afterRender` and `resize` only, so an idle map costs nothing. Do not add an rAF loop to it — the spotlight layer is the only rAF loop on the map
+- Node colours come from the graph (runtime faction data, converted to hex by `hslToHex`); the **shadow colour comes from the `--color-ds-void` design token**, read once per redraw via `getComputedStyle`. Never hardcode a colour here — inline styles are for runtime data only
+- Glow strength scales with the node's on-screen radius between `MAP_GLOW_MIN_ALPHA` and `MAP_GLOW_ALPHA`, so big places read as lit and small ones do not haze the map into fog. Nodes below `MAP_GLOW_MIN_RADIUS_PX` are skipped, as are nodes outside the viewport (`viewportToGraph` bounds)
+- Sprites are cached per `color|alpha` and blitted with `drawImage`; a per-frame `createRadialGradient` per node would be far too slow at `PLACE_MAX_COUNT` (2000)
+- Glow/shadow geometry and camera timing live in `gameConfig.ts`: `MAP_GLOW_*`, `MAP_SHADOW_*`, `MAP_CAMERA_ANIM_MS`, `MAP_FOCUS_MIN_RATIO`, `MAP_FIT_PADDING`
+- The map's inner vignette is a design token, not a bespoke class: `--shadow-ds-map-vignette` in `@theme static` (globals.css), applied as `shadow-ds-map-vignette`
+- `resetView` fits the whole graph via `sigma.getBBox()` (ratio = larger axis × `MAP_FIT_PADDING`), **not** `animatedReset()` — the world is far larger than the viewport, so ratio 1 crops it
+- Camera animations run through `reducedMotionRef` (populated from `useReducedMotion`), giving `duration: 0`. It is a ref, not a direct closure, because the effect that builds the Sigma instance has an empty dependency array
+- `extract-` note: `readDesignToken` is the only sanctioned way for a canvas layer in this component to obtain a design value
+
+### Stats Charts
+
+`StatsCharts` (in `src/app/game/page.tsx`) renders two independent things in the stats tab:
+
+**1. Nine time-series charts in four switchable styles.** The type lives in one
+`ChartType` union plus a `CHART_TYPE_LABEL_KEYS` map; each style has its own component
+(`LineChart`, `PieChart`, `GaugeChart`, `BarChart`) and `renderChart()` picks between them.
+
+| Type | Faction charts (one series per faction) | World charts (single series) |
+|------|------------------------------------------|------------------------------|
+| `line` | one polyline per faction + latest-point markers | single trend line |
+| `pie` | donut of the latest round's share, legend with % | **gauge ring** (value vs. historical peak) |
+| `square` | stacked bar per round (last `BAR_MAX_ROUNDS` = 24) | bar per round |
+| `treemap` | *replaces all nine charts* — see below | — |
+
+**2. A character radar**, its own panel below the charts. It ignores the type toggle.
+One polygon per faction showing the **mean attributes of its living characters**, over six
+axes — `wu`, `tong`, `jing`, `speed`, `ambition`, `age` — with the world average as a
+dashed reference ring. Capped at `RADAR_MAX_FACTIONS` (6) polygons, largest faction first;
+past that the shapes just overlap. It reads `WorldState.characters` / `.factions` from the
+game page, **not** the stats endpoint, so it needs those two props threaded into
+`StatsCharts` at both call sites (desktop rail and mobile overlay).
+
+### Treemap Rules
+
+- Treemap is a **combined** view of faction power, not another rendering of a single metric,
+  so selecting it replaces the nine per-metric charts rather than trying to force a
+  treemap onto a time series.
+- Outer block area = territory count; each block subdivides into troops / gold / characters.
+- **The three metrics are normalised against their own world maximum** before the split —
+  troops can be a thousand times character counts, so raw values would make the
+  character segment invisible. This means block area mixes a faction's *scale* with its
+  *internal mix*; that is a deliberate trade-off, not an oversight.
+- `layoutTreemap()` is slice-and-dice along the longer side, recursing into each parent's
+  own rectangle. Non-positive values are skipped, so an all-zero payload renders the
+  "no data" message instead of empty rectangles.
+- Capped at `TREEMAP_MAX_FACTIONS` (12), largest by territory first.
+- Segment swatches come from `--color-ds-cyan` / `--color-ds-amber` / `--color-ds-purple`;
+  faction blocks use the runtime faction colour. No colour is hardcoded.
+
+### Radar Caveats
+
+- Each axis normalises against **its own** maximum (`CHAR_ABILITY_MAX`, `CHAR_SPEED_MAX`,
+  `CHAR_AMBITION_MAX`, `CHAR_MAX_AGE_MAX` — age tops out far above the ability stats), so
+  edge lengths are **not comparable across axes**. Read the shape, not the absolute numbers.
+- Axis labels reuse the existing `character.*` i18n keys; do not add radar-specific ones.
 
 ### Type Safety
 

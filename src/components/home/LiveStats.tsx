@@ -12,10 +12,11 @@
 // is a real count, and it flashes when a value changes.
 // ============================================================================
 
-import { useEffect, useRef, useState } from 'react';
+import { useMemo } from 'react';
 import { usePublicWorld } from './usePublicWorld';
+import { useChangedKeys } from './useChangedKeys';
 import { createTranslator, type Locale } from '@/lib/i18n';
-import { PANEL } from './tokens';
+import { PANEL, SKELETON } from './tokens';
 
 type LiveStatsProps = {
   locale: Locale;
@@ -37,36 +38,28 @@ export default function LiveStats({ locale }: LiveStatsProps) {
   const t = createTranslator(locale);
   const { payload, status } = usePublicWorld();
 
-  const previous = useRef<Record<string, number> | null>(null);
-  const [changed, setChanged] = useState<ReadonlySet<string>>(new Set());
-
   // 比較只吃 payload，不吃 t（翻譯函式每次 render 都是新的，放進依賴會迴圈）
   // The comparison reads only the payload — t() is a new function on every
   // render and would loop if it were a dependency.
-  useEffect(() => {
-    if (!payload) return;
-    const now: Record<string, number> = {
-      round: payload.world.round,
-      factions: payload.counts.factions,
-      characters: payload.counts.characters,
-      places: payload.counts.places,
-      troops: payload.counts.troops,
-      roads: payload.counts.roads,
-    };
-    const before = previous.current;
-    previous.current = now;
-    if (!before) return;
+  // useMemo 讓快照在 payload 沒變時維持同一個參考，否則每個 render 都被視為新一輪
+  // useMemo keeps the snapshot referentially stable while the payload is
+  // unchanged, otherwise every render would look like a new round.
+  const snapshot = useMemo(
+    () =>
+      payload
+        ? {
+            round: payload.world.round,
+            factions: payload.counts.factions,
+            characters: payload.counts.characters,
+            places: payload.counts.places,
+            troops: payload.counts.troops,
+            roads: payload.counts.roads,
+          }
+        : null,
+    [payload]
+  );
 
-    const diff = new Set<string>();
-    for (const [key, value] of Object.entries(now)) {
-      if (before[key] !== value) diff.add(key);
-    }
-    if (diff.size === 0) return;
-
-    setChanged(diff);
-    const timer = setTimeout(() => setChanged(new Set()), FLASH_MS);
-    return () => clearTimeout(timer);
-  }, [payload]);
+  const changed = useChangedKeys(snapshot, FLASH_MS);
 
   // ── 讀不到：失敗 / Unreachable: failure ───────────────────────────────────
   if (status === 'error') {
@@ -102,7 +95,7 @@ export default function LiveStats({ locale }: LiveStatsProps) {
           aria-hidden="true"
         >
           {Array.from({ length: SKELETON_CELLS }, (_, index) => (
-            <div key={index} className="ds-gm-skel h-[5.5rem] w-full" />
+            <div key={index} className={`${SKELETON} h-[5.5rem] w-full`} />
           ))}
         </div>
       </div>

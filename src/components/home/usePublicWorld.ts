@@ -12,7 +12,7 @@
 // one state, one request chain.
 // ============================================================================
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import type { PublicWorldPayload } from '@/lib/publicWorld';
 
 export type PublicWorldStatus = 'loading' | 'ready' | 'empty' | 'error';
@@ -25,7 +25,7 @@ export type PublicWorldSnapshot = {
 /** 輪詢間隔 / Poll interval */
 const POLL_MS = 15_000;
 
-type Listener = (next: PublicWorldSnapshot) => void;
+type Listener = () => void;
 
 // ─── 單例狀態 / Singleton state ────────────────────────────────────────────
 
@@ -38,7 +38,7 @@ const listeners = new Set<Listener>();
 
 function emit(): void {
   for (const listener of listeners) {
-    listener(snapshot);
+    listener();
   }
 }
 
@@ -111,6 +111,49 @@ function handleVisibilityChange(): void {
   }
 }
 
+// ─── Store 介面 / Store interface ──────────────────────────────────────────
+// useSyncExternalStore 需要的兩個函式。訂閱者數與輪詢啟停仍由模組層管理，
+// React 只負責何時重新渲染。
+// The two functions useSyncExternalStore needs. The subscriber count and the
+// polling lifecycle stay here in the module; React only decides when to render.
+
+function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  subscribers += 1;
+
+  if (subscribers === 1) {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    if (snapshot.status === 'loading' || snapshot.status === 'error') {
+      void run();
+    } else {
+      schedule();
+    }
+  }
+
+  return () => {
+    listeners.delete(listener);
+    subscribers -= 1;
+    if (subscribers === 0) {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stop();
+    }
+  };
+}
+
+/**
+ * 讀取目前快照。emit() 之間必須保持同一個參考物件，否則 React 會無限重繪。
+ * Read the current snapshot. The reference must stay identical between emits,
+ * otherwise React re-renders forever.
+ */
+function getSnapshot(): PublicWorldSnapshot {
+  return snapshot;
+}
+
+/** 伺服器渲染時模組狀態就是初始值，兩邊一致以避免 hydration 不一致 / The module starts in its loading state on the server too, so hydration matches */
+function getServerSnapshot(): PublicWorldSnapshot {
+  return snapshot;
+}
+
 // ─── Hook ───────────────────────────────────────────────────────────────────
 
 /**
@@ -118,34 +161,14 @@ function handleVisibilityChange(): void {
  * 重新掛載時立刻拿到上次結果，不會又閃一次載入態。
  * Subscribe to the public world state. The payload survives unmount, so a
  * remount gets the last result immediately instead of flashing a loading state.
+ *
+ * 這是一個標準的外部 store，所以用 useSyncExternalStore：React 會自行處理
+ * 「掛載時補一次快照」與競態，不需要在 effect 裡同步 setState。
+ * This is a textbook external store, so it uses useSyncExternalStore: React
+ * handles the mount-time snapshot sync and races itself, so no state is set
+ * synchronously inside an effect.
  */
 export function usePublicWorld(): PublicWorldSnapshot {
-  const [state, setState] = useState<PublicWorldSnapshot>(snapshot);
-
-  useEffect(() => {
-    const listener: Listener = (next) => setState(next);
-    listeners.add(listener);
-    subscribers += 1;
-    setState(snapshot);
-
-    if (subscribers === 1) {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-      if (snapshot.status === 'loading' || snapshot.status === 'error') {
-        void run();
-      } else {
-        schedule();
-      }
-    }
-
-    return () => {
-      listeners.delete(listener);
-      subscribers -= 1;
-      if (subscribers === 0) {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-        stop();
-      }
-    };
-  }, []);
-
+  const state = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   return state;
 }

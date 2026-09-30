@@ -304,7 +304,12 @@ export const zh = {
     line: '折線',
     pie: '圓餅',
     square: '長條',
+    treemap: '區塊圖',
     peak: '峰值',
+    // ── 雷達圖 / Radar ──
+    attributes: '將領屬性',
+    worldAverage: '世界平均',
+    factionPower: '勢力力量',
     // ── 世界整體 / World-wide ──
     aliveFactionsOverTime: '存活勢力數',
     totalCharactersOverTime: '總將領數',

@@ -45,3 +45,36 @@ export const CTA_SECONDARY =
 
 /** 玻璃面板 / the glass panel surface */
 export const PANEL = 'relative rounded-ds-panel border border-ds-line bg-ds-panel backdrop-blur-[14px]';
+
+/**
+ * 無主勢力的色票 / the unclaimed faction's swatch.
+ *
+ * 星雲與世界圖譜的場景都以 0x64748b 畫無主據點，這裡是同一個值的 CSS 寫法。圖例
+ * 的色票靠它才不會和畫面上那一團真正的灰色雲對不起來——這正是「顏色對得上名字」
+ * 的前提。
+ *
+ * Both scenes paint unclaimed places with 0x64748b; this is that same value in
+ * CSS form. The legend swatch depends on it so it cannot drift away from the
+ * actual cloud — which is the whole point of matching colour to name.
+ */
+export const UNOWNED_COLOR = '#64748b';
+
+/**
+ * 載入骨架 / the loading skeleton.
+ *
+ * 純 Tailwind utility，不依賴任何自訂類別。這裡特別註明：舊版有過一個
+ * `.ds-gm-skel` 自訂類別，它在 Tailwind 遷移時已連同整個自訂類別層被刪除，
+ * 但幾個載入狀態還在引用它，結果是骨架沒有任何樣式。凡是新的載入骨架一律
+ * 用這個常數，不要再寫回那個類別名。
+ *
+ * Pure Tailwind utilities with no bespoke class. This note is deliberate: a
+ * `.ds-gm-skel` class used to exist and was removed together with the custom
+ * class layer during the Tailwind migration, yet several loading states still
+ * referenced it — leaving the skeletons with no styling at all. New loading
+ * states use this constant; the dead class name must not come back.
+ */
+export const SKELETON =
+  'relative overflow-hidden bg-[rgba(148,163,184,0.08)] ' +
+  "after:absolute after:inset-0 after:-translate-x-full after:content-[''] " +
+  'after:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.14),transparent)] ' +
+  'after:animate-ds-shimmer';
