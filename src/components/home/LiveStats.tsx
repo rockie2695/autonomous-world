@@ -12,10 +12,11 @@
 // is a real count, and it flashes when a value changes.
 // ============================================================================
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePublicWorld } from './usePublicWorld';
 import { createTranslator, type Locale } from '@/lib/i18n';
-import { PANEL } from './tokens';
+import type { PublicWorldPayload } from '@/lib/publicWorld';
+import { PANEL, SKELETON } from './tokens';
 
 type LiveStatsProps = {
   locale: Locale;
@@ -33,40 +34,83 @@ const LIVE_DOT =
   'relative inline-block size-2 shrink-0 rounded-full bg-ds-cyan ' +
   'after:absolute after:inset-0 after:animate-ping after:rounded-full after:bg-ds-cyan after:content-[""]';
 
+/** 這一格會比較的數字 / the numbers this row compares */
+type Counts = {
+  round: number;
+  factions: number;
+  characters: number;
+  places: number;
+  troops: number;
+  roads: number;
+};
+
+const COUNT_KEYS: ReadonlyArray<keyof Counts> = [
+  'round',
+  'factions',
+  'characters',
+  'places',
+  'troops',
+  'roads',
+];
+
+const NO_KEYS: ReadonlySet<string> = new Set<string>();
+
+function readCounts(payload: PublicWorldPayload): Counts {
+  return {
+    round: payload.world.round,
+    factions: payload.counts.factions,
+    characters: payload.counts.characters,
+    places: payload.counts.places,
+    troops: payload.counts.troops,
+    roads: payload.counts.roads,
+  };
+}
+
 export default function LiveStats({ locale }: LiveStatsProps) {
   const t = createTranslator(locale);
   const { payload, status } = usePublicWorld();
 
-  const previous = useRef<Record<string, number> | null>(null);
-  const [changed, setChanged] = useState<ReadonlySet<string>>(new Set());
+  // 記住「上次那份 payload」與「正在跳動的格子」。放在 render 階段比較而不是
+  // effect：effect 主體裡同步 setState 會造成連鎖重繪。
+  // Holds the previous payload and the cells currently flashing. The comparison
+  // happens during render — a synchronous setState in an effect body would
+  // cascade renders.
+  const [flash, setFlash] = useState<{
+    source: PublicWorldPayload | null;
+    keys: ReadonlySet<string>;
+  }>({ source: null, keys: NO_KEYS });
 
-  // 比較只吃 payload，不吃 t（翻譯函式每次 render 都是新的，放進依賴會迴圈）
-  // The comparison reads only the payload — t() is a new function on every
-  // render and would loop if it were a dependency.
-  useEffect(() => {
-    if (!payload) return;
-    const now: Record<string, number> = {
-      round: payload.world.round,
-      factions: payload.counts.factions,
-      characters: payload.counts.characters,
-      places: payload.counts.places,
-      troops: payload.counts.troops,
-      roads: payload.counts.roads,
-    };
-    const before = previous.current;
-    previous.current = now;
-    if (!before) return;
-
-    const diff = new Set<string>();
-    for (const [key, value] of Object.entries(now)) {
-      if (before[key] !== value) diff.add(key);
+  // 比較只吃 payload，不吃 t（翻譯函式每次 render 都是新的，放進依賴會迴圈）。
+  // 第一次只記錄基準，不跳動；之後每次輪詢到新物件就比對差異。
+  // The comparison reads only the payload — t() is a new function on every render
+  // and would loop if it were a dependency. The first payload only sets the
+  // baseline (nothing flashes); after that each poll diffs against the last.
+  // React 會丟掉這次的輸出並在 commit 前重跑一次，所以不會多一次提交 /
+  // React discards this render and re-runs it before committing, so it costs no
+  // extra commit.
+  if (payload !== null && payload !== flash.source) {
+    const keys = new Set<string>();
+    if (flash.source !== null) {
+      const before = readCounts(flash.source);
+      const now = readCounts(payload);
+      for (const key of COUNT_KEYS) {
+        if (before[key] !== now[key]) keys.add(key);
+      }
     }
-    if (diff.size === 0) return;
+    setFlash({ source: payload, keys });
+  }
 
-    setChanged(diff);
-    const timer = setTimeout(() => setChanged(new Set()), FLASH_MS);
+  // 只負責「跳動結束後清掉」，setState 在 timeout 回呼裡（非同步），
+  // effect 主體本身不 setState / Only clears the flash when it expires —
+  // setState lives in the timeout callback, never in the effect body.
+  useEffect(() => {
+    if (flash.keys.size === 0) return;
+    const timer = setTimeout(
+      () => setFlash((prev) => ({ ...prev, keys: NO_KEYS })),
+      FLASH_MS
+    );
     return () => clearTimeout(timer);
-  }, [payload]);
+  }, [flash]);
 
   // ── 讀不到：失敗 / Unreachable: failure ───────────────────────────────────
   if (status === 'error') {
@@ -102,7 +146,7 @@ export default function LiveStats({ locale }: LiveStatsProps) {
           aria-hidden="true"
         >
           {Array.from({ length: SKELETON_CELLS }, (_, index) => (
-            <div key={index} className="ds-gm-skel h-[5.5rem] w-full" />
+            <div key={index} className={`${SKELETON} h-[5.5rem] w-full`} />
           ))}
         </div>
       </div>
@@ -144,7 +188,7 @@ export default function LiveStats({ locale }: LiveStatsProps) {
           >
             <span
               className="block font-orbitron text-[clamp(1.5rem,3.4vw,2rem)] leading-[1.2] font-bold text-slate-50 tabular-nums whitespace-nowrap data-changed:animate-ds-bump"
-              data-changed={changed.has(cell.key) ? 'true' : undefined}
+              data-changed={flash.keys.has(cell.key) ? 'true' : undefined}
             >
               {cell.value.toLocaleString(locale === 'zh' ? 'zh-TW' : 'en-US')}
             </span>

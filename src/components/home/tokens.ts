@@ -45,3 +45,12 @@ export const CTA_SECONDARY =
 
 /** 玻璃面板 / the glass panel surface */
 export const PANEL = 'relative rounded-ds-panel border border-ds-line bg-ds-panel backdrop-blur-[14px]';
+
+/** 載入骨架（永不只顯示裸 spinner）/ Loading skeleton, never a bare spinner
+    與遊戲頁的 GM_SKEL 同一組數值，只是住在首頁的 token 表裡 /
+    Same values as the game page's GM_SKEL, just declared in the home token sheet */
+export const SKELETON =
+  'relative overflow-hidden rounded-lg bg-[rgba(148,163,184,0.08)] ' +
+  "after:absolute after:inset-0 after:-translate-x-full after:content-[''] " +
+  'after:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.14),transparent)] ' +
+  'after:animate-ds-shimmer';

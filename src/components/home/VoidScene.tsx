@@ -299,7 +299,13 @@ export default function VoidScene() {
     // ── 節流 / Throttle ───────────────────────────────────────────────────
     // 背景不需要 60fps：跳幀省電，畫面幾乎看不出差別
     // A backdrop does not need 60fps; skipped frames cost nothing visually
-    const clock = new THREE.Clock();
+    const timer = new THREE.Timer();
+    // Page Visibility API：分頁隱藏時 delta 歸零、切回時重設時間起點，
+    // 回來不會出現一次巨大的跳動（Clock 要靠手動 getDelta() 丟棄落差）/
+    // Page Visibility API: delta is zero while hidden and the origin resets on
+    // return, so coming back never produces one huge jump (Clock needed a manual
+    // getDelta() call to throw the gap away).
+    timer.connect(document);
     let raf = 0;
     let frameCount = 0;
     let elapsed = 0;
@@ -311,12 +317,15 @@ export default function VoidScene() {
       renderer.render(scene, camera);
     };
 
-    const frame = () => {
+    const frame = (time: number) => {
       raf = requestAnimationFrame(frame);
       if (!rig.running || document.hidden) return;
       frameCount += 1;
       if (frameCount % FRAME_SKIP !== 0) return;
-      elapsed = clock.getElapsedTime();
+      // Timer 必須先 update() 才能讀時間，且同一幀內讀幾次都一樣 /
+      // Timer needs update() before any query, and repeats within one frame agree
+      timer.update(time);
+      elapsed = timer.getElapsed();
       draw(elapsed);
     };
 
@@ -341,9 +350,11 @@ export default function VoidScene() {
     if (hero) intersectionObserver.observe(hero);
 
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        clock.getDelta();
-        if (reduced) drawStaticFrame();
+      // 時間落差由 timer.connect(document) 處理，這裡只剩收斂動效的重畫 /
+      // timer.connect(document) absorbs the time gap; only the reduced-motion
+      // redraw is left to do here
+      if (document.visibilityState === 'visible' && reduced) {
+        drawStaticFrame();
       }
     };
 
@@ -374,6 +385,7 @@ export default function VoidScene() {
 
       // 釋放：幾何、材質、著色器、context
       // Release: geometry, material, shader, context
+      timer.dispose();
       scene.traverse((object) => {
         const mesh = object as THREE.Mesh;
         mesh.geometry?.dispose();

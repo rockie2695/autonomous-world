@@ -426,12 +426,19 @@ function TelemetryStrip({
     <section className={`${GM_STRIP}`} aria-label={t('home.stats.title')}>
       <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
         <Parallax offset={48} className="absolute -top-1/2 -left-[5%] h-[200%] w-[110%]">
-          <PointerDrift depth={14} className="h-full w-full">
+          {/* relative：fill 的影像需要一個 positioned 父層，否則 Next 會警告
+              且 containing block 會往上跳到 Parallax / relative: a fill image
+              needs a positioned parent, otherwise Next warns and the containing
+              block silently resolves further up to Parallax */}
+          <PointerDrift depth={14} className="relative h-full w-full">
             <Image
               src="/space/deep-field.jpg"
               alt=""
               fill
               sizes="100vw"
+              // 這張在第一屏內、也是本頁的 LCP 元素 → 不要延遲載入 /
+              // Sits above the fold and is this page's LCP element — don't defer it
+              loading="eager"
               className={`${GM_STRIP_PHOTO}`}
             />
           </PointerDrift>
