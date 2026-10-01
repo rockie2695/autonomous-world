@@ -199,7 +199,12 @@ export default function WorldGraphScene({ places, roads, colors }: WorldGraphSce
     }
 
     // ── 動畫迴圈 / Animation loop ───────────────────────────────────────
-    const clock = new THREE.Clock();
+    // Timer（Clock 的替代品）：分頁隱藏時 delta 歸零、切回時重設起點，
+    // 圖譜不會因為背景拖了一段時間而猛然跳動 /
+    // Timer (Clock's replacement): delta is zero while the tab is hidden and the
+    // origin resets on return, so the graph never lurches after a long pause.
+    const timer = new THREE.Timer();
+    timer.connect(document);
     let raf = 0;
 
     /**
@@ -218,12 +223,15 @@ export default function WorldGraphScene({ places, roads, colors }: WorldGraphSce
       camera.lookAt(0, 0, 0);
     };
 
-    const frame = () => {
+    const frame = (time: number) => {
       raf = requestAnimationFrame(frame);
       if (!rig.running || document.hidden) return;
 
       const { extent } = rig;
-      const elapsed = clock.getElapsedTime();
+      // Timer 必須先 update() 才能讀時間，且同一幀內讀幾次都一樣 /
+      // Timer needs update() before any query, and repeats within one frame agree
+      timer.update(time);
+      const elapsed = timer.getElapsed();
       const sway = Math.sin(elapsed * 0.16) * extent * SWAY;
       const px = rig.reduced ? 0 : rig.pointer.x * extent * 0.05;
       const py = rig.reduced ? 0 : rig.pointer.y * extent * 0.04;
@@ -241,9 +249,10 @@ export default function WorldGraphScene({ places, roads, colors }: WorldGraphSce
     rig.drawStaticFrame = drawStaticFrame;
 
     if (reduced) {
-      // 收斂動效：只畫一格，內容照樣完整
-      // Reduced motion: render a single frame, content stays complete
-      frame();
+      // 收斂動效：只畫一格，內容照樣完整。手動帶時間戳，因為這格不是 rAF 來的 /
+      // Reduced motion: render a single frame, content stays complete. The
+      // timestamp is passed by hand because this frame is not from rAF.
+      frame(performance.now());
       cancelAnimationFrame(raf);
       raf = 0;
     } else {
@@ -252,6 +261,7 @@ export default function WorldGraphScene({ places, roads, colors }: WorldGraphSce
 
     return () => {
       if (raf !== 0) cancelAnimationFrame(raf);
+      timer.dispose();
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
       window.removeEventListener('pointermove', handlePointerMove);

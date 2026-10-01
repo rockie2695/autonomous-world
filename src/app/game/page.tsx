@@ -427,12 +427,19 @@ function TelemetryStrip({
     <section className={`${GM_STRIP}`} aria-label={t('home.stats.title')}>
       <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
         <Parallax offset={48} className="absolute -top-1/2 -left-[5%] h-[200%] w-[110%]">
-          <PointerDrift depth={14} className="h-full w-full">
+          {/* relative：fill 的影像需要一個 positioned 父層，否則 Next 會警告
+              且 containing block 會往上跳到 Parallax / relative: a fill image
+              needs a positioned parent, otherwise Next warns and the containing
+              block silently resolves further up to Parallax */}
+          <PointerDrift depth={14} className="relative h-full w-full">
             <Image
               src="/space/deep-field.jpg"
               alt=""
               fill
               sizes="100vw"
+              // 這張在第一屏內、也是本頁的 LCP 元素 → 不要延遲載入 /
+              // Sits above the fold and is this page's LCP element — don't defer it
+              loading="eager"
               className={`${GM_STRIP_PHOTO}`}
             />
           </PointerDrift>
@@ -702,7 +709,16 @@ export default function GamePage() {
   // ── 主要渲染 / Main Render ─────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen flex flex-col bg-[#020617]">
+    // h-dvh（不是 min-h-screen）：HUD 是「地圖填滿、左右欄內捲」的固定版面，
+    // 外層必須是確定高度，flex 演算法才會把剩餘空間分給 row，內層
+    // flex-1 + min-h-0 的捲動容器才會拿到小於內容的高度。min-h-screen 只是
+    // 下限，row 會被內容撐高、面板就跟著長高而永遠不會捲動 /
+    // h-dvh, not min-h-screen: this is a fixed HUD (map fills, side rails
+    // scroll). The outer box needs a *definite* height so flex gives the row the
+    // leftover space and the inner flex-1 + min-h-0 boxes end up shorter than
+    // their content. With min-h-screen the row is floored by its content, the
+    // panel grows with it, and nothing ever scrolls.
+    <div className="h-dvh flex flex-col overflow-hidden bg-[#020617]">
       {/* ── 深空背景層（影像＋星域＋視差）/ Deep-space backdrop (photo + starfield + parallax) ── */}
       <div className={`${GM_BACKDROP}`} aria-hidden="true">
         <PointerDrift depth={20} className="absolute inset-0">
@@ -975,7 +991,12 @@ export default function GamePage() {
             activeTab={rightTab}
             onTabChange={setRightTab}
           />
-          <div className="flex-1 overflow-y-auto ds-gm-scroll p-3">
+          {/* min-h-0：column flex 的 flex-1 項目預設 min-height:auto，會被內容撐高，
+              overflow-y-auto 就永遠不會捲動（外層 overflow-hidden 直接裁掉）/
+              min-h-0: a flex-1 child of a column flex box defaults to
+              min-height:auto, so it is floored at its content height and
+              overflow-y-auto never engages (the rail's overflow-hidden clips it) */}
+          <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-3">
             {rightTab === 'characters' && (
               <CharacterList
                 characters={worldState?.characters ?? []}
@@ -1018,7 +1039,7 @@ export default function GamePage() {
                 activeTab={rightTab}
                 onTabChange={setRightTab}
               />
-              <div className="flex-1 overflow-y-auto ds-gm-scroll p-3">
+              <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-3">
                 {rightTab === 'characters' && (
                   <CharacterList
                     characters={worldState?.characters ?? []}

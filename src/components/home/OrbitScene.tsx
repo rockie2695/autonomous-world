@@ -195,14 +195,22 @@ export default function OrbitScene({ label }: OrbitSceneProps) {
     intersectionObserver.observe(node);
 
     // ── 動畫迴圈 / Animation loop ─────────────────────────────────────────
-    const clock = new THREE.Clock();
+    // Timer（Clock 的替代品）：分頁隱藏時 delta 歸零、切回時重設起點，
+    // 軌道不會因為背景拖了一段時間而猛然跳動 /
+    // Timer (Clock's replacement): delta is zero while the tab is hidden and the
+    // origin resets on return, so the orbits never lurch after a long pause.
+    const timer = new THREE.Timer();
+    timer.connect(document);
     let raf = 0;
 
-    const frame = () => {
+    const frame = (time: number) => {
       raf = requestAnimationFrame(frame);
       if (!rig.running || document.hidden) return;
 
-      const elapsed = clock.getElapsedTime();
+      // Timer 必須先 update() 才能讀時間，且同一幀內讀幾次都一樣 /
+      // Timer needs update() before any query, and repeats within one frame agree
+      timer.update(time);
+      const elapsed = timer.getElapsed();
       // 收斂動效時 elapsed 仍會前進，但下面只畫一格就停，這裡用 0 凍結相位
       // Under reduced motion the loop stops after one frame, so freeze at 0
       const t = rig.reduced ? 0 : elapsed;
@@ -229,7 +237,9 @@ export default function OrbitScene({ label }: OrbitSceneProps) {
     rig.drawStaticFrame = drawStaticFrame;
 
     if (reduced) {
-      frame();
+      // 手動帶時間戳，因為這一格不是 rAF 來的 / The timestamp is passed by hand
+      // because this frame is not from rAF
+      frame(performance.now());
       cancelAnimationFrame(raf);
       raf = 0;
     } else {
@@ -238,6 +248,7 @@ export default function OrbitScene({ label }: OrbitSceneProps) {
 
     return () => {
       if (raf !== 0) cancelAnimationFrame(raf);
+      timer.dispose();
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
 
