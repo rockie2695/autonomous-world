@@ -727,6 +727,11 @@ export default function GamePage() {
             alt=""
             fill
             sizes="100vw"
+            // 版面已鎖定在視窗高度（h-dvh），這張滿版背景就是本頁的 LCP 元素，
+            // 必須立即載入 /
+            // The layout is viewport-locked (h-dvh), so this full-bleed backdrop
+            // is this page's LCP element — it must not be deferred
+            loading="eager"
             className={`${GM_PHOTO}`}
           />
         </PointerDrift>
@@ -761,10 +766,10 @@ export default function GamePage() {
           <span className="font-orbitron font-bold text-sm tracking-wider text-white truncate">
             {t('general.title')}
           </span>
-          <span className={`${GM_BADGE} hidden sm:flex items-center gap-2 text-xs font-orbitron tracking-wider text-cyan-300/90`}>
+          {/* <span className={`${GM_BADGE} hidden sm:flex items-center gap-2 text-xs font-orbitron tracking-wider text-cyan-300/90`}>
             <span className={`${GM_LIVE}`} aria-hidden="true" />
             RND {String(round).padStart(4, '0')}
-          </span>
+          </span> */}
         </div>
 
         <div className="hidden sm:flex items-center gap-3 min-w-0 text-gray-400">
@@ -882,30 +887,30 @@ export default function GamePage() {
                 exit={{ x: '-100%' }}
                 transition={{ type: 'tween', duration: 0.25, ease: 'easeOut' }}
               >
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-orbitron text-xs text-gray-400 tracking-wider">控制面板</span>
-                <button
-                  onClick={() => setLeftSidebarOpen(false)}
-                  className={`${GM_BTN} w-7 h-7`}
-                  aria-label="關閉"
-                >
-                  <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
-                </button>
-              </div>
-              <RoundTimeline
-                currentRound={round}
-                maxRound={lastRound}
-                isPlaying={isPlaying}
-                playSpeed={playSpeed}
-                onSelect={(r) => { handleRoundSelect(r); setLeftSidebarOpen(false); }}
-                onPlayToggle={() => setIsPlaying(!isPlaying)}
-                onSpeedChange={setPlaySpeed}
-              />
-              <FactionRanking
-                factions={worldState?.factions ?? []}
-                characters={worldState?.characters ?? []}
-                places={worldState?.places ?? []}
-              />
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-orbitron text-xs text-gray-400 tracking-wider">控制面板</span>
+                  <button
+                    onClick={() => setLeftSidebarOpen(false)}
+                    className={`${GM_BTN} w-7 h-7`}
+                    aria-label="關閉"
+                  >
+                    <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
+                  </button>
+                </div>
+                <RoundTimeline
+                  currentRound={round}
+                  maxRound={lastRound}
+                  isPlaying={isPlaying}
+                  playSpeed={playSpeed}
+                  onSelect={(r) => { handleRoundSelect(r); setLeftSidebarOpen(false); }}
+                  onPlayToggle={() => setIsPlaying(!isPlaying)}
+                  onSpeedChange={setPlaySpeed}
+                />
+                <FactionRanking
+                  factions={worldState?.factions ?? []}
+                  characters={worldState?.characters ?? []}
+                  places={worldState?.places ?? []}
+                />
               </motion.div>
             </motion.div>
           )}
@@ -915,16 +920,16 @@ export default function GamePage() {
         <main id="gm-map" tabIndex={-1} className="flex-1 relative min-w-0 outline-none">
           <div className="absolute inset-0">
             <GameGraph
-                places={worldState?.places ?? []}
-                factions={worldState?.factions ?? []}
-                roads={worldState?.roads ?? []}
-                characters={worldState?.characters ?? []}
-                spotlights={worldState?.spotlights ?? []}
-                moves={worldState?.moves ?? []}
-                onPlaceClick={(place) => setSelectedPlace(place)}
-                selectedPlaceId={selectedPlace?.id}
-                onControlsReady={(controls) => { mapControlsRef.current = controls; }}
-              />
+              places={worldState?.places ?? []}
+              factions={worldState?.factions ?? []}
+              roads={worldState?.roads ?? []}
+              characters={worldState?.characters ?? []}
+              spotlights={worldState?.spotlights ?? []}
+              moves={worldState?.moves ?? []}
+              onPlaceClick={(place) => setSelectedPlace(place)}
+              selectedPlaceId={selectedPlace?.id}
+              onControlsReady={(controls) => { mapControlsRef.current = controls; }}
+            />
           </div>
 
           {/* HUD 框角與暗角 / HUD corner brackets + vignette */}
@@ -1039,7 +1044,15 @@ export default function GamePage() {
                 activeTab={rightTab}
                 onTabChange={setRightTab}
               />
-              <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-3">
+              {/* 手機版兩軸都要能捲：面板只有 w-80，統計圖表比這寬，X 軸不給捲
+                  就會被裁掉。min-h-0 是重點——column flex 的 flex-1 項目預設
+                  min-height:auto 會被內容撐高，overflow 就不會生效 /
+                  Mobile scrolls on both axes: the panel is only w-80 wide and the
+                  charts are wider, so without X they get clipped. min-h-0 is the
+                  load-bearing part — a flex-1 child of a column flex box defaults
+                  to min-height:auto, gets floored at its content height, and the
+                  overflow never engages. */}
+              <div className="flex-1 min-h-0 overflow-auto ds-gm-scroll p-3">
                 {rightTab === 'characters' && (
                   <CharacterList
                     characters={worldState?.characters ?? []}
@@ -1273,6 +1286,8 @@ function RoundTimeline({
         <button
           onClick={onPlayToggle}
           className={`${GM_BTN_ACCENT} px-3 py-1.5 text-sm font-medium`}
+          title={isPlaying ? t('game.pause') : t('game.play')}
+          aria-label={isPlaying ? t('game.pause') : t('game.play')}
         >
           {isPlaying ? (
             <>
@@ -1282,21 +1297,23 @@ function RoundTimeline({
           ) : (
             <>
               <Ic className="w-3.5 h-3.5"><path d="M8 5.5v13l11-6.5z" /></Ic>
-              {t('game.play')}
+              {/* {t('game.play')} */}
             </>
           )}
         </button>
-        <input
-          type="range"
-          min={500}
-          max={3000}
-          step={500}
-          value={playSpeed}
-          onChange={(e) => onSpeedChange(Number(e.target.value))}
-          aria-label={t('game.autoPlaySpeed')}
-          className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
-        />
-        <span className="text-xs text-gray-400 font-orbitron tabular-nums">{playSpeed}ms</span>
+        <div>
+          <input
+            type="range"
+            min={500}
+            max={3000}
+            step={500}
+            value={playSpeed}
+            onChange={(e) => onSpeedChange(Number(e.target.value))}
+            aria-label={t('game.autoPlaySpeed')}
+            className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
+          />
+          <span className="text-xs text-gray-400 font-orbitron tabular-nums">{playSpeed}ms</span>
+        </div>
       </div>
       {/* 分批顯示：最新 200 個回合在捲軸內，更早的回合按需載入 /
           Batched: latest 200 rounds in the scroll, older rounds on demand */}
@@ -1950,11 +1967,14 @@ interface StatsPayload {
   world: Record<WorldStatKey, number[]>;
 }
 
-/** 圖表外框：標題 + 內容 / Chart frame: title + body */
+/** 圖表外框：標題 + 內容 / Chart frame: title + body
+    整張卡片是 hover 單位：-mx-2/px-2 讓 hover 底色蓋滿面板的 p-3 內距，
+    文字仍然對齊 / The whole card is the hover target: -mx-2/px-2 lets the tint
+    cover the panel padding while the text stays aligned. */
 function ChartFrame({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="mb-4 last:mb-0">
-      <div className="text-xs text-gray-400 font-orbitron tracking-wider mb-1.5 uppercase">
+    <div className="-mx-2 mb-3 rounded-md border border-transparent px-2 py-1.5 transition-colors duration-200 last:mb-0 hover:border-white/10 hover:bg-white/[0.03]">
+      <div className="text-sm text-gray-300 font-orbitron tracking-wider mb-2 uppercase">
         {title}
       </div>
       {children}
@@ -1966,14 +1986,15 @@ function ChartFrame({ title, children }: { title: string; children: ReactNode })
 function ChartLegend({ series, shares }: { series: ChartSeries[]; shares?: number[] }) {
   if (series.length < 2) return null;
   return (
-    <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+    <ul className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2">
       {series.map((s, i) => (
         <li
           key={`${s.label}-${i}`}
-          className="inline-flex items-center gap-1 text-[10px] text-gray-400 font-mono"
+          className="group inline-flex items-center gap-1.5 text-[13px] text-gray-400 font-mono transition-colors duration-200 hover:text-gray-100"
+          title={s.label}
         >
           <span
-            className="w-2 h-2 rounded-[1px] shrink-0"
+            className="w-2.5 h-2.5 rounded-[1px] shrink-0 transition-transform duration-200 group-hover:scale-125"
             style={{ backgroundColor: s.color }}
           />
           <span className="truncate max-w-[80px]">{s.label}</span>
@@ -2004,7 +2025,7 @@ function ChartGrid({ maxVal }: { maxVal: number }) {
         x={2}
         y={CHART_PAD - 8}
         fill="#475569"
-        fontSize={8}
+        fontSize={11}
         fontFamily="monospace"
       >
         {maxVal}
@@ -2039,16 +2060,35 @@ function LineChart({
         aria-label={title}
       >
         <ChartGrid maxVal={maxVal} />
+        {/* 每個序列一組：可見線 + 透明加粗命中區。
+            1.5px 的線太細，游標幾乎壓不到，hover 會時靈时不靈；
+            命中區把可 hover 的範圍撐到 14px，並且畫在可見線之上（最後一個
+            子節點）以接收游標 / One group per series: the visible line plus an
+            invisible 14px hit band. A 1.5px stroke is a near-miss target, so the
+            band is what actually receives the pointer — and being the last child
+            it paints on top. */}
         {series.map((s, si) => (
-          <polyline
-            key={si}
-            points={s.values.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
-            fill="none"
-            stroke={s.color}
-            strokeWidth={1.5}
-            strokeLinejoin="round"
-            strokeLinecap="round"
-          />
+          <g key={si} className="group/series">
+            <polyline
+              points={s.values.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
+              fill="none"
+              stroke={s.color}
+              strokeWidth={1.5}
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              className="pointer-events-none transition-[stroke-width] duration-200 group-hover/series:[stroke-width:3]"
+            />
+            <polyline
+              points={s.values.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
+              fill="none"
+              stroke="transparent"
+              strokeWidth={14}
+              className="cursor-pointer"
+            >
+              {/* 原生 tooltip：最後一回合的數值 / Native tooltip with the latest value */}
+              <title>{`${s.label} · ${rounds[rounds.length - 1] ?? ''} · ${s.values[s.values.length - 1] ?? 0}`}</title>
+            </polyline>
+          </g>
         ))}
         {/* 標記最新一回合的端點 / Mark the latest round of each series */}
         {series.map((s, si) => {
@@ -2059,7 +2099,7 @@ function LineChart({
               key={si}
               cx={xScale(last)}
               cy={yScale(s.values[last] ?? 0)}
-              r={2}
+              r={3}
               fill={s.color}
             />
           );
@@ -2106,7 +2146,7 @@ function PieChart({ series, title }: { series: ChartSeries[]; title: string }) {
   return (
     <ChartFrame title={title}>
       {total <= 0 ? (
-        <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
+        <p className="text-sm text-gray-500 py-6 text-center">{t('game.noData')}</p>
       ) : (
         <div className="flex items-center gap-3">
           <svg
@@ -2126,15 +2166,18 @@ function PieChart({ series, title }: { series: ChartSeries[]; title: string }) {
                   d={donutSector(cx, cy, rOuter, rInner, from, from + sweep)}
                   fill={s.color}
                   opacity={0.9}
-                />
+                  className="cursor-pointer transition-opacity duration-200 hover:opacity-100"
+                >
+                  <title>{`${s.label} · ${(((values[i] ?? 0) / total) * 100).toFixed(0)}%`}</title>
+                </path>
               );
             })}
             <text
               x={cx}
-              y={cy + 5}
+              y={cy + 6}
               textAnchor="middle"
               fill="#e2e8f0"
-              fontSize={15}
+              fontSize={19}
               fontFamily="monospace"
             >
               {total}
@@ -2168,7 +2211,7 @@ function GaugeChart({ series, title }: { series: ChartSeries[]; title: string })
     <ChartFrame title={title}>
       <svg
         viewBox={`0 0 ${size} ${size}`}
-        className="w-24 mx-auto"
+        className="w-28 mx-auto"
         role="img"
         aria-label={title}
       >
@@ -2183,23 +2226,26 @@ function GaugeChart({ series, title }: { series: ChartSeries[]; title: string })
           strokeLinecap="round"
           strokeDasharray={`${circumference * ratio} ${circumference}`}
           transform={`rotate(-90 ${cx} ${cy})`}
-        />
+          className="cursor-pointer transition-[stroke-width] duration-200 hover:[stroke-width:11]"
+        >
+          <title>{`${t('stats.current')} ${value} · ${t('stats.peak')} ${peak}`}</title>
+        </circle>
         <text
           x={cx}
           y={cy + 2}
           textAnchor="middle"
           fill="#e2e8f0"
-          fontSize={17}
+          fontSize={22}
           fontFamily="monospace"
         >
           {value}
         </text>
         <text
           x={cx}
-          y={cy + 15}
+          y={cy + 18}
           textAnchor="middle"
           fill="#64748b"
-          fontSize={8}
+          fontSize={13}
           fontFamily="monospace"
         >
           {t('stats.peak')} {peak}
@@ -2264,7 +2310,11 @@ function BarChart({
                     height={Math.max(h, 0.5)}
                     fill={s.color}
                     opacity={0.9}
-                  />
+                    className="cursor-pointer transition-opacity duration-150 hover:opacity-100"
+                  >
+                    {/* 原生 tooltip / Native tooltip */}
+                    <title>{`${s.label} · ${visibleRounds[i] ?? ''} · ${v}`}</title>
+                  </rect>
                 );
               })}
             </g>
@@ -2276,7 +2326,7 @@ function BarChart({
               x={CHART_PAD}
               y={CHART_H - 6}
               fill="#475569"
-              fontSize={8}
+              fontSize={11}
               fontFamily="monospace"
             >
               {visibleRounds[0]}
@@ -2286,7 +2336,7 @@ function BarChart({
               y={CHART_H - 6}
               textAnchor="end"
               fill="#475569"
-              fontSize={8}
+              fontSize={11}
               fontFamily="monospace"
             >
               {lastRound}
@@ -2432,7 +2482,7 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
   return (
     <ChartFrame title={t('stats.factionPower')}>
       {placed.length === 0 ? (
-        <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
+        <p className="text-sm text-gray-500 py-6 text-center">{t('game.noData')}</p>
       ) : (
         <>
           <svg
@@ -2456,18 +2506,22 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
                   fillOpacity={isParent ? 0.22 : 0.62}
                   stroke={node.color}
                   strokeWidth={isParent ? 1 : 0.5}
-                />
+                  className="cursor-pointer transition-[fill-opacity,stroke-width] duration-200 hover:fill-opacity-90 hover:[stroke-width:1.5]"
+                >
+                  <title>{`${node.key} · ${node.value.toLocaleString()}`}</title>
+                </rect>
               );
             })}
           </svg>
-          <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+          <ul className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2">
             {ranked.map((f) => (
               <li
                 key={f.id}
-                className="inline-flex items-center gap-1 text-[10px] text-gray-400 font-mono"
+                className="group inline-flex items-center gap-1.5 text-[13px] text-gray-400 font-mono transition-colors duration-200 hover:text-gray-100"
+                title={f.name}
               >
                 <span
-                  className="w-2 h-2 rounded-[1px] shrink-0"
+                  className="w-2.5 h-2.5 rounded-[1px] shrink-0 transition-transform duration-200 group-hover:scale-125"
                   style={{ backgroundColor: f.color }}
                 />
                 <span className="truncate max-w-[80px]">{f.name}</span>
@@ -2475,14 +2529,14 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
               </li>
             ))}
           </ul>
-          <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+          <ul className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2">
             {TREEMAP_SEGMENT_KEYS.map((key, i) => (
               <li
                 key={key}
-                className="inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono"
+                className="group inline-flex items-center gap-1.5 text-[13px] text-gray-500 font-mono transition-colors duration-200 hover:text-gray-200"
               >
                 <span
-                  className="w-2 h-2 rounded-[1px] shrink-0"
+                  className="w-2.5 h-2.5 rounded-[1px] shrink-0 transition-transform duration-200 group-hover:scale-125"
                   style={{ backgroundColor: TREEMAP_SEGMENT_VARS[i] }}
                 />
                 {key === 'troops'
@@ -2608,7 +2662,7 @@ function CharacterRadar({
               })
             )}
             {/* 勢力多邊形 / Faction polygons */}
-            {bySize.map(({ faction, values }) => (
+            {bySize.map(({ faction, values, members }) => (
               <polygon
                 key={faction.id}
                 points={radarPoints(values ?? [])}
@@ -2617,7 +2671,10 @@ function CharacterRadar({
                 stroke={faction.color}
                 strokeWidth={1.5}
                 strokeLinejoin="round"
-              />
+                className="cursor-pointer transition-[stroke-width,fill-opacity] duration-200 hover:[stroke-width:2.5] hover:fill-opacity-30"
+              >
+                <title>{`${faction.name} · ${members.length}`}</title>
+              </polygon>
             ))}
             {/* 世界平均參考線 / World-average reference */}
             {worldAverage && (
@@ -2642,8 +2699,9 @@ function CharacterRadar({
                   y={y}
                   textAnchor="middle"
                   dominantBaseline="middle"
-                  fontSize={9}
+                  fontSize={13}
                   fontFamily="monospace"
+                  className="transition-colors duration-200 hover:fill-gray-200"
                   style={{ fill: 'var(--color-ds-muted)' }}
                 >
                   {t(axis.label)}
@@ -2651,14 +2709,15 @@ function CharacterRadar({
               );
             })}
           </svg>
-          <ul className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+          <ul className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2">
             {bySize.map(({ faction, members }) => (
               <li
                 key={faction.id}
-                className="inline-flex items-center gap-1 text-[10px] text-gray-400 font-mono"
+                className="group inline-flex items-center gap-1.5 text-[13px] text-gray-400 font-mono transition-colors duration-200 hover:text-gray-100"
+                title={faction.name}
               >
                 <span
-                  className="w-2 h-2 rounded-[1px] shrink-0"
+                  className="w-2.5 h-2.5 rounded-[1px] shrink-0 transition-transform duration-200 group-hover:scale-125"
                   style={{ backgroundColor: faction.color }}
                 />
                 <span className="truncate max-w-[80px]">{faction.name}</span>
@@ -2666,7 +2725,7 @@ function CharacterRadar({
               </li>
             ))}
             {worldAverage && (
-              <li className="inline-flex items-center gap-1 text-[10px] text-gray-500 font-mono">
+              <li className="inline-flex items-center gap-1.5 text-[13px] text-gray-500 font-mono">
                 <span
                   className="w-3 h-0 border-t border-dashed"
                   style={{ borderColor: 'var(--color-ds-cyan)' }}
@@ -2699,7 +2758,8 @@ function ChartTypeSwitch({
           aria-pressed={value === ct}
           // 同上：選中態換成完整的 accent 按鈕，而不是在基底上加一個類別
           // Same reason: the selected state swaps in a complete accent button
-          className={`${value === ct ? GM_BTN_ACCENT : GM_BTN} px-2 py-1 text-[10px] font-orbitron tracking-wider`}
+          // min-h-11 = 44px 觸控目標下限 / 44px minimum touch target
+          className={`${value === ct ? GM_BTN_ACCENT : GM_BTN} min-h-11 px-2.5 py-1.5 text-[13px] font-orbitron tracking-wider transition-colors duration-200`}
         >
           {t(CHART_TYPE_LABEL_KEYS[ct])}
         </button>
@@ -2749,8 +2809,8 @@ function StatsCharts({
   if (currentRound < 1 || !data || data.rounds.length === 0) {
     return (
       <div className={`${GM_PANEL} p-3`}>
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className={`${GM_TITLE}`}>{t('stats.title')}</h3>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 mb-3">
+          <h3 className={`${GM_TITLE} shrink-0 whitespace-nowrap`}>{t('stats.title')}</h3>
           <ChartTypeSwitch value={chartType} onChange={setChartType} />
         </div>
         <p className="text-gray-400 text-xs" role={fetchFailed ? 'alert' : undefined}>
@@ -2818,8 +2878,8 @@ function StatsCharts({
 
   return (
     <div className={`${GM_PANEL} p-3`}>
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <h3 className={`${GM_TITLE}`}>{t('stats.title')}</h3>
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-2 mb-3">
+          <h3 className={`${GM_TITLE} shrink-0 whitespace-nowrap`}>{t('stats.title')}</h3>
         <ChartTypeSwitch value={chartType} onChange={setChartType} />
       </div>
       {chartType === 'treemap' ? (

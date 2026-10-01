@@ -306,6 +306,7 @@ export const en = {
     square: 'Bar',
     treemap: 'Treemap',
     peak: 'Peak',
+    current: 'Current',
     // ── 雷達圖 / Radar ──
     attributes: 'Character Attributes',
     worldAverage: 'World average',

@@ -289,6 +289,14 @@ export function SigmaMap({
 
     // 建立 Sigma 實例 / Create Sigma instance
     const sigma = new Sigma(graph, containerRef.current, {
+      // 切換桌機／手機時容器會短暫量到 0 高 Sigma 預設直接丟
+      // "Container has no height"，整個錯誤邊界就炸掉。容器只是暫時沒有
+      // 尺寸，下一次 resize 會補上，所以照官方建議放行 /
+      // While switching desktop <-> mobile the container briefly measures zero
+      // height and Sigma throws "Container has no height" by default, which
+      // takes down the error boundary. The size is transient and the next
+      // resize fixes it, so take the library's own escape hatch.
+      allowInvalidContainer: true,
       renderEdgeLabels: false,
       defaultEdgeColor: '#1e3a5f', // 深藍色道路 / Deep blue roads
       defaultNodeColor: '#4a5568',
@@ -766,10 +774,6 @@ export function SigmaMap({
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
 
-    if (visibleSpotlights.length === 0 && validMoves.length === 0) {
-      return () => resizeObserver.disconnect();
-    }
-
     // 動畫點顏色 = 移動者陣營色（無陣營用青綠）/
     // Move dot color = mover's faction color (teal fallback)
     const factionColors = new Map<string, string>();
@@ -864,6 +868,19 @@ export function SigmaMap({
       // 脈動環在暫停時仍留一幀，畫面不會變空白 /
       // A paused ring still leaves one frame on screen, so it never blanks out
     };
+
+    // 沒有聚光燈也沒有移動 → 不啟動動畫迴圈。這個提早返回必須放在
+    // isAnimating / renderFrame 宣告之後：resize 閉包會用到它們，而
+    // ResizeObserver 已經註冊了。提早返回會讓那兩個 const 永遠停在 TDZ，
+    // 於是每次容器改變尺寸（切換桌機／手機）都丟 ReferenceError /
+    // No spotlights and no moves means no animation loop — but this early
+    // return must come *after* isAnimating / renderFrame are declared: the
+    // resize closure touches them and the ResizeObserver is already live.
+    // Returning early left both consts in the TDZ, so every container resize
+    // (desktop <-> mobile) threw.
+    if (visibleSpotlights.length === 0 && validMoves.length === 0) {
+      return () => resizeObserver.disconnect();
+    }
 
     const tick = (now: number) => {
       if (!isAnimating()) {

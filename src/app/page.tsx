@@ -298,6 +298,11 @@ export default async function HomePage() {
               alt=""
               fill
               sizes="100vw"
+              // 這段從 y≈583 開始、鋪滿 1212px，與首屏重疊 ~317px，
+              // 是首頁的 LCP 元素 → 不要延遲載入 /
+              // Starts at y≈583 and spans 1212px, so it overlaps the first screen
+              // by ~317px and is the homepage's LCP element — don't defer it
+              loading="eager"
               className="object-cover opacity-[0.2] saturate-[0.95]"
             />
             <div className="absolute inset-0 bg-gradient-to-b from-[#020617] via-[#020617]/90 to-[#020617]" />

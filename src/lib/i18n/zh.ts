@@ -306,6 +306,7 @@ export const zh = {
     square: '長條',
     treemap: '區塊圖',
     peak: '峰值',
+    current: '目前',
     // ── 雷達圖 / Radar ──
     attributes: '將領屬性',
     worldAverage: '世界平均',

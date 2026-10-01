@@ -200,22 +200,31 @@ export default function SagaConstellation({ locale }: SagaConstellationProps) {
                 <line x1={x - magnitude * 1.5} y1={y} x2={x + magnitude * 1.5} y2={y} />
                 <line x1={x} y1={y - magnitude * 1.5} x2={x} y2={y + magnitude * 1.5} />
               </motion.g>
+              {/* 縮放而不是動 r 屬性：motion 無法把 SVG 的 r 當動態值動畫，
+                  會輸出 r="undefined"（瀏覽器視為無效，圓形消失）。圓心就是節點，
+                  CSS transform-origin 預設 50% 50% 正好落在圓心 / Animate scale, not
+                  the r attribute: motion cannot animate the SVG r attribute and
+                  emitted r="undefined", which the browser rejects so the ring never
+                  drew. A circle's default transform-origin (50% 50%) is already its
+                  centre, which is the node position. */}
               <motion.circle
                 cx={x}
                 cy={y}
-                r={reduce ? magnitude : 0}
+                r={magnitude}
                 fill="none"
                 stroke={color}
                 strokeWidth={1.5}
-                animate={{ r: magnitude }}
+                initial={{ scale: reduce ? 1 : 0 }}
+                animate={{ scale: 1 }}
                 transition={{ duration: 0.45, delay, ease: 'easeOut' as const }}
               />
               <motion.circle
                 cx={x}
                 cy={y}
-                r={reduce ? magnitude * 0.4 : 0}
+                r={magnitude * 0.4}
                 fill={color}
-                animate={{ r: magnitude * 0.4 }}
+                initial={{ scale: reduce ? 1 : 0 }}
+                animate={{ scale: 1 }}
                 transition={{ duration: 0.45, delay, ease: 'easeOut' as const }}
               />
             </motion.g>
