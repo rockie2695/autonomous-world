@@ -310,6 +310,7 @@ export const en = {
     // ── 雷達圖 / Radar ──
     attributes: 'Character Attributes',
     worldAverage: 'World average',
+    factionAverage: 'Faction average',
     factionPower: 'Faction Power',
     // ── 世界整體 / World-wide ──
     aliveFactionsOverTime: 'Alive Factions',

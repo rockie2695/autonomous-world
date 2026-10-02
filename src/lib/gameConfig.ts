@@ -149,9 +149,15 @@ export const CONFIG = {
   // Income distribution: king 40%, admin 30%, others 30%
   PLACE_BASE_INCOME: 10, // 每回合每個地點基礎金錢 / Base gold per round per place
   PLACE_MARKET_INCOME_PER_LV: 5, // 每級市場額外金錢 / Extra gold per market level
-  INCOME_KING_SHARE: 0.4, // 國王的收入份額 / King's cut of place income
-  INCOME_ADMIN_SHARE: 0.3, // 行政官的收入份額 / Administrator's cut
+  INCOME_KING_SHARE: 0.4, // 國王的收入份額（可被 jing 放大）/ King's cut of place income (scaled by jing)
+  INCOME_ADMIN_SHARE: 0.3, // 行政官的收入份額（可被 jing 放大）/ Administrator's cut (scaled by jing)
   INCOME_OTHER_SHARE: 0.3, // 其他角色共享 / Shared among other characters
+  // jing（經濟）以「平均」為基準放大或縮小領導者的份額：一般將領與舊規則完全相同，
+  // 高 jing 多拿、低 jing 少拿。17.5 是 jing 均勻分佈 (5–30) 的平均值。
+  // jing (economy) scales a leader's cut around the average: an average leader is
+  // unchanged from the old rule, a high-jing one pockets more, a low-jing one less.
+  // 17.5 is the mean of jing's uniform 5–30 distribution.
+  INCOME_JING_MIDPOINT: 17.5,
 
   // 建築成本（指數成長：base × 2^level）
   // Building costs (exponential: base × 2^level)

@@ -391,8 +391,8 @@ model Character {
   name        String
   factionId   String?
   wu          Int      @default(0)  // 武力 / Martial
-  tong        Int      @default(0)  // 統御 / Command
-  jing        Int      @default(0)  // 智謀 / Strategy
+  tong        Int      @default(0)  // 統領 / Leadership
+  jing        Int      @default(0)  // 經濟 / Economy
   speed       Int      @default(0)  // 速度 / Speed
   loyalty     String   @default("SELF")
   ambition    Int      @default(0)
@@ -1277,8 +1277,8 @@ All constants live in `src/lib/gameConfig.ts` (single source of truth). Every fo
 | 屬性 Stat | 影響 Effect |
 |---|---|
 | `wu` 武力 | 戰鬥攻擊力 Battle attack power（`× (1 + wu/30)`） |
-| `tong` 統率 | 戰鬥防禦力 Battle defense（`× (1 + tong/30)`，僅將領對戰）；降低部下叛變機率（`× (1 − 0.01 × king.tong)`） |
-| `jing` 智力 | **目前無任何 gameplay 效果 / Currently NO gameplay effect** — 僅儲存與顯示（grep 全專案：`jing` 只出現在建立、查詢、顯示處）。**金錢增加與 `jing` 無關** — 收入只看地點市場等級 |
+| `tong` 統領 | 戰鬥防禦力 Battle defense（`× (1 + tong/30)`，僅將領對戰）；降低部下叛變機率（`× (1 − 0.01 × king.tong)`） |
+| `jing` 經濟 | 領導者實得的收入份額（`× (1 + (jing − INCOME_JING_MIDPOINT) / CHAR_ABILITY_MAX)`）；並參與總督比較（`wu+tong+jing`） |
 | `speed` 速度 | 移動順序（快者先動）；逃跑機率（每點速度差 ±2%） |
 | `ambition` 野心 | 叛變機率基礎（`base = ambition × 0.5`） |
 
@@ -1323,10 +1323,34 @@ income = PLACE_BASE_INCOME(10) + market × PLACE_MARKET_INCOME_PER_LV(5)
 
 | 情況 | 結果 |
 |---|---|
-| 有國王 + 有總督 | 國王 `floor(income × 0.4)`；總督 `floor(income × 0.3)`；剩餘平均分給該地點其他角色（`floor`，餘數不分配） |
+| 有國王 + 有總督 | 國王 `floor(income × 0.4 × jing倍率)`；總督 `floor(income × 0.3 × jing倍率)`；剩餘平均分給該地點其他角色（`floor`，餘數不分配） |
 | 僅國王（無總督） | **國王得全部 `income`（100%）**，其他人得 0 |
 | 僅總督（無國王） | 總督得全部 `income`（100%） |
 | 無國王無總督 | 無人分配（收入蒸發） |
+
+**jing = 經濟 / jing is Economy**
+
+`jing` 是領導者的**經濟能力**，會放大他自己實得的份額（不是「智力」也不是「策略」）：
+
+```typescript
+// server/income.ts
+mul = 1 + (jing − INCOME_JING_MIDPOINT(17.5)) / CHAR_ABILITY_MAX(30)
+// jing 5 → ×0.58     jing 17.5 → ×1.00     jing 30 → ×1.42
+```
+
+以**平均值**為基準，所以一般將領與舊規則（40/30/30）完全相同，高 jing 多拿、低 jing
+少拿；否則連平均的領導者都會從部屬身上多拿，悄悄改變整個世界的經濟基準。
+
+兩條不變量 / two invariants:
+
+- **總額永不超過 `income`**：兩位高 jing 領導者加總可能超過收入，此時按比例縮回並保留
+  兩人的相對高低 / when the two requested shares exceed the income, both are scaled back
+  proportionally, preserving which leader is richer
+- **只有一位領導者時不套倍率**：他本來就獨得全部，套倍率會印錢 / a lone leader already
+  takes everything, so a multiplier would mint gold
+
+規則與分配拆在純函式 `server/income.ts#splitIncome`，不需要資料庫就能測試
+（`server/income.test.ts` 會驗證「平均 jing 時與舊的 40/30/30 完全相同」這個回歸點）。
 
 **徵兵 / Garrison recruitment**（僅有勢力的地點）：
 ```
@@ -1478,6 +1502,75 @@ prop 從遊戲頁傳進 `StatsCharts`（桌面側軌與手機覆蓋層兩處都�
 **雷達圖的先天限制**：每個軸用自己的最大值正規化（年齡上限本來就遠高於能力值），
 所以邊長**不能跨軸比較** —— 看的是形狀，不是絕對數字。軸標籤沿用既有的
 `character.*` i18n 鍵，不另開一套。
+
+##### 將領列表 hover 雷達 / Leader Table Hover Radar
+
+將領分頁的 `CharacterList` 點開 `DetailModal`，裡面是 12 欄的將領表格。游標停在某一列時，
+表格右側會浮出**該名將領**自己的雷達圖，虛線是**同勢力**存活將領的平均值當參考。
+
+```typescript
+// 列的 mouseenter 裡讀位置（不在 render 期間讀），並順便夾在視窗內，
+// 這樣 render 就不需要碰 window
+// Read the row's position in the handler — never during render — and clamp it
+// there so render never touches window
+const rect = e.currentTarget.getBoundingClientRect();
+setHoverPreview({ char, top: clamp(rect.top) });
+
+// 面板掛在 body 上、fixed 定位：彈窗內容層本身是捲動容器，
+// 用絕對定位的話面板會跟著捲動跑掉
+// The modal body is a scroll container, so an absolute panel would scroll away;
+// portal to the body and position it fixed instead.
+createPortal(<div className="fixed z-[110] pointer-events-none">…</div>, document.body);
+```
+
+兩個必要的細節 / two details that are not optional:
+
+- 面板一定要 `pointer-events-none`，否則游標移過去會觸發底下那一列的 `mouseleave`，
+  面板立刻自己消失（閃爍）。 / The panel must be `pointer-events-none`: otherwise moving
+  the cursor onto it fires the row's `mouseleave` and it flickers itself away.
+- 整張 `<table>` 也要掛 `onMouseLeave`，指標移到列與列之間的空隙時預覽才會收起來。 /
+  The whole `<table>` gets `onMouseLeave` so the preview also collapses in the gaps
+  between rows.
+
+雷達的格線、軸標籤、點座標都跟側欄那張共用 `RadarGrid` / `RadarAxisLabels` /
+`radarPoints(values, size, radius)`（尺寸不同，所以 size/radius 要參數化）。新增雷達的
+呼叫端請走這些共用元件，不要複製整段 SVG。
+
+##### 將領頭像 / Leader Avatar（`src/components/LeaderAvatar.tsx`）
+
+每位將領的頭像是**程序化生成**的 SVG 半身像：從 `character.id` 播種，用多種特徵拼出來。
+不需要圖檔、不需要資料庫欄位、也不需要新的相依套件。
+
+```typescript
+// 沿用既有的 createRng（內部 FNV-1a 雜湊字串），不自己寫雜湊
+// Reuse the existing createRng — it already FNV-1a hashes the string
+const rng = createRng(character.id);
+const skin      = SKIN_TONES[rng.int(0, SKIN_TONES.length - 1)];
+const hairStyle = HAIR_STYLES[rng.int(0, HAIR_STYLES.length - 1)];
+// …固定抽取順序 → 同一個 id 永遠同一張臉
+
+// 真實資料只在抽取「之後」覆寫，因此不會影響其他特徵的分佈
+// Real data overrides only *after* the draws, so it cannot skew their spread
+if (character.age >= GREY_HAIR_AGE) hairColor = ...;
+return { ..., helmet: !isKing && wu >= HELMET_WU, crown: isKing };
+```
+
+資料如何影響外觀 / how real data shows up:
+
+| 資料 | 影響 |
+|------|------|
+| `isKing` | 王冠（且**不**戴頭盔，否則王冠會被蓋掉） |
+| `wu ≥ 25` | 頭盔 |
+| `age ≥ 60` | 髮色轉灰／白，且較容易留鬍 |
+| `ambition ≥ 20` | 眉壓低， 看起來較兇 |
+| 陣營色 | 衣袍與底色 |
+
+**特徵邏輯是純函式** `deriveAvatarTraits(character)`，元件只負責畫。測試因此不需要 DOM，
+可以在專案既有的 `node` vitest 環境下跑（`LeaderAvatar.test.ts`）—— 專案的 vitest 只收
+`src/**/*.test.ts` 且 `environment: 'node'`，所以新增特徵請加在純函式裡，不要塞進 JSX。
+
+特徵池（膚色、髮色…）是**內容**不是設計 token，跟名稱產生器的字庫同一類，所以放在程式碼裡；
+只有陣營色是執行期資料，用 inline style 套用。
 
 ---
 
@@ -1722,12 +1815,12 @@ const ratio = Math.max(graphW / width, graphH / height) * MAP_FIT_PADDING;
 export const zh = {
   general: {
     title: '自治世界',
-    subtitle: '瀏覽器中的三國模擬',
+    subtitle: '瀏覽器中的多國模擬',
   },
   character: {
     wu: '武力',
-    tong: '統御',
-    jing: '智謀',
+    tong: '統領',
+    jing: '經濟',
     speed: '速度',
   },
   events: {

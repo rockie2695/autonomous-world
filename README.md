@@ -113,11 +113,14 @@ autonomous-world/
 │       │   ├── zh.ts              # Traditional Chinese translations
 │       │   └── en.ts              # English translations
 │       └── nameGenerator/         # Name generation utilities
-│           ├── person.ts          # Character names
-│           ├── place.ts           # Place names
-│           └── faction.ts         # Faction names
+│           ├── person.ts          # Character names (classic 張飛 / epithet 霜狼·蓋爾)
+│           ├── place.ts           # Place names (classic 青碧城 / epithet 霜狼關)
+│           ├── faction.ts         # Faction names (classic 蒼龍盟 / epithet 霜脊議會)
+│           └── epithet.ts         # Shared two-character epithet components
 ├── src/components/
-│   └── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
+│   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
+│   ├── LeaderAvatar.tsx           # Procedural leader head bust (seeded from character.id)
+│   └── home/                      # Homepage sections (three.js scenes, live poller, hooks)
 │                                  # (EventLog & StatsCharts are defined in game/page.tsx)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
@@ -160,7 +163,7 @@ autonomous-world/
 - No victory conditions — the game runs infinitely
 
 ### Characters
-- Each character has: **Martial (wu)**, **Command (tong)**, **Strategy (jing)**, **Speed**
+- Each character has: **Martial (wu)**, **Leadership (tong)**, **Economy (jing)**, **Speed**
 - Stats range 5-30, with speed using normal distribution (μ=17, σ=5)
 - Characters age each round and eventually die of old age (50-80 years)
 - Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
@@ -189,6 +192,33 @@ The game features an interactive force-directed graph map using Sigma.js:
 - Node labels follow one zoom rule: shown only when zoom ≥ `LABEL_SIZE_THRESHOLD` (8), via Sigma's `labelRenderedSizeThreshold`; labels always paint above the spotlight overlay
 - **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
+- **Node glow + drop shadow** — a second, static overlay canvas under the spotlight layer and under Sigma paints a soft faction-colored halo behind every place, scaled by its on-screen size; it redraws on camera moves only, so an idle map costs nothing
+- **Camera transitions** — clicking a place animates the view to centre it, and reset animates to fit the whole world (`MAP_CAMERA_ANIM_MS`, forced to 0 under `prefers-reduced-motion`)
+- The spotlight loop pauses when the map scrolls out of view or the tab is hidden
+
+### Statistics
+
+The stats tab renders nine time-series charts in four switchable styles:
+
+| Style | Per-faction charts | World-wide charts |
+|-------|--------------------|-------------------|
+| Line | one line per faction | single trend line |
+| Pie | donut of the latest round's share | gauge ring vs. historical peak |
+| Bar | stacked bar per round | bar per round |
+| Treemap | faction power: one block per faction sized by territory, subdivided into troops / gold / characters | — |
+
+Selecting **Treemap** replaces the nine charts with the single combined view, since it is a
+view of faction power rather than another rendering of one metric.
+
+- **Character radar** — one polygon per faction showing its living characters' mean attributes
+  across 武力 / 統領 / 經濟 / 速度 / 野心 / 年齡, with the world average as a dashed reference
+- **Leader hover preview** — hovering a row of the leader table floats the leader's radar on the
+  right and their procedurally generated head on the left
+- **Leader avatars** are generated from the character id, so a leader always has the same face
+  without storing anything; kings get a crown, high 武力 a helmet, age greys the hair, and the
+  faction colors the robe
+- Each axis on a radar normalises against its own maximum (age tops out far above the ability
+  stats), so edge lengths are not comparable across axes — read the shape, not the numbers
 
 ### Battles
 - Characters move 1 territory per turn
@@ -199,6 +229,10 @@ The game features an interactive force-directed graph map using Sigma.js:
 ### Economy
 - Each territory generates income based on market level
 - Income is split: 40% king, 30% administrator, 30% shared among others
+- **Economy (jing)** scales what a leader pockets: a leader's cut is multiplied by
+  `1 + (jing − 17.5) / 30`, so an average leader is unchanged, a high-`jing` one takes more
+  and a low-`jing` one less. A lone leader (no king *or* no admin) already receives the whole
+  income, so no multiplier applies — the total distributed can never exceed the place's income
 - Characters can buy troops with personal gold
 
 ## API Endpoints

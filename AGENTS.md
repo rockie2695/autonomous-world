@@ -143,7 +143,11 @@ src/
     ├── rng.ts             # Seeded RNG
     ├── snapshot.ts        # Snapshot compression
     ├── i18n/              # Internationalization
-    └── nameGenerator/     # Name generation
+    └── nameGenerator/     # Name generation (pure functions + unique-name scans)
+        ├── person.ts      # Character names (classic 張飛 / epithet 霜狼·蓋爾)
+        ├── place.ts       # Place names (classic 青碧城 / epithet 霜狼關)
+        ├── faction.ts     # Faction names (classic 蒼龍盟 / epithet 霜脊議會)
+        └── epithet.ts     # Shared epithet components (heads × tails, used by all three)
 ```
 
 ### Server Code (Game Logic)
@@ -165,7 +169,7 @@ server/
 
 ```
 src/components/
-└── SigmaMap.tsx           # Interactive graph map (Sigma.js + graphology)
+├── SigmaMap.tsx           # Interactive graph map (Sigma.js + graphology)
                            # - Nodes: faction-colored (HSL→hex), sized by troops
                            # - Edges: semi-transparent roads
                            # - Dynamic labels with faction-colored backgrounds
@@ -186,6 +190,7 @@ src/components/
                            #   resetView animates to fit the whole graph (getBBox), not
                            #   ratio 1. Duration is CONFIG.MAP_CAMERA_ANIM_MS, or 0 when
                            #   prefers-reduced-motion is set.
+├── LeaderAvatar.tsx        # Procedural leader head bust, seeded from character.id; pure trait logic in deriveAvatarTraits()
 
 src/app/game/page.tsx also defines locally:
 ├── EventLog               # Bilingual event log (i18n t() with parameter substitution); header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
@@ -334,7 +339,8 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 
 ### Stats Charts
 
-`StatsCharts` (in `src/app/game/page.tsx`) renders two independent things in the stats tab:
+The stats tab renders two independent things — nine time-series charts in four
+switchable styles, and a faction-power treemap — plus a character radar panel.
 
 **1. Nine time-series charts in four switchable styles.** The type lives in one
 `ChartType` union plus a `CHART_TYPE_LABEL_KEYS` map; each style has its own component
@@ -354,6 +360,22 @@ dashed reference ring. Capped at `RADAR_MAX_FACTIONS` (6) polygons, largest fact
 past that the shapes just overlap. It reads `WorldState.characters` / `.factions` from the
 game page, **not** the stats endpoint, so it needs those two props threaded into
 `StatsCharts` at both call sites (desktop rail and mobile overlay).
+
+**3. A hover radar on the leader table** — *not* in the stats tab: `CharacterList` (characters tab)
+opens a `DetailModal` with the 12-column leader table, and hovering a row floats that character's
+radar beside the table, with their faction's living mean as the dashed reference. It is portalled
+to `document.body` and `position: fixed`, because the modal body is a scroll container — an
+absolutely positioned panel would scroll away with the rows.
+- The panel is `pointer-events-none`. Without that, moving the cursor onto it fires the row's
+  `mouseleave` and the panel flickers itself out of existence.
+- The hover row shows **two** floating panels: the `LeaderAvatar` head on the **left**, the radar
+  on the **right**. Both are `pointer-events-none`, and both read the one `hoverPreview` state.
+- The row's viewport position is read in the `mouseenter` **handler**, never during render, and
+  the vertical clamp happens there too so render never touches `window`.
+- The whole `<table>` gets `onMouseLeave` so the preview also collapses in the gaps between rows.
+- `radarPoints()` / `RadarGrid` / `RadarAxisLabels` are shared by the sidebar radar and this
+  preview — `radarPoints` takes `(values, size, radius)` because the two sizes differ. Add new
+  radar consumers through those helpers, not by copying the SVG.
 
 ### Treemap Rules
 
@@ -378,6 +400,27 @@ game page, **not** the stats endpoint, so it needs those two props threaded into
   `CHAR_AMBITION_MAX`, `CHAR_MAX_AGE_MAX` — age tops out far above the ability stats), so
   edge lengths are **not comparable across axes**. Read the shape, not the absolute numbers.
 - Axis labels reuse the existing `character.*` i18n keys; do not add radar-specific ones.
+
+### Leader Avatars (`src/components/LeaderAvatar.tsx`)
+
+Each leader's head is a **procedurally generated SVG bust** — no art assets, no database
+column, no new dependency.
+
+- **Seeded from `character.id`** via the existing `createRng` (it FNV-1a hashes the string).
+  The draw order is fixed, so the same id always yields the same face — which is why nothing
+  needs to be stored.
+- **Real data biases the result**, applied *after* the draws so it cannot skew the other
+  traits: `isKing` → crown · `wu ≥ 25` → helmet (never on a king, it would cover the crown) ·
+  `age ≥ 60` → grey/white hair and a likelier beard · `ambition ≥ 20` → brows angle down ·
+  faction colour → robe and backdrop.
+- **Trait logic is a pure exported function**, `deriveAvatarTraits(character)`; the component
+  only renders. That's what `LeaderAvatar.test.ts` tests — it needs no DOM, so it runs under
+  the project's `node` vitest environment. Keep new traits in the pure function, not in JSX.
+- The trait pools (`SKIN_TONES`, `HAIR_COLORS`, …) are **content, not design tokens** — the
+  same category as the name generator's word lists, so they live in code. The faction colour is
+  runtime data and is applied inline, as everywhere else.
+- Currently used for the leader-table hover preview (left side, mirroring the radar on the
+  right). Reuse it anywhere a leader needs to be recognisable.
 
 ### Type Safety
 

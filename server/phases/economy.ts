@@ -12,6 +12,8 @@
 // - 若無君王 → 全部歸總督 / If no king → all goes to admin
 // - 招募：BASE_RECRUIT + BARRACKS_LV × BARRACKS_PER_LV / Recruitment: BASE_RECRUIT + BARRACKS_LV × BARRACKS_PER_LV
 // - 角色購兵：1 兵 = 2 金，批次 10-100 / Characters buy troops: 1 troop = 2 gold, batch 10-100
+// - jing（經濟）會放大領導者 pockets 的份額，規則見 server/income.ts /
+//   jing (economy) multiplies what a leader pockets — see server/income.ts
 //
 // 使用方式 / Usage:
 //   await economy(worldId, round, rng);
@@ -20,6 +22,7 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
+import { splitIncome } from '../income';
 
 /**
  * 處理世界中所有地點的經濟。
@@ -48,6 +51,25 @@ export async function economy(
     },
   });
 
+  // 君王與總督可能住在外地，所以另外抓一次他們的 jing /
+  // A king or an admin can live in another place, so fetch their jing separately
+  const leaderIds = new Set<string>();
+  for (const place of places) {
+    const kingId = place.faction?.kingId;
+    if (kingId) leaderIds.add(kingId);
+    if (place.administratorId) leaderIds.add(place.administratorId);
+  }
+  const leaderJing = new Map<string, number>();
+  if (leaderIds.size > 0) {
+    const leaders = await prisma.character.findMany({
+      where: { id: { in: Array.from(leaderIds) } },
+      select: { id: true, jing: true },
+    });
+    for (const leader of leaders) {
+      leaderJing.set(leader.id, leader.jing);
+    }
+  }
+
   for (const place of places) {
     // 計算地點收入 / Calculate place income
     const income =
@@ -58,31 +80,31 @@ export async function economy(
     const kingId = place.faction?.kingId ?? null;
     const adminId = place.administratorId;
 
+    // jing = 經濟：決定領導者能 pockets 多少。查不到就當 0（中性），
+    // 只有「位置不存在」才傳 null / jing = economy: how much the leader pockets.
+    // A missing record falls back to 0 (neutral); only an empty seat is null
+    const kingJing = kingId ? (leaderJing.get(kingId) ?? 0) : null;
+    const adminJing = adminId ? (leaderJing.get(adminId) ?? 0) : null;
+    const split = splitIncome(income, kingJing, adminJing);
+
     // 分配收入 / Distribute income
     if (kingId && adminId) {
       // 君王與總督皆存在 / Both king and admin exist
-      const kingShare = Math.floor(income * CONFIG.INCOME_KING_SHARE);
-      const adminShare = Math.floor(income * CONFIG.INCOME_ADMIN_SHARE);
-      const remaining = income - kingShare - adminShare;
-
-      // 給予君王份額 / Give king's share
       await prisma.character.update({
         where: { id: kingId },
-        data: { gold: { increment: kingShare } },
+        data: { gold: { increment: split.king } },
       });
-
-      // 給予總督份額 / Give admin's share
       await prisma.character.update({
         where: { id: adminId },
-        data: { gold: { increment: adminShare } },
+        data: { gold: { increment: split.admin } },
       });
 
       // 將剩餘平均分給其他角色 / Distribute remaining to other characters equally
       const otherChars = place.characters.filter(
         (c: { id: string }) => c.id !== kingId && c.id !== adminId
       );
-      if (otherChars.length > 0) {
-        const perChar = Math.floor(remaining / otherChars.length);
+      if (otherChars.length > 0 && split.others > 0) {
+        const perChar = Math.floor(split.others / otherChars.length);
         for (const char of otherChars) {
           await prisma.character.update({
             where: { id: char.id },
@@ -91,16 +113,16 @@ export async function economy(
         }
       }
     } else if (kingId) {
-      // 僅君王存在，總督份額歸君王 / Only king exists, admin share goes to king
+      // 僅君王存在，獨得全部 / Only king exists, takes everything
       await prisma.character.update({
         where: { id: kingId },
-        data: { gold: { increment: income } },
+        data: { gold: { increment: split.king } },
       });
     } else if (adminId) {
-      // 僅總督存在，全部歸總督 / Only admin exists, all goes to admin
+      // 僅總督存在，獨得全部 / Only admin exists, takes everything
       await prisma.character.update({
         where: { id: adminId },
-        data: { gold: { increment: income } },
+        data: { gold: { increment: split.admin } },
       });
     }
 

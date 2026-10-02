@@ -18,6 +18,7 @@ import { Reveal, Parallax } from '@/components/home/Motion';
 import { t, setLocale, getLocale, getTranslations, DEFAULT_LOCALE } from '@/lib/i18n';
 import type { Locale } from '@/lib/i18n';
 import type { MapCameraControls } from '@/components/SigmaMap';
+import { LeaderAvatar } from '@/components/LeaderAvatar';
 import { apiFetch } from '@/lib/api';
 import { CONFIG } from '@/lib/gameConfig';
 import { signOut } from 'next-auth/react';
@@ -1613,6 +1614,13 @@ function CharacterList({
   // Batched sidebar list: alive characters keep growing with rounds —
   // mount only the first page and append on demand
   const [listShown, setListShown] = useState(100);
+  // hover 預覽：停在哪一列，以及該列在視窗中的位置（面板要跟著列走）/
+  // Hover preview: which row is hovered, and where that row sits in the viewport
+  // (the floating panel tracks it)
+  const [hoverPreview, setHoverPreview] = useState<{
+    char: WorldState['characters'][0];
+    top: number;
+  } | null>(null);
   const placeMap = new Map<string, string>();
   for (const place of places) {
     placeMap.set(place.id, place.name);
@@ -1637,6 +1645,15 @@ function CharacterList({
 
   // 側欄用同一份排序：兵力 desc / Sidebar uses the same order: troops desc
   const aliveRows = characters.filter((c) => c.alive).sort((a, b) => b.troops - a.troops);
+
+  /** 一組角色的各軸平均值（雷達圖參考線用）/ Mean of every radar axis over a group of characters */
+  const meanOf = (group: WorldState['characters']): number[] | null =>
+    group.length === 0
+      ? null
+      : RADAR_AXES.map((axis) => {
+          const sum = group.reduce((acc, c) => acc + (c[axis.key] as number), 0);
+          return sum / group.length;
+        });
 
   return (
     <div className={`${GM_PANEL} p-3`}>
@@ -1701,7 +1718,13 @@ function CharacterList({
         onClose={() => setShowDetail(false)}
         title={t('faction.characters')}
       >
-        <table className="w-full text-xs border-collapse">
+        <table
+          className="w-full text-xs border-collapse"
+          // 指標離開整張表就收起預覽（列與列之間的空隙也會觸發）/
+          // Collapse the preview when the pointer leaves the table — the gaps
+          // between rows fire this too, which is what we want
+          onMouseLeave={() => setHoverPreview(null)}
+        >
           <thead>
             <tr className="text-gray-400 text-left border-b border-white/10">
               <th className="py-2 pr-3 font-medium">{t('character.name')}</th>
@@ -1723,6 +1746,20 @@ function CharacterList({
               <tr
                 key={char.id}
                 className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150"
+                onMouseEnter={(e) => {
+                  // 在事件處理器裡讀版面位置（不在 render 期間讀，避免強制重排）；
+                  // 同時把面板的垂直位置夾在視窗內，之後 render 就不用碰 window /
+                  // Read the row's position in the handler, never during render;
+                  // clamp it into the viewport here so render never touches window
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setHoverPreview({
+                    char,
+                    top: Math.max(
+                      8,
+                      Math.min(rect.top, window.innerHeight - HOVER_RADAR_SIZE - 40)
+                    ),
+                  });
+                }}
               >
                 <td className="py-2 pr-3">
                   <span className="flex items-center gap-1 text-gray-200">
@@ -1771,6 +1808,61 @@ function CharacterList({
             載入更多（{detailRows.length - rowsShown}）
           </button>
         )}
+        {/* hover 預覽：透過 portal 掛在 body 上。左邊是頭像、右邊是雷達圖，
+            兩者都不攔截指標，所以不會讓底下那一列失去 hover。
+            Hover preview: portalled to the body — the avatar on the left, the
+            radar on the right. Neither captures the pointer, so the row
+            underneath keeps its hover and the panel cannot flicker itself away. */}
+        {hoverPreview &&
+          createPortal(
+            <>
+              <div
+                className="fixed z-[110] pointer-events-none"
+                style={{ left: '1rem', top: hoverPreview.top }}
+              >
+                <div className={`${GM_PANEL} bg-ds-panel-strong! p-2 w-[196px]`}>
+                  <LeaderAvatar
+                    character={hoverPreview.char}
+                    factionColor={
+                      hoverPreview.char.factionId
+                        ? (factionMap.get(hoverPreview.char.factionId)?.color ?? null)
+                        : null
+                    }
+                    size={168}
+                    className="mx-auto rounded-[14px]"
+                  />
+                  <div className="text-xs text-gray-200 text-center mt-1.5 truncate">
+                    {hoverPreview.char.name}
+                  </div>
+                </div>
+              </div>
+              <div
+                className="fixed z-[110] pointer-events-none"
+                style={{ right: '1rem', top: hoverPreview.top }}
+              >
+                <div className={`${GM_PANEL} bg-ds-panel-strong! p-2.5`}>
+                  <CharacterRadarHover
+                    character={hoverPreview.char}
+                    color={
+                      hoverPreview.char.factionId
+                        ? (factionMap.get(hoverPreview.char.factionId)?.color ?? '#64748b')
+                        : '#64748b'
+                    }
+                    factionAverage={
+                      hoverPreview.char.factionId
+                        ? meanOf(
+                            detailRows
+                              .map((row) => row.char)
+                              .filter((c) => c.factionId === hoverPreview.char.factionId)
+                          )
+                        : null
+                    }
+                  />
+                </div>
+              </div>
+            </>,
+            document.body
+          )}
       </DetailModal>
     </div>
   );
@@ -2571,17 +2663,84 @@ const RADAR_RADIUS = 68;
  * Turn one series of axis values into an SVG polygon point list.
  *
  * @param values - 每個軸的值（與 RADAR_AXES 同序）/ One value per axis, in RADAR_AXES order
+ * @param size - viewBox 邊長 / viewBox edge length
+ * @param radius - 最外圈半徑 / Outermost ring radius
  * @returns "x,y x,y …" / A "x,y x,y …" point list
  */
-function radarPoints(values: number[]): string {
-  const cx = RADAR_SIZE / 2;
-  const cy = RADAR_SIZE / 2;
+function radarPoints(values: number[], size: number, radius: number): string {
+  const cx = size / 2;
+  const cy = size / 2;
   return RADAR_AXES.map((axis, i) => {
     const ratio = Math.max(0, Math.min(1, (values[i] ?? 0) / axis.max));
     const angle = -Math.PI / 2 + (i / RADAR_AXES.length) * Math.PI * 2;
-    const r = ratio * RADAR_RADIUS;
+    const r = ratio * radius;
     return `${cx + r * Math.cos(angle)},${cy + r * Math.sin(angle)}`;
   }).join(' ');
+}
+
+/** 某個軸在雷達圖上的角度 / The angle of one axis on the radar */
+function radarAngle(index: number): number {
+  return -Math.PI / 2 + (index / RADAR_AXES.length) * Math.PI * 2;
+}
+
+/** 同心格線：四條軸線各畫四圈 / Concentric grid: four rings along each of the six axes */
+function RadarGrid({ size, radius }: { size: number; radius: number }) {
+  const cx = size / 2;
+  const cy = size / 2;
+  return (
+    <g>
+      {[0.25, 0.5, 0.75, 1].map((pct) =>
+        RADAR_AXES.map((axis, i) => {
+          const r = pct * radius;
+          return (
+            <line
+              key={`${pct}-${axis.key}`}
+              x1={cx}
+              y1={cy}
+              x2={cx + r * Math.cos(radarAngle(i))}
+              y2={cy + r * Math.sin(radarAngle(i))}
+              stroke="var(--color-ds-void)"
+              strokeWidth={0.5}
+            />
+          );
+        })
+      )}
+    </g>
+  );
+}
+
+/** 軸標籤（沿用 character.* i18n 鍵）/ Axis labels, reusing the existing character.* keys */
+function RadarAxisLabels({ size, radius }: { size: number; radius: number }) {
+  const cx = size / 2;
+  const cy = size / 2;
+  return (
+    <g>
+      {RADAR_AXES.map((axis, i) => {
+        const r = radius + 15;
+        return (
+          <text
+            key={axis.key}
+            x={cx + r * Math.cos(radarAngle(i))}
+            y={cy + r * Math.sin(radarAngle(i))}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={9}
+            fontFamily="monospace"
+            style={{ fill: 'var(--color-ds-muted)' }}
+          >
+            {t(axis.label)}
+          </text>
+        );
+      })}
+    </g>
+  );
+}
+
+/** 某個角色的雷達數值，依雷達軸順序 / One character's values in radar-axis order */
+function characterRadarValues(
+  character: WorldState['characters'][0]
+): number[] {
+  return RADAR_AXES.map((axis) => character[axis.key] as number);
 }
 
 /**
@@ -2626,8 +2785,6 @@ function CharacterRadar({
     .slice(0, RADAR_MAX_FACTIONS);
 
   const worldAverage = means(living);
-  const cx = RADAR_SIZE / 2;
-  const cy = RADAR_SIZE / 2;
 
   return (
     <ChartFrame title={t('stats.attributes')}>
@@ -2641,31 +2798,12 @@ function CharacterRadar({
             role="img"
             aria-label={t('stats.attributes')}
           >
-            {/* 同心格線 / Concentric grid */}
-            {[0.25, 0.5, 0.75, 1].map((pct) =>
-              RADAR_AXES.map((axis, i) => {
-                const angle = -Math.PI / 2 + (i / RADAR_AXES.length) * Math.PI * 2;
-                const r = pct * RADAR_RADIUS;
-                const x = cx + r * Math.cos(angle);
-                const y = cy + r * Math.sin(angle);
-                return (
-                  <line
-                    key={`${pct}-${i}`}
-                    x1={cx}
-                    y1={cy}
-                    x2={x}
-                    y2={y}
-                    stroke="var(--color-ds-void)"
-                    strokeWidth={0.5}
-                  />
-                );
-              })
-            )}
+            <RadarGrid size={RADAR_SIZE} radius={RADAR_RADIUS} />
             {/* 勢力多邊形 / Faction polygons */}
             {bySize.map(({ faction, values, members }) => (
               <polygon
                 key={faction.id}
-                points={radarPoints(values ?? [])}
+                points={radarPoints(values ?? [], RADAR_SIZE, RADAR_RADIUS)}
                 fill={faction.color}
                 fillOpacity={0.14}
                 stroke={faction.color}
@@ -2679,35 +2817,14 @@ function CharacterRadar({
             {/* 世界平均參考線 / World-average reference */}
             {worldAverage && (
               <polygon
-                points={radarPoints(worldAverage)}
+                points={radarPoints(worldAverage, RADAR_SIZE, RADAR_RADIUS)}
                 fill="none"
                 stroke="var(--color-ds-cyan)"
                 strokeWidth={1}
                 strokeDasharray="3 2"
               />
             )}
-            {/* 軸標籤 / Axis labels */}
-            {RADAR_AXES.map((axis, i) => {
-              const angle = -Math.PI / 2 + (i / RADAR_AXES.length) * Math.PI * 2;
-              const r = RADAR_RADIUS + 15;
-              const x = cx + r * Math.cos(angle);
-              const y = cy + r * Math.sin(angle);
-              return (
-                <text
-                  key={axis.key}
-                  x={x}
-                  y={y}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fontSize={13}
-                  fontFamily="monospace"
-                  className="transition-colors duration-200 hover:fill-gray-200"
-                  style={{ fill: 'var(--color-ds-muted)' }}
-                >
-                  {t(axis.label)}
-                </text>
-              );
-            })}
+            <RadarAxisLabels size={RADAR_SIZE} radius={RADAR_RADIUS} />
           </svg>
           <ul className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2">
             {bySize.map(({ faction, members }) => (
@@ -2737,6 +2854,78 @@ function CharacterRadar({
         </>
       )}
     </ChartFrame>
+  );
+}
+
+/** hover 預覽的雷達圖尺寸（比側欄的小）/ Hover preview radar size (smaller than the sidebar one) */
+const HOVER_RADAR_SIZE = 168;
+const HOVER_RADAR_RADIUS = 54;
+
+/**
+ * 單一將領的雷達預覽：滑鼠停在將領表格的某一列時，浮在表格右側顯示他的屬性形狀，
+ * 虛線是同勢力存活將領的平均值當參考。
+ * Single-character radar preview: hovering a row of the leader table floats this
+ * beside the table, with the faction's living mean as a dashed reference.
+ *
+ * 面板本身 `pointer-events-none`，否則游標移過去會讓該列觸發 mouseleave、
+ * 面板馬上消失（閃爍）。整張表也會在指標離開時收起。
+ * The panel is `pointer-events-none`: otherwise moving the cursor onto it would
+ * fire the row's mouseleave and make the panel vanish (flicker). The whole table
+ * also collapses when the pointer leaves it.
+ */
+function CharacterRadarHover({
+  character,
+  factionAverage,
+  color,
+}: {
+  character: WorldState['characters'][0];
+  factionAverage: number[] | null;
+  color: string;
+}) {
+  return (
+    <div className="pointer-events-none w-[196px]">
+      <div className="text-xs text-gray-200 font-medium truncate">{character.name}</div>
+      <svg
+        viewBox={`0 0 ${HOVER_RADAR_SIZE} ${HOVER_RADAR_SIZE}`}
+        className="w-full"
+        role="img"
+        aria-label={`${character.name} ${t('stats.attributes')}`}
+      >
+        <RadarGrid size={HOVER_RADAR_SIZE} radius={HOVER_RADAR_RADIUS} />
+        <polygon
+          points={radarPoints(
+            characterRadarValues(character),
+            HOVER_RADAR_SIZE,
+            HOVER_RADAR_RADIUS
+          )}
+          fill={color}
+          fillOpacity={0.18}
+          stroke={color}
+          strokeWidth={1.5}
+          strokeLinejoin="round"
+        />
+        {factionAverage && (
+          <polygon
+            points={radarPoints(factionAverage, HOVER_RADAR_SIZE, HOVER_RADAR_RADIUS)}
+            fill="none"
+            stroke="var(--color-ds-cyan)"
+            strokeWidth={1}
+            strokeDasharray="3 2"
+          />
+        )}
+        <RadarAxisLabels size={HOVER_RADAR_SIZE} radius={HOVER_RADAR_RADIUS} />
+      </svg>
+      <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500 font-mono">
+        <span className="inline-flex items-center gap-1">
+          <span
+            className="w-2.5 h-0 border-t border-dashed"
+            style={{ borderColor: 'var(--color-ds-cyan)' }}
+          />
+          {t('stats.factionAverage')}
+        </span>
+        <span>{t('character.age')} {character.age}</span>
+      </div>
+    </div>
   );
 }
 

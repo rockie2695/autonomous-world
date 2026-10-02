@@ -310,6 +310,7 @@ export const zh = {
     // ── 雷達圖 / Radar ──
     attributes: '將領屬性',
     worldAverage: '世界平均',
+    factionAverage: '同勢力平均',
     factionPower: '勢力力量',
     // ── 世界整體 / World-wide ──
     aliveFactionsOverTime: '存活勢力數',
