@@ -1788,16 +1788,41 @@ sigma.on('afterRender', draw);  // 鏡頭移動 / 兵力變化 / refresh 都會�
 
 ##### 鏡頭動畫 / Camera Animation
 
+鏡頭運作在 **framed 空間**：Sigma 的 `createNormalizationFunction` 會把整張圖映射成
+「以 `(0.5, 0.5)` 為中心、較大軸恰為 `1`」的單位方形。`graph.getNodeAttributes()` 回傳的是
+**正規化之前**的原始座標，`sigma.getBBox()` 也是原始範圍——把這兩者餵給鏡頭會讓鏡頭停在
+世界之外，畫面整片空白（實測 0 個節點可見）。鏡頭要用的座標一律取
+`sigma.getNodeDisplayData(node)`。
+
+The camera works in **framed space**: Sigma's `createNormalizationFunction` maps the graph
+into a unit square centred on `(0.5, 0.5)` whose larger axis is exactly `1`.
+`graph.getNodeAttributes()` returns **raw** pre-normalisation coordinates and
+`sigma.getBBox()` returns the **raw** extent — feeding either to the camera parks it outside
+the world and renders a blank map (measured: 0 nodes visible). Always take camera
+coordinates from `sigma.getNodeDisplayData(node)`.
+
 ```typescript
-// 點擊節點 → 鏡頭動畫置中；太遠時一併放大
-camera.animate({ x: node.x, y: node.y, ratio, angle: 0 }, { duration: MAP_CAMERA_ANIM_MS });
+// 點擊節點 → 鏡頭動畫置中；太遠時一併放大（framed 座標）
+const display = sigma.getNodeDisplayData(node);
+const focusRatio = MAP_FIT_PADDING * MAP_FOCUS_ZOOM;
+camera.animate({ x: display.x, y: display.y, ratio: Math.min(camera.ratio, focusRatio), angle: 0 },
+               { duration: MAP_CAMERA_ANIM_MS });
+
 // 重設 → 動畫到「整個世界剛好放得下」
-const { x: [minX, maxX], y: [minY, maxY] } = sigma.getBBox();
-const ratio = Math.max(graphW / width, graphH / height) * MAP_FIT_PADDING;
+// framed 世界是單位方形，所以全覽視角是固定值，與世界大小／節點數／視窗比例無關
+camera.animate({ x: 0.5, y: 0.5, ratio: MAP_FIT_PADDING, angle: 0 },
+               { duration: MAP_CAMERA_ANIM_MS });
 ```
 
-`resetView` 走 `getBBox()` 而不是 `animatedReset()`：世界通常遠大於視窗，ratio 1 會把地圖
-裁掉。`prefers-reduced-motion` 時 `duration` 為 0（直接跳轉），值透過 `reducedMotionRef`
+`resetView` 走「中心 `(0.5, 0.5)` + ratio `1` × `MAP_FIT_PADDING`」這個**固定值**，而不是
+`getBBox()` 或 `animatedReset()`：framed 世界本身就是單位方形，所以全覽不需要依世界大小
+計算。`MAP_FOCUS_ZOOM`（<1）是同一個基準的倍數，讓聚焦與全覽保持一致。
+
+`resetView` uses that constant rather than `getBBox()` or `animatedReset()`: the framed world
+is already a unit square, so "fit everything" needs no per-world computation.
+`MAP_FOCUS_ZOOM` (<1) is a multiplier on the same baseline, keeping focus and fit consistent.
+
+`prefers-reduced-motion` 時 `duration` 為 0（直接跳轉），值透過 `reducedMotionRef`
 讀取，因為建立 Sigma 的 effect 依賴陣列是空的。
 
 ---

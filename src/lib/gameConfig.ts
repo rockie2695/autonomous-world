@@ -269,8 +269,16 @@ export const CONFIG = {
 
   // ── 鏡頭動畫 / Camera Animation ─────────────────────────────────────────────
   MAP_CAMERA_ANIM_MS: 480,       // 聚焦地點 / 全覽的鏡頭動畫時間（毫秒）/ Camera animation duration (ms)
-  MAP_FOCUS_MIN_RATIO: 0.06,     // 聚焦時若還很遠看，就先放大到至少此 ratio / If zoomed out, focus zooms in to at least this ratio
+  // ── 鏡頭比例（framed 空間）/ Camera ratios (framed space) ────────────────
+  // Sigma 的正規化把整張圖映射成「以 (0.5,0.5) 為中心、較大軸恰為 1」的
+  // 單位方形，所以「全覽整個世界」永遠是固定的 ratio 1 —— 與世界大小、
+  // 節點數量都無關。這兩個值都是相對全覽的倍數，不要填絕對座標比例。
+  // Sigma's normalisation maps the graph into a unit square centred on
+  // (0.5, 0.5) whose larger axis is exactly 1, so "fit everything" is always
+  // the constant ratio 1 — independent of world size and node count. Both
+  // values below are multiples of that baseline, never absolute coordinates.
   MAP_FIT_PADDING: 1.18,         // 全覽時的留白倍數（>1 = 四周留白）/ Padding factor when fitting the whole world (>1 = margin)
+  MAP_FOCUS_ZOOM: 0.45,          // 聚焦地點時相對「全覽」的放大倍數（<1 = 拉近）/ Zoom-in factor when focusing a place, relative to the fit view (<1 = closer)
 } as const;
 
 // ─── 動態佈局函數 / Dynamic Layout Functions ─────────────────────────────

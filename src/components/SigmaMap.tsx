@@ -410,13 +410,32 @@ export function SigmaMap({
 
     /** 鏡頭移到某節點並置中；若目前拉太遠則一併放大到可辨識的比例 */
     /** Move the camera to a node and centre it; zoom in first if it is too far out */
+    // 必須用 getNodeDisplayData()（framed 座標），不能用
+    // graph.getNodeAttributes() 的原始座標：sigma 會把圖正規化置中，
+    // 鏡頭 operates 在 framed 空間。直接餵原始座標會讓鏡頭停在節點之外，
+    // 畫面全黑且關閉彈窗後不會回來。
+    // Must use getNodeDisplayData() (framed space), not the raw
+    // getNodeAttributes() coordinates: sigma normalises and centres the graph,
+    // and the camera works in framed space. Feeding raw coordinates parks the
+    // camera off the node — the map goes blank and never recovers on close.
     const focusNode = (node: string) => {
       if (!graph.hasNode(node)) return;
-      const attrs = graph.getNodeAttributes(node);
+      const display = sigma.getNodeDisplayData(node);
+      if (!display) return;
       const camera = sigma.getCamera();
-      const ratio = Math.min(camera.ratio, CONFIG.MAP_FOCUS_MIN_RATIO);
+      // framed 空間裡「全覽」是固定的 ratio（見 fitWorld），聚焦就是從全覽
+      // 再拉近 MAP_FOCUS_ZOOM 倍——用同樣的基準才能讓兩種視角一致。
+      // In framed space "fit everything" is a fixed ratio (see fitWorld), so
+      // focusing is simply that zoomed in by MAP_FOCUS_ZOOM — sharing the
+      // baseline keeps the two views consistent.
+      const focusRatio = CONFIG.MAP_FIT_PADDING * CONFIG.MAP_FOCUS_ZOOM;
       void camera.animate(
-        { x: attrs.x as number, y: attrs.y as number, ratio, angle: 0 },
+        {
+          x: display.x,
+          y: display.y,
+          ratio: Math.min(camera.ratio, focusRatio),
+          angle: 0,
+        },
         { duration: animMs() }
       );
     };
@@ -424,25 +443,25 @@ export function SigmaMap({
     /** 鏡頭動畫到「整個世界剛好放得下」/ Animate the camera to fit the whole world */
     const fitWorld = () => {
       const camera = sigma.getCamera();
-      const { x: xExtent, y: yExtent } = sigma.getBBox();
-      const [minX, maxX] = xExtent as [number, number];
-      const [minY, maxY] = yExtent as [number, number];
-      const graphWidth = Math.max(maxX - minX, 1e-6);
-      const graphHeight = Math.max(maxY - minY, 1e-6);
-
-      // ratio 是「每像素對應多少圖座標」，取兩軸較大者才能同時容納寬與高
-      // ratio is graph-units-per-pixel; take the larger axis so both fit
-      const { width, height } = sigma.getDimensions();
-      const fitRatio = Math.max(
-        graphWidth / Math.max(width, 1),
-        graphHeight / Math.max(height, 1)
-      );
-
+      // sigma 的正規化（createNormalizationFunction）把整張圖映射成
+      // 「以 (0.5,0.5) 為中心、較大軸恰為 1」的單位方形，所以全覽視角是固定值：
+      // 中心 (0.5,0.5)、ratio 1，再乘 MAP_FIT_PADDING 留白。實測五種視窗比例
+      // （含 1600×400、400×1200）都能容納全部節點。
+      // Sigma's normalisation maps the whole graph into a unit square centred on
+      // (0.5, 0.5) whose larger axis is exactly 1, so "fit everything" is a
+      // constant: centre (0.5, 0.5), ratio 1, times MAP_FIT_PADDING for margin.
+      // Verified to contain every node across five viewport aspects.
+      //
+      // 不可用 sigma.getBBox()：它回傳原始座標範圍（正規化之前），拿來算中心
+      // 會讓鏡頭停在世界之外，reset 之後地圖會變成一片空白（實測 0 個節點可見）。
+      // Must NOT use sigma.getBBox(): it returns the RAW extent (pre-normalisation),
+      // so centring on it parks the camera outside the world — measured 0 nodes
+      // visible, i.e. a blank map after reset.
       void camera.animate(
         {
-          x: (minX + maxX) / 2,
-          y: (minY + maxY) / 2,
-          ratio: camera.getBoundedRatio(fitRatio * CONFIG.MAP_FIT_PADDING),
+          x: 0.5,
+          y: 0.5,
+          ratio: camera.getBoundedRatio(CONFIG.MAP_FIT_PADDING),
           angle: 0,
         },
         { duration: animMs() }
