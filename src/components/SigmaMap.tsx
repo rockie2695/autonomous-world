@@ -198,6 +198,8 @@ export interface MapCameraControls {
   zoomOut: () => void;
   /** 重設拖曳位置與縮放層級（動畫回到預設視角）/ Reset pan position and zoom level (animated back to default view) */
   resetView: () => void;
+  /** 聚焦到某個地點（供事件日誌點擊後呼叫）/ Focus the camera on a place (called when the event log targets one) */
+  focusPlace: (placeId: string) => void;
 }
 
 interface SigmaMapProps {
@@ -248,6 +250,8 @@ export function SigmaMap({
   const hoveredNodeRef = useRef<string | null>(null);
   const hoveredNeighborsRef = useRef<Set<string>>(new Set());
   const selectedPlaceIdRef = useRef(selectedPlaceId);
+  /** 目前是否顯示地名（純粹看鏡頭 ratio）/ Whether place names are currently shown (purely camera-ratio driven) */
+  const labelsVisibleRef = useRef(false);
   const onPlaceClickRef = useRef(onPlaceClick);
   const onControlsReadyRef = useRef(onControlsReady);
   // 尊重「減少動態效果」偏好：鏡頭直接跳轉，不做過場動畫
@@ -305,9 +309,13 @@ export function SigmaMap({
       labelColor: { attribute: 'labelColor' },
       labelWeight: 'bold',
       renderLabels: true,
-      // 統一標籤顯示門檻（config）：節點螢幕尺寸低於閾值時隱藏標籤
-      // Unified label show/hide threshold (config-driven)
-      labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD,
+      // 地名標籤只跟著鏡頭縮放走，不看兵力；真正的門檻在 nodeReducer 裡用
+      // camera.ratio 判斷。這裡必須設 0，否則 sigma 仍會用「節點尺寸」過濾一次，
+      // 讓兵多的地名在拉遠時偷偷留著。
+      // Place labels follow the camera zoom only; the real gate lives in
+      // nodeReducer via camera.ratio. This must be 0, or sigma filters once more
+      // by node size and garrisoned names sneak through when zoomed out.
+      labelRenderedSizeThreshold: 0,
       // 自訂 hover 渲染：只在節點「目前」hover / 選中 / 相連時畫白色底框，
       // 過濾掉 sigma 內部殘留的 hoveredNode / highlightedNodes 狀態。
       // 這兩個內部狀態沒有公開清除 API，只靠 mousemove 轉移更新；彈窗
@@ -331,6 +339,11 @@ export function SigmaMap({
         const res = { ...data };
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(14, Math.min(20, data.size / 2));
+
+        // 拉遠時整張圖都不顯示地名（與兵力無關）；放近才統一出現 /
+        // Zoomed out, no place is labelled regardless of garrison; names appear
+        // together once you zoom in
+        if (!labelsVisibleRef.current) res.label = null;
 
         // hover / 選中 時標籤變青色，連接節點也高亮 / Label turns cyan on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
@@ -478,6 +491,21 @@ export function SigmaMap({
       onPlaceClickRef.current?.(attrs.placeData);
     });
 
+    // 鏡頭變動時重算「地名要不要顯示」。只有跨過門檻才 refresh，避免每幀
+    // 重跑 nodeReducer。綁在 camera 上——sigma 只在內部自己監聽這個事件，
+    // 不會轉發給 sigma.on()。
+    // Recompute label visibility as the camera moves, refreshing only when the
+    // threshold is crossed so nodeReducer is not re-run every frame. Bound on
+    // the camera: sigma consumes this event internally and does not re-emit it.
+    const syncLabelVisibility = () => {
+      const visible = sigma.getCamera().ratio <= CONFIG.LABEL_ZOOM_RATIO;
+      if (visible === labelsVisibleRef.current) return;
+      labelsVisibleRef.current = visible;
+      sigma.refresh();
+    };
+    labelsVisibleRef.current = sigma.getCamera().ratio <= CONFIG.LABEL_ZOOM_RATIO;
+    sigma.getCamera().on('updated', syncLabelVisibility);
+
     sigmaRef.current = sigma;
 
     // 將視角控制交給父層（浮動縮放 / 重設按鈕使用）
@@ -495,6 +523,11 @@ export function SigmaMap({
         // Fit the whole world (rather than ratio 1): the world is normally much
         // larger than the viewport, so animatedReset crops it
         fitWorld();
+      },
+      focusPlace: (placeId: string) => {
+        // 節點不存在（例如極舊回合的事件、該地已消失）時 focusNode 會自行跳過 /
+        // focusNode no-ops when the node is gone (very old events, destroyed place)
+        focusNode(placeId);
       },
     });
 

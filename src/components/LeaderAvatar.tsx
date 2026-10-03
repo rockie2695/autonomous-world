@@ -177,11 +177,14 @@ export function LeaderAvatar({
       <rect x="0" y="0" width="100" height="100" rx="14" fill={robe} opacity={0.18} />
       <rect x="0" y="0" width="100" height="100" rx="14" fill="var(--color-ds-void)" opacity={0.35} />
 
-      {/* 衣袍與肩膀 / Robe and shoulders */}
-      <path d="M8 100 Q50 70 92 100 Z" fill={robe} />
+      {/* 頸 / Neck — 畫在衣袍「下面」，且下緣必須伸進衣袍：衣領頂緣約在 y=76，
+          若脖子畫在衣袍之上會變成一根長長的柱子 / Neck — drawn UNDER the robe
+          with its bottom reaching past the neckline (top edge ≈ y=76). Drawn on
+          top it reads as a long bare column instead. */}
+      <rect x="43" y="58" width="14" height="34" rx="4" fill={skin} />
 
-      {/* 頸 / Neck */}
-      <rect x="43" y="60" width="14" height="16" rx="4" fill={skin} />
+      {/* 衣袍與肩膀 / Robe and shoulders */}
+      <path d="M8 100 Q50 52 92 100 Z" fill={robe} />
 
       {/* 耳 / Ears */}
       <circle cx={50 - faceRx + 1} cy="48" r="3.4" fill={skin} />

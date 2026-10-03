@@ -189,7 +189,7 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Incremental layout** — new places spawn near their parent
 - **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
 - Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
-- Node labels follow one zoom rule: shown only when zoom ≥ `LABEL_SIZE_THRESHOLD` (8), via Sigma's `labelRenderedSizeThreshold`; labels always paint above the spotlight overlay
+- Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.5), independent of garrison; labels always paint above the spotlight overlay
 - **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
 - **Node glow + drop shadow** — a second, static overlay canvas under the spotlight layer and under Sigma paints a soft faction-colored halo behind every place, scaled by its on-screen size; it redraws on camera moves only, so an idle map costs nothing

@@ -20,6 +20,7 @@ export const zh = {
     chinese: '中文',
     details: '詳細資料',
     status: '狀態',
+    back: '返回',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
@@ -311,6 +312,8 @@ export const zh = {
     attributes: '將領屬性',
     worldAverage: '世界平均',
     factionAverage: '同勢力平均',
+    factionAverageSelf: '同勢力僅一人，無參考值',
+    expand: '放大檢視',
     factionPower: '勢力力量',
     // ── 世界整體 / World-wide ──
     aliveFactionsOverTime: '存活勢力數',

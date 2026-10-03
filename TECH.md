@@ -1615,7 +1615,7 @@ graph.addNode(place.id, {
 });
 ```
 
-標籤顯示規則 / Label visibility：`labelRenderedSizeThreshold: CONFIG.LABEL_SIZE_THRESHOLD`（8，定義於 `gameConfig.ts`）—— 僅當縮放達門檻才渲染節點文字；覆蓋 `<canvas>`（聚光燈層）畫在 sigma 容器之下，故標籤永遠疊在光環之上。
+標籤顯示規則 / Label visibility：**純粹看縮放** —— 只有 `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO`（0.5，定義於 `gameConfig.ts`）才渲染地名，與兵力無關；由 `nodeReducer` 在拉遠時把 `label` 設為 `null`，並把 `labelRenderedSizeThreshold` 釘為 `0`。不要改回用節點尺寸過濾：那样兵多的地名在拉遠時仍會留著，而且縮放比例在該比較中會被抵消，本來就不是縮放門檻。跨過門檻時由 camera 的 `updated` 事件觸發 `refresh()`。覆蓋 `<canvas>`（聚光燈層）畫在 sigma 容器之下，故標籤永遠疊在光環之上。
 
 ### 顏色轉換 / Color Conversion
 

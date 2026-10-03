@@ -20,6 +20,7 @@ export const en = {
     chinese: '中文',
     details: 'Details',
     status: 'Status',
+    back: 'Back',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
@@ -311,6 +312,8 @@ export const en = {
     attributes: 'Character Attributes',
     worldAverage: 'World average',
     factionAverage: 'Faction average',
+    factionAverageSelf: 'Only leader in faction — no reference',
+    expand: 'Enlarge',
     factionPower: 'Faction Power',
     // ── 世界整體 / World-wide ──
     aliveFactionsOverTime: 'Alive Factions',

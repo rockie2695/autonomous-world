@@ -244,12 +244,20 @@ export const CONFIG = {
   MOVE_ANIM_PAUSE: 2500, // 每週期停頓（毫秒）/ Pause between animation cycles (ms)
 
   // ── 地名標籤顯示 / Place Label Visibility ──────────────────────────────────
-  // sigma labelThreshold：節點螢幕尺寸（px）低於此值時隱藏標籤。
-  // 縮小（節點變小）→ 低於門檻 → 標籤統一隱藏；放大 → 重新顯示。
-  // sigma labelThreshold: hide a node's label when its on-screen size (px)
-  // falls below this value. Zoom out (nodes shrink) → labels hide uniformly;
-  // zoom back in → they reappear.
-  LABEL_SIZE_THRESHOLD: 8,
+  // 純粹依「鏡頭縮放」決定：camera.ratio ≤ 此值才顯示地名，與兵力無關。
+  // 舊做法用 sigma 的 labelRenderedSizeThreshold（比節點螢幕尺寸），結果是
+  // 兵多的地方在拉遠時仍留著名字，看起來像沒遵守規則；而且比例被
+  // itemSizesReference 抵消，那道門檻根本不是縮放門檻。
+  // Purely zoom-driven: names show only while camera.ratio ≤ this value,
+  // independent of garrison. The old labelRenderedSizeThreshold compared
+  // on-screen node SIZE, so garrisoned places kept their names when zoomed out
+  // (it read as "no rule at all"), and the ratio cancels out of that comparison
+  // anyway, so it was never a zoom threshold to begin with.
+  // 必須大於「聚焦單一地點」的 ratio（MAP_FIT_PADDING × MAP_FOCUS_ZOOM = 0.531），
+  // 否則點擊一個地點會聚焦它、卻連那個地名都不顯示 / Must stay above the focus
+  // ratio (MAP_FIT_PADDING × MAP_FOCUS_ZOOM = 0.531), otherwise clicking a place
+  // would zoom right in on it and still show no name for it
+  LABEL_ZOOM_RATIO: 0.6,
 
   // ── 節點發光與陰影 / Node Glow & Shadow ────────────────────────────────────
   // 靜態裝飾層（第二張覆蓋畫布）：節點後方先畫陰影再畫發光，營造「發亮」的層次。

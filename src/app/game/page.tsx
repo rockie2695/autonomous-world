@@ -8,7 +8,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore, Fragment, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
@@ -120,10 +120,17 @@ const GM_BADGE =
 const GM_FRAME = 'pointer-events-none absolute inset-[10px] z-[5]';
 const GM_VIGNETTE =
   'pointer-events-none absolute inset-0 z-[4] bg-[radial-gradient(ellipse_at_50%_50%,transparent_58%,rgba(2,6,23,0.55)_100%)]';
-const GM_HUDBAR =
-  'absolute top-3.5 left-3.5 right-3.5 z-[6] flex flex-wrap items-center gap-3 ' +
-  'rounded-xl border border-[rgba(34,211,238,0.28)] bg-[rgba(2,6,23,0.74)] ' +
+/** 地圖 HUD 面板：圖例靠左、相機控制靠右，都貼齊地圖底部 /
+ *  Map HUD panels: legend bottom-left, camera controls bottom-right */
+const GM_HUD_PANEL =
+  'absolute bottom-4 z-[6] flex items-center gap-2 rounded-xl ' +
+  'border border-[rgba(34,211,238,0.28)] bg-[rgba(2,6,23,0.74)] ' +
   'px-3 py-[0.55rem] backdrop-blur-[14px]';
+/** 圖例：靠左；限寬並可橫向捲動，窄視窗下不會撞到右側控制列 /
+ *  Legend: left, width-capped and horizontally scrollable so it cannot collide
+ *  with the right-hand controls on narrow viewports */
+const GM_HUD_LEGEND = `${GM_HUD_PANEL} left-4 max-w-[min(55%,24rem)]`;
+const GM_HUD_CONTROLS = `${GM_HUD_PANEL} right-4`;
 const GM_CORNER_BASE = 'absolute size-[26px] border-[rgba(34,211,238,0.55)] border-solid';
 const GM_CORNER_TL = `${GM_CORNER_BASE} top-0 left-0 border-w-[1px_0_0_1px]`;
 const GM_CORNER_TR = `${GM_CORNER_BASE} top-0 right-0 border-w-[1px_1px_0_0]`;
@@ -476,7 +483,24 @@ function TelemetryStrip({
 export default function GamePage() {
   /** 使用者選取的回合；null = 尚未選取 → 自動跟隨世界最新回合 / User-picked round; null = follow the world's latest round */
   const [selectedRound, setSelectedRound] = useState<number | null>(null);
-  const [selectedPlace, setSelectedPlace] = useState<WorldState['places'][0] | null>(null);
+  /** 彈窗導覽堆疊：地點 ⇄ 將領互相跳轉時，「上一個」就是堆疊的上一層，
+   *  返回鍵 pop 一層即可回到剛才那個彈窗；堆疊只剩一筆時等同於關閉 /
+   *  Popup navigation stack. When a place and a leader cross-link, "the popup
+   *  you came from" is simply the entry below the top, so Back pops one level.
+   *  A single-entry stack behaves exactly like a plain close. */
+  type PopupEntry =
+    | { kind: 'place'; place: WorldState['places'][0] }
+    | { kind: 'leader'; char: WorldState['characters'][0] };
+  const [popupStack, setPopupStack] = useState<PopupEntry[]>([]);
+  const popup = popupStack.length > 0 ? popupStack[popupStack.length - 1] : null;
+  const selectedPlace = popup && popup.kind === 'place' ? popup.place : null;
+  const detailChar = popup && popup.kind === 'leader' ? popup.char : null;
+  const openPlace = (place: WorldState['places'][0]) =>
+    setPopupStack((stack) => [...stack, { kind: 'place', place }]);
+  const openLeader = (char: WorldState['characters'][0]) =>
+    setPopupStack((stack) => [...stack, { kind: 'leader', char }]);
+  const closePopup = () => setPopupStack([]);
+  const popupBack = () => setPopupStack((stack) => stack.slice(0, -1));
   const [isAdmin, setIsAdmin] = useState(false);
   const queryClient = useQueryClient();
   /** 地圖視角控制（浮動縮放 / 重設按鈕）/ Map camera controls (floating zoom / reset buttons) */
@@ -566,6 +590,29 @@ export default function GamePage() {
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(false);
   const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
   const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats'>('characters');
+  
+
+  /**
+   * 事件只存 charName（沒有 charId），所以這裡接受 id 或名字：先當 id 查，
+   * 再退回名字比對；都找不到就不開——寧可沒反應，也不要開錯人。
+   * Events only carry charName, so this takes an id or a name: try the id first,
+   * then fall back to a name match. If neither resolves, do nothing — no
+   * response beats opening the wrong leader.
+   */
+  const openLeaderDetail = (key: string) => {
+    const chars = worldState?.characters ?? [];
+    const target = chars.find((c) => c.id === key) ?? chars.find((c) => c.name === key);
+    if (target) openLeader(target);
+  };
+
+  /** 點地名 → 聚焦地圖；順便收起側欄，不然地圖還被蓋著 /
+   *  Clicking a place name focuses the map, collapsing the sidebars first so
+   *  the map is not left covered */
+  const focusPlaceFromLog = (placeId: string) => {
+    setLeftSidebarOpen(false);
+    setRightSidebarOpen(false);
+    mapControlsRef.current?.focusPlace(placeId);
+  };
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -651,13 +698,13 @@ export default function GamePage() {
           </div>
           <div className={`flex-1 relative ${GM_RAIL} min-h-64`}>
             <div className="ds-grid-bg absolute inset-0" aria-hidden="true" />
-            <div className={`${GM_HUDBAR}`}>
+            <div className={`${GM_HUD_LEGEND}`}>
               <div className={`${GM_SKEL} h-5 w-48`} />
-              <div className="ml-auto flex items-center gap-2">
-                <div className={`${GM_SKEL} w-9 h-9`} />
-                <div className={`${GM_SKEL} w-9 h-9`} />
-                <div className={`${GM_SKEL} w-9 h-9`} />
-              </div>
+            </div>
+            <div className={`${GM_HUD_CONTROLS}`}>
+              <div className={`${GM_SKEL} w-9 h-9`} />
+              <div className={`${GM_SKEL} w-9 h-9`} />
+              <div className={`${GM_SKEL} w-9 h-9`} />
             </div>
           </div>
           <div className={`hidden lg:block w-80 shrink-0 border-l border-white/5 ${GM_RAIL} p-3 space-y-3`}>
@@ -927,7 +974,7 @@ export default function GamePage() {
               characters={worldState?.characters ?? []}
               spotlights={worldState?.spotlights ?? []}
               moves={worldState?.moves ?? []}
-              onPlaceClick={(place) => setSelectedPlace(place)}
+              onPlaceClick={openPlace}
               selectedPlaceId={selectedPlace?.id}
               onControlsReady={(controls) => { mapControlsRef.current = controls; }}
             />
@@ -942,8 +989,8 @@ export default function GamePage() {
           </div>
           <div className={`${GM_VIGNETTE}`} aria-hidden="true" />
 
-          {/* 統一 HUD 列：圖例（左）＋相機控制（右）/ Unified HUD bar: legend (left) + camera controls (right) */}
-          <div className={`${GM_HUDBAR}`}>
+          {/* HUD 分成兩個面板：圖例貼左下、相機控制貼右下 / HUD split into two panels: legend bottom-left, camera controls bottom-right */}
+          <div className={`${GM_HUD_LEGEND}`}>
             <div className={`${GM_LEGEND}`} aria-label={t('map.faction')}>
               {(worldState?.factions ?? []).filter((f) => f.alive).slice(0, 5).map((f) => (
                 <span key={f.id} className={`${GM_LEGEND_ITEM}`}>
@@ -956,8 +1003,10 @@ export default function GamePage() {
                 <span className="text-sm text-gray-400 whitespace-nowrap">{t('place.unowned')}</span>
               </span>
             </div>
+          </div>
 
-            <div className="flex items-center gap-2 ml-auto">
+          <div className={`${GM_HUD_CONTROLS}`}>
+            <div className="flex items-center gap-2">
               <button
                 onClick={() => mapControlsRef.current?.resetView()}
                 title="重設視圖 / Reset view"
@@ -1008,11 +1057,14 @@ export default function GamePage() {
                 characters={worldState?.characters ?? []}
                 places={worldState?.places ?? []}
                 factions={worldState?.factions ?? []}
+                onOpenLeaderDetail={openLeaderDetail}
               />
             )}
             {rightTab === 'events' && (
               <EventLog
                 worldId={worldState?.world.id ?? ''}
+                onFocusPlace={focusPlaceFromLog}
+                onOpenLeaderDetail={openLeaderDetail}
               />
             )}
             {rightTab === 'stats' && (
@@ -1059,11 +1111,14 @@ export default function GamePage() {
                     characters={worldState?.characters ?? []}
                     places={worldState?.places ?? []}
                     factions={worldState?.factions ?? []}
+                    onOpenLeaderDetail={openLeaderDetail}
                   />
                 )}
                 {rightTab === 'events' && (
                   <EventLog
                     worldId={worldState?.world.id ?? ''}
+                    onFocusPlace={focusPlaceFromLog}
+                    onOpenLeaderDetail={openLeaderDetail}
                   />
                 )}
                 {rightTab === 'stats' && (
@@ -1091,10 +1146,42 @@ export default function GamePage() {
             characters={worldState?.characters ?? []}
             roads={worldState?.roads ?? []}
             places={worldState?.places ?? []}
-            onClose={() => setSelectedPlace(null)}
+            onClose={closePopup}
+            canGoBack={popupStack.length > 1}
+            onBack={popupBack}
+            onOpenPlace={openPlace}
+            onOpenLeader={openLeader}
           />
         )}
       </AnimatePresence>
+
+      {/* 單一將領詳情：表格點列與事件日誌點人名共用 / Single-leader detail, shared by leader-table rows and event-log names */}
+      <DetailModal
+        open={detailChar !== null}
+        onClose={closePopup}
+        onBack={popupBack}
+        canGoBack={popupStack.length > 1}
+        title={detailChar ? detailChar.name : ''}
+      >
+        {detailChar && (
+          <LeaderDetail
+            char={detailChar}
+            faction={
+              detailChar.factionId
+                ? ((worldState?.factions ?? []).find((f) => f.id === detailChar.factionId) ?? null)
+                : null
+            }
+            placeName={
+              (worldState?.places ?? []).find((pl) => pl.id === detailChar.placeId)?.name ?? '—'
+            }
+            factionAverage={radarMeanOf(
+              (worldState?.characters ?? []).filter(
+                (c) => c.factionId && c.factionId === detailChar.factionId && c.alive
+              )
+            )}
+          />
+        )}
+      </DetailModal>
     </div>
   );
 }
@@ -1359,11 +1446,16 @@ function RoundTimeline({
 function DetailModal({
   open,
   onClose,
+  onBack,
+  canGoBack,
   title,
   children,
 }: {
   open: boolean;
   onClose: () => void;
+  /** 返回上一個彈窗（彈窗堆疊 > 1 時才顯示）/ Go back to the previous popup (shown only when the stack is deeper than one) */
+  onBack?: () => void;
+  canGoBack?: boolean;
   title: string;
   children: ReactNode;
 }) {
@@ -1422,8 +1514,19 @@ function DetailModal({
         transition={{ duration: 0.15 }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
-          <h3 className={`${GM_TITLE} text-gray-200!`}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-white/5">
+          {canGoBack && onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              aria-label={t('general.back')}
+              title={t('general.back')}
+              className={`${GM_BTN} w-7 h-7 shrink-0`}
+            >
+              <Ic className="w-4 h-4"><path d="m15 6-6 6 6 6" /></Ic>
+            </button>
+          )}
+          <h3 className={`${GM_TITLE} text-gray-200! flex-1`}>
             {title}
           </h3>
           <button
@@ -1596,16 +1699,119 @@ function FactionRanking({
   );
 }
 
+/** 一組角色的各軸平均值（雷達圖參考線用）/ Mean of every radar axis over a group of characters */
+function radarMeanOf(group: WorldState['characters']): number[] | null {
+  if (group.length === 0) return null;
+  return RADAR_AXES.map((axis) => {
+    const sum = group.reduce((acc, c) => acc + (c[axis.key] as number), 0);
+    return sum / group.length;
+  });
+}
+
+/**
+ * 單一將領詳情：程序化頭像 ＋ 雷達圖（勢力平均為虛線參考環）＋ 全部欄位。
+ * 將領表格點擊與事件日誌點擊都開這個視圖，所以只實作一份。
+ * Single-leader detail: procedural avatar, radar (with the faction mean as the
+ * dashed reference ring) and every column. Both the leader table and the event
+ * log open this one view.
+ */
+function LeaderDetail({
+  char,
+  faction,
+  placeName,
+  factionAverage,
+}: {
+  char: WorldState['characters'][0];
+  faction: WorldState['factions'][0] | null;
+  placeName: string;
+  factionAverage: number[] | null;
+}) {
+  const stats: ReadonlyArray<readonly [string, string | number]> = [
+    [t('character.wu'), char.wu],
+    [t('character.tong'), char.tong],
+    [t('character.jing'), char.jing],
+    [t('character.speed'), char.speed],
+    [t('character.ambition'), Math.round(char.ambition)],
+    [t('character.age'), char.age],
+    [t('character.troops'), char.troops],
+    [t('character.gold'), char.gold],
+    [
+      t('character.loyalty'),
+      t(`character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`),
+    ],
+  ];
+
+  return (
+    <div className="flex flex-col gap-4 sm:flex-row">
+      <div className="shrink-0">
+        <LeaderAvatar
+          character={char}
+          factionColor={faction ? faction.color : null}
+          size={168}
+          className="rounded-[14px]"
+        />
+        <div className="mt-2 flex flex-col items-center gap-0.5">
+          <span className="flex items-center gap-1.5">
+            <span className="font-medium text-gray-200">{char.name}</span>
+            {char.isKing && (
+              <Crown className="w-4 h-4 text-amber-300 shrink-0" label={t('character.isKing')} />
+            )}
+          </span>
+          <span className="text-xs text-gray-400">{faction ? faction.name : '—'}</span>
+          {!char.alive && (
+            <span className="text-xs text-rose-300">{t('character.dead')}</span>
+          )}
+        </div>
+      </div>
+      <div className="flex-1 min-w-0 space-y-3">
+        <CharacterRadarHover
+          character={char}
+          factionAverage={factionAverage}
+          color={faction ? faction.color : '#64748b'}
+        />
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+          {stats.map(([label, value]) => (
+            <div
+              key={label}
+              className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
+            >
+              <dt className="text-xs text-gray-400">{label}</dt>
+              <dd className="text-xs text-gray-200 font-orbitron">{value}</dd>
+            </div>
+          ))}
+          <div className="flex items-center justify-between gap-2 border-b border-white/5 py-1">
+            <dt className="text-xs text-gray-400">{t('character.place')}</dt>
+            <dd className="text-xs text-gray-200 truncate">{placeName}</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * hover 面板的版面尺寸。頭像面板是 `w-[196px]`，雷達面板包住 196px 的
+ * `CharacterRadarHover` 再加上自己的 padding，所以略寬。
+ * Hover panel box metrics. The avatar panel is `w-[196px]`; the radar panel
+ * wraps a 196px `CharacterRadarHover` and adds its own padding, so it is wider.
+ */
+const HOVER_AVATAR_PANEL_W = 196;
+const HOVER_RADAR_PANEL_W = 216;
+const HOVER_PANEL_GAP = 12;
+const HOVER_PANEL_H = 232;
+
 function CharacterList({
   characters,
   places,
   factions,
+  onOpenLeaderDetail,
 }: {
   characters: WorldState['characters'];
   places: WorldState['places'];
   factions: WorldState['factions'];
+  onOpenLeaderDetail: (charId: string) => void;
 }) {
-  const [selectedChar, setSelectedChar] = useState<string | null>(null);
+  
   const [showDetail, setShowDetail] = useState(false);
   // 彈窗表格分批：將領會隨回合持續增加，避免一次掛載全部列 /
   // Batched modal rows: characters keep growing with rounds — don't mount them all
@@ -1617,9 +1823,15 @@ function CharacterList({
   // hover 預覽：停在哪一列，以及該列在視窗中的位置（面板要跟著列走）/
   // Hover preview: which row is hovered, and where that row sits in the viewport
   // (the floating panel tracks it)
+  const tableRef = useRef<HTMLTableElement>(null);
+  // avatarLeft / radarLeft：面板釘在「表格左右兩側」而不是視窗邊緣，跟著列走 /
+  // avatarLeft / radarLeft: the panels anchor to the table's left and right
+  // edges rather than the viewport edges, and track the hovered row
   const [hoverPreview, setHoverPreview] = useState<{
     char: WorldState['characters'][0];
     top: number;
+    avatarLeft: number;
+    radarLeft: number;
   } | null>(null);
   const placeMap = new Map<string, string>();
   for (const place of places) {
@@ -1646,14 +1858,6 @@ function CharacterList({
   // 側欄用同一份排序：兵力 desc / Sidebar uses the same order: troops desc
   const aliveRows = characters.filter((c) => c.alive).sort((a, b) => b.troops - a.troops);
 
-  /** 一組角色的各軸平均值（雷達圖參考線用）/ Mean of every radar axis over a group of characters */
-  const meanOf = (group: WorldState['characters']): number[] | null =>
-    group.length === 0
-      ? null
-      : RADAR_AXES.map((axis) => {
-          const sum = group.reduce((acc, c) => acc + (c[axis.key] as number), 0);
-          return sum / group.length;
-        });
 
   return (
     <div className={`${GM_PANEL} p-3`}>
@@ -1677,11 +1881,9 @@ function CharacterList({
           .map((char) => (
             <button
               key={char.id}
-              onClick={() => setSelectedChar(selectedChar === char.id ? null : char.id)}
-              className={`w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-150 [content-visibility:auto] [contain-intrinsic-size:auto_44px] ${selectedChar === char.id
-                ? 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/25'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-                }`}
+              type="button"
+              onClick={() => onOpenLeaderDetail(char.id)}
+              className="w-full text-left px-2.5 py-1.5 rounded-md text-sm transition-all duration-150 text-gray-400 hover:text-gray-200 hover:bg-white/5 [content-visibility:auto] [contain-intrinsic-size:auto_44px]"
             >
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
@@ -1692,14 +1894,7 @@ function CharacterList({
                   {char.troops}
                 </span>
               </div>
-              {selectedChar === char.id && (
-                <div className="mt-1.5 pl-3 text-xs text-gray-400 space-y-0.5 border-l border-white/10">
-                  <div>{t('character.wu')}: {char.wu} · {t('character.tong')}: {char.tong} · {t('character.jing')}: {char.jing}</div>
-                  <div>{t('character.speed')}: {char.speed} · {t('character.ambition')}: {Math.round(char.ambition)}</div>
-                  <div>{t('character.age')}: {char.age} · {t('character.troops')}: {char.troops} · {t('character.gold')}: {char.gold}</div>
-                  <div>{t('character.place')}: {placeMap.get(char.placeId) ?? '—'}</div>
-                </div>
-              )}
+              
             </button>
           ))}
         {aliveRows.length > listShown && (
@@ -1719,6 +1914,7 @@ function CharacterList({
         title={t('faction.characters')}
       >
         <table
+          ref={tableRef}
           className="w-full text-xs border-collapse"
           // 指標離開整張表就收起預覽（列與列之間的空隙也會觸發）/
           // Collapse the preview when the pointer leaves the table — the gaps
@@ -1745,19 +1941,55 @@ function CharacterList({
             {detailRows.slice(0, rowsShown).map(({ char, faction, placeName }) => (
               <tr
                 key={char.id}
-                className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150"
+                className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150 cursor-pointer"
+                onClick={() => {
+                  // 先關閉表格彈窗再開詳情：兩個 modal 同時存在會一起搶 Esc /
+                  // Close the table modal before opening the detail: two stacked
+                  // modals would both compete for Escape
+                  // 順便收起 hover 面板：表格卸載後 onMouseLeave 不會再觸發，
+                  // 否則頭像／雷達圖會浮在詳情彈窗上面 /
+                  // Also clear the hover panels: once the table unmounts
+                  // onMouseLeave never fires, leaving the avatar and radar
+                  // floating on top of the detail modal
+                  setHoverPreview(null);
+                  setShowDetail(false);
+                  onOpenLeaderDetail(char.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setHoverPreview(null);
+                    setShowDetail(false);
+                    onOpenLeaderDetail(char.id);
+                  }
+                }}
+                tabIndex={0}
+                aria-label={char.name}
                 onMouseEnter={(e) => {
                   // 在事件處理器裡讀版面位置（不在 render 期間讀，避免強制重排）；
                   // 同時把面板的垂直位置夾在視窗內，之後 render 就不用碰 window /
                   // Read the row's position in the handler, never during render;
                   // clamp it into the viewport here so render never touches window
                   const rect = e.currentTarget.getBoundingClientRect();
+                  const table = tableRef.current?.getBoundingClientRect();
+                  // 面板釘在表格左右外側、跟著 hovered 列走；外側空間不足就夾進視窗 /
+                  // Anchor the panels just outside the table's left and right
+                  // edges, tracking the hovered row; clamp them into the viewport
+                  // when the outer gutter is too narrow to hold them
+                  const clampX = (x: number, w: number) =>
+                    Math.max(8, Math.min(x, window.innerWidth - w - 8));
                   setHoverPreview({
                     char,
                     top: Math.max(
                       8,
-                      Math.min(rect.top, window.innerHeight - HOVER_RADAR_SIZE - 40)
+                      Math.min(rect.top, window.innerHeight - HOVER_PANEL_H - 16)
                     ),
+                    avatarLeft: table
+                      ? clampX(table.left - HOVER_AVATAR_PANEL_W - HOVER_PANEL_GAP, HOVER_AVATAR_PANEL_W)
+                      : 8,
+                    radarLeft: table
+                      ? clampX(table.right + HOVER_PANEL_GAP, HOVER_RADAR_PANEL_W)
+                      : 8,
                   });
                 }}
               >
@@ -1818,7 +2050,7 @@ function CharacterList({
             <>
               <div
                 className="fixed z-[110] pointer-events-none"
-                style={{ left: '1rem', top: hoverPreview.top }}
+                style={{ left: hoverPreview.avatarLeft, top: hoverPreview.top }}
               >
                 <div className={`${GM_PANEL} bg-ds-panel-strong! p-2 w-[196px]`}>
                   <LeaderAvatar
@@ -1838,7 +2070,7 @@ function CharacterList({
               </div>
               <div
                 className="fixed z-[110] pointer-events-none"
-                style={{ right: '1rem', top: hoverPreview.top }}
+                style={{ left: hoverPreview.radarLeft, top: hoverPreview.top }}
               >
                 <div className={`${GM_PANEL} bg-ds-panel-strong! p-2.5`}>
                   <CharacterRadarHover
@@ -1850,7 +2082,7 @@ function CharacterList({
                     }
                     factionAverage={
                       hoverPreview.char.factionId
-                        ? meanOf(
+                        ? radarMeanOf(
                             detailRows
                               .map((row) => row.char)
                               .filter((c) => c.factionId === hoverPreview.char.factionId)
@@ -1868,10 +2100,51 @@ function CharacterList({
   );
 }
 
+/**
+ * 把翻譯樣板中的 `{key}` 依序換成節點，其餘文字原樣輸出；由呼叫端決定每個
+ * 位置要放可點擊按鈕還是純文字。事件日誌的人名／地名能點就是靠這個。
+ * Fill a translation template's `{key}` slots with nodes and pass the remaining
+ * text through, letting the caller decide whether each slot becomes a clickable
+ * button or plain text — that is what makes names in the event log clickable.
+ */
+function fillTemplate(template: string, parts: Record<string, ReactNode>): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /\{(\w+)\}/g;
+  let last = 0;
+  let index = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(template)) !== null) {
+    if (match.index > last) {
+      nodes.push(
+        <Fragment key={`t${index++}`}>{template.slice(last, match.index)}</Fragment>
+      );
+    }
+    const key = match[1];
+    nodes.push(
+      <Fragment key={`p${index++}`}>{key in parts ? parts[key] : match[0]}</Fragment>
+    );
+    last = match.index + match[0].length;
+  }
+  if (last < template.length) {
+    nodes.push(<Fragment key="tail">{template.slice(last)}</Fragment>);
+  }
+  return nodes;
+}
+
+/** 事件日誌裡可點擊的人名 /地名 / Clickable name styling inside the event log */
+const GM_EVENT_LINK =
+  'text-cyan-300 hover:text-cyan-100 hover:underline underline-offset-2 transition-colors';
+
 function EventLog({
   worldId,
+  onFocusPlace,
+  onOpenLeaderDetail,
 }: {
   worldId: string;
+  /** 點地名 → 鏡頭聚焦到該地點 / Clicking a place name focuses the camera on it */
+  onFocusPlace: (placeId: string) => void;
+  /** 點人名 → 開啟該將領的單一詳情 / Clicking a leader name opens their detail */
+  onOpenLeaderDetail: (key: string) => void;
 }) {
   const { data, isLoading } = useQuery<{ events: GameEvent[] }>({
     // 不帶 round → 回傳所有回合的事件 / Omit round → events for ALL rounds
@@ -1891,7 +2164,7 @@ function EventLog({
   // mount only the first page and append on demand
   const [visibleCount, setVisibleCount] = useState(60);
 
-  function formatEvent(event: GameEvent): string {
+  function formatEvent(event: GameEvent): ReactNode {
     const p = event.data;
     // 野心增減附註（-1 / +1），無資料時為空字串 /
     // Ambition delta suffix (-1 / +1); empty when the event carries no delta
@@ -1899,66 +2172,103 @@ function EventLog({
       typeof delta === 'number' && delta !== 0
         ? t('events.ambitionDelta').replace('{delta}', String(delta))
         : '';
+    // 人名一律可點（事件只存 charName，沒有 charId，所以由上層用名字解析）；
+    // 地名帶 placeId，可直接聚焦地圖。缺 id 時退回純文字——寧可不可點也不要壞掉 /
+    // Leader names are always clickable (events only store charName, so the page
+    // resolves by name); places carry placeId and focus the map directly. Without
+    // an id we fall back to plain text — inert beats broken.
+    const leaderNode = (name: unknown): ReactNode => {
+      const label = typeof name === 'string' ? name : '?';
+      return (
+        <button type="button" onClick={() => onOpenLeaderDetail(label)} className={GM_EVENT_LINK}>
+          {label}
+        </button>
+      );
+    };
+    const placeNode = (id: unknown, name: unknown): ReactNode => {
+      const label = typeof name === 'string' ? name : '?';
+      if (typeof id !== 'string') return label;
+      return (
+        <button type="button" onClick={() => onFocusPlace(id)} className={GM_EVENT_LINK}>
+          {label}
+        </button>
+      );
+    };
+    const text = (v: unknown): string => (typeof v === 'string' ? v : '?');
+
     switch (event.type) {
       case 'PLACE_CREATED':
-        return t('events.newPlaceDesc').replace('{place}', p.placeName as string);
+        return fillTemplate(t('events.newPlaceDesc'), {
+          place: placeNode(p.placeId, p.placeName),
+        });
       case 'CHARACTER_SPAWNED':
-        return t('events.spawnDesc').replace('{character}', p.charName as string);
-      case 'CHARACTER_MOVED': {
-        const from = (p.fromPlaceName as string | null) ?? '?';
-        const to = (p.toPlaceName as string | null) ?? '?';
-        return t('events.moveDesc')
-          .replace('{character}', p.charName as string)
-          .replace('{from}', from)
-          .replace('{to}', to);
-      }
+        return fillTemplate(t('events.spawnDesc'), { character: leaderNode(p.charName) });
+      case 'CHARACTER_MOVED':
+        return fillTemplate(t('events.moveDesc'), {
+          character: leaderNode(p.charName),
+          from: placeNode(p.fromPlaceId, p.fromPlaceName),
+          to: placeNode(p.toPlaceId, p.toPlaceName),
+        });
       case 'DEATH':
-        return t('events.deathDesc').replace('{character}', p.charName as string);
+        return fillTemplate(t('events.deathDesc'), { character: leaderNode(p.charName) });
       case 'BATTLE_DEATH':
-        return t('events.battleDeathDesc')
-          .replace('{character}', p.charName as string)
-          .replace('{place}', p.placeName as string);
+        return fillTemplate(t('events.battleDeathDesc'), {
+          character: leaderNode(p.charName),
+          place: placeNode(p.placeId, p.placeName),
+        });
       case 'ESCAPE_SUCCESS':
-        return t('events.escapeSuccessDesc')
-          .replace('{character}', p.charName as string)
-          .replace('{place}', p.placeName as string);
+        return fillTemplate(t('events.escapeSuccessDesc'), {
+          character: leaderNode(p.charName),
+          place: placeNode(p.placeId, p.placeName),
+        });
       case 'DEFECTION':
-        return t('events.defectionDesc').replace('{character}', p.charName as string);
+        return fillTemplate(t('events.defectionDesc'), { character: leaderNode(p.charName) });
       case 'FACTION_COLLAPSE':
-        return t('events.collapseDesc').replace('{faction}', p.factionName as string);
+        return fillTemplate(t('events.collapseDesc'), { faction: text(p.factionName) });
       case 'FACTION_ELIMINATED':
-        return t('events.eliminationDesc').replace('{faction}', p.factionName as string);
+        return fillTemplate(t('events.eliminationDesc'), { faction: text(p.factionName) });
       case 'BUILDING_UPGRADE':
-        return t('events.buildingDesc')
-          .replace('{place}', p.placeName as string)
-          .replace('{building}', t(`map.${p.building as string}`))
-          .replace('{level}', String(p.newLevel));
+        return fillTemplate(t('events.buildingDesc'), {
+          place: placeNode(p.placeId, p.placeName),
+          building: t(`map.${p.building as string}`),
+          level: String(p.newLevel),
+        });
       case 'ADMIN_ASSIGNED':
         return (
-          t('events.adminAssignedDesc')
-            .replace('{character}', p.charName as string)
-            .replace('{place}', p.placeName as string) +
-          ambitionNote(p.ambitionDelta)
+          <>
+            {fillTemplate(t('events.adminAssignedDesc'), {
+              character: leaderNode(p.charName),
+              place: placeNode(p.placeId, p.placeName),
+            })}
+            {ambitionNote(p.ambitionDelta)}
+          </>
         );
       case 'ADMIN_REMOVED':
         return (
-          t('events.adminRemovedDesc')
-            .replace('{character}', p.charName as string)
-            .replace('{place}', p.placeName as string)
-            .replace('{newAdmin}', (p.newAdminName as string) ?? '?') +
-          ambitionNote(p.ambitionDelta)
+          <>
+            {fillTemplate(t('events.adminRemovedDesc'), {
+              character: leaderNode(p.charName),
+              place: placeNode(p.placeId, p.placeName),
+              newAdmin: text(p.newAdminName),
+            })}
+            {ambitionNote(p.ambitionDelta)}
+          </>
         );
       case 'AMBITION_RECOVERED':
         return (
-          t('events.ambitionRecoveredDesc')
-            .replace('{character}', p.charName as string)
-            .replace('{place}', p.placeName as string) +
-          ambitionNote(p.ambitionDelta)
+          <>
+            {fillTemplate(t('events.ambitionRecoveredDesc'), {
+              character: leaderNode(p.charName),
+              place: placeNode(p.placeId, p.placeName),
+            })}
+            {ambitionNote(p.ambitionDelta)}
+          </>
         );
       case 'PLACE_CAPTURED':
-        return t('events.placeCaptureDesc')
-          .replace('{character}', p.charName as string)
-          .replace('{place}', p.placeName as string);
+        return fillTemplate(t('events.placeCaptureDesc'), {
+          character: leaderNode(p.charName),
+          place: placeNode(p.placeId, p.placeName),
+        });
       default:
         return event.type;
     }
@@ -2882,6 +3192,16 @@ function CharacterRadarHover({
   factionAverage: number[] | null;
   color: string;
 }) {
+  const values = characterRadarValues(character);
+  // 參考環只在「真的不一樣」時才畫：單人勢力的平均值會與本人完全相同，
+  // 疊在資料多邊形上等於看不見，看起來像壞掉不如明說 /
+  // Only draw the reference ring when it genuinely differs. In a one-member
+  // faction the mean coincides with the character, so the ring hides under the
+  // data polygon — saying so plainly beats looking broken
+  const referenceDiffers =
+    factionAverage !== null &&
+    factionAverage.some((value, i) => Math.abs(value - values[i]) > 1e-6);
+
   return (
     <div className="pointer-events-none w-[196px]">
       <div className="text-xs text-gray-200 font-medium truncate">{character.name}</div>
@@ -2893,37 +3213,36 @@ function CharacterRadarHover({
       >
         <RadarGrid size={HOVER_RADAR_SIZE} radius={HOVER_RADAR_RADIUS} />
         <polygon
-          points={radarPoints(
-            characterRadarValues(character),
-            HOVER_RADAR_SIZE,
-            HOVER_RADAR_RADIUS
-          )}
+          points={radarPoints(values, HOVER_RADAR_SIZE, HOVER_RADAR_RADIUS)}
           fill={color}
           fillOpacity={0.18}
           stroke={color}
           strokeWidth={1.5}
           strokeLinejoin="round"
         />
-        {factionAverage && (
+        {referenceDiffers && factionAverage && (
           <polygon
             points={radarPoints(factionAverage, HOVER_RADAR_SIZE, HOVER_RADAR_RADIUS)}
             fill="none"
             stroke="var(--color-ds-cyan)"
-            strokeWidth={1}
+            strokeWidth={1.5}
             strokeDasharray="3 2"
           />
         )}
         <RadarAxisLabels size={HOVER_RADAR_SIZE} radius={HOVER_RADAR_RADIUS} />
       </svg>
-      <div className="flex items-center justify-between gap-2 text-[10px] text-gray-500 font-mono">
-        <span className="inline-flex items-center gap-1">
-          <span
-            className="w-2.5 h-0 border-t border-dashed"
-            style={{ borderColor: 'var(--color-ds-cyan)' }}
-          />
-          {t('stats.factionAverage')}
-        </span>
-        <span>{t('character.age')} {character.age}</span>
+      <div className="flex items-center gap-1 text-[10px] text-gray-500 font-mono">
+        {referenceDiffers ? (
+          <>
+            <span
+              className="w-2.5 h-0 border-t border-dashed"
+              style={{ borderColor: 'var(--color-ds-cyan)' }}
+            />
+            {t('stats.factionAverage')}
+          </>
+        ) : (
+          <span>{t('stats.factionAverageSelf')}</span>
+        )}
       </div>
     </div>
   );
@@ -2994,6 +3313,14 @@ function StatsCharts({
       cancelled = true;
     };
   }, [currentRound, worldId]);
+
+  // 必須宣告在下面的 early return 之前，否則違反 rules-of-hooks /
+  // Must be declared before the early return below, or rules-of-hooks trips
+  /** 放大檢視的圖表：點小圖 → 彈出放大版 / The chart opened in the lightbox: click a small chart to enlarge it */
+  const [expandedChart, setExpandedChart] = useState<{
+    title: string;
+    series: ChartSeries[];
+  } | null>(null);
 
   if (currentRound < 1 || !data || data.rounds.length === 0) {
     return (
@@ -3080,17 +3407,46 @@ function StatsCharts({
       ) : (
         <>
           {factionCharts.map((chart) => (
-            <div key={chart.title}>{renderChart(chart)}</div>
+            <div key={chart.title}>
+              {/* 點擊放大：外包成 button 而不是改動各圖表元件， 張圖表共用同一個 renderChart / Click to enlarge: wrap at the frame rather than touching every chart component, since all nine share one renderChart */}
+              <button
+                type="button"
+                onClick={() => setExpandedChart(chart)}
+                title={t('stats.expand')}
+                aria-label={`${t('stats.expand')} ${chart.title}`}
+                className="w-full text-left cursor-pointer"
+              >
+                {renderChart(chart)}
+              </button>
+            </div>
           ))}
           {factionCharts.some((c) => c.series.length > 0) && (
             <div className="border-t border-white/5 pt-3 mt-1">
               {worldCharts.map((chart) => (
-                <div key={chart.title}>{renderChart(chart)}</div>
+                <div key={chart.title}>
+                  <button
+                    type="button"
+                    onClick={() => setExpandedChart(chart)}
+                    title={t('stats.expand')}
+                    aria-label={`${t('stats.expand')} ${chart.title}`}
+                    className="w-full text-left cursor-pointer"
+                  >
+                    {renderChart(chart)}
+                  </button>
+                </div>
               ))}
             </div>
           )}
         </>
       )}
+      {/* 放大檢視 / Enlarged view */}
+      <DetailModal
+        open={expandedChart !== null}
+        onClose={() => setExpandedChart(null)}
+        title={expandedChart ? expandedChart.title : ''}
+      >
+        {expandedChart && renderChart({ ...expandedChart, title: '' })}
+      </DetailModal>
       {/* 雷達圖是自己的面板，不受圖表類型影響 / The radar is its own panel and ignores the type toggle */}
       <div className="border-t border-white/5 pt-3 mt-1">
         <CharacterRadar characters={characters} factions={worldFactions} />
@@ -3106,6 +3462,10 @@ function PlaceDetail({
   roads,
   places,
   onClose,
+  canGoBack,
+  onBack,
+  onOpenPlace,
+  onOpenLeader,
 }: {
   place: WorldState['places'][0];
   factions: WorldState['factions'];
@@ -3113,6 +3473,10 @@ function PlaceDetail({
   roads: WorldState['roads'];
   places: WorldState['places'];
   onClose: () => void;
+  canGoBack: boolean;
+  onBack: () => void;
+  onOpenPlace: (place: WorldState['places'][0]) => void;
+  onOpenLeader: (char: WorldState['characters'][0]) => void;
 }) {
   const faction = factions.find((f) => f.id === place.factionId);
   const placeChars = characters.filter(
@@ -3121,11 +3485,13 @@ function PlaceDetail({
   // 管理此地點的行政官（可能人在他處）/ The place's administrator (may be elsewhere)
   const adminChar = characters.find((c) => c.id === place.administratorId) ?? null;
 
-  const linkedPlaceNames = roads
+  // 相連地點保留完整物件（不是只有名字）——點擊跳轉需要 id /
+  // Keep the whole place objects rather than just names: navigating needs the id
+  const linkedPlaces = roads
     .filter((road) => road.aId === place.id || road.bId === place.id)
     .map((road) => (road.aId === place.id ? road.bId : road.aId))
-    .map((id) => places.find((p) => p.id === id)?.name ?? null)
-    .filter((name): name is string => name !== null);
+    .map((id) => places.find((p) => p.id === id))
+    .filter((p): p is WorldState['places'][0] => p !== undefined);
 
   return (
     <motion.div
@@ -3169,29 +3535,47 @@ function PlaceDetail({
                 <span className="text-sm text-gray-400">{t('place.unowned')}</span>
               )}
             </div>
-            <button
+            <div className="flex items-center gap-1.5 shrink-0">
+              {canGoBack && (
+                <button
+                  type="button"
+                  onClick={onBack}
+                  className={`${GM_BTN} w-8 h-8`}
+                  aria-label={t('general.back')}
+                  title={t('general.back')}
+                >
+                  <Ic className="w-4 h-4"><path d="m15 6-6 6 6 6" /></Ic>
+                </button>
+              )}
+              <button
               onClick={onClose}
-              className={`${GM_BTN} w-8 h-8 shrink-0`}
+              className={`${GM_BTN} w-8 h-8`}
               aria-label="close"
             >
               <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
             </button>
+            </div>
           </div>
         </div>
 
         <div className="p-4 space-y-4">
           {/* 相連地點 / Linked Places */}
-          {linkedPlaceNames.length > 0 && (
+          {linkedPlaces.length > 0 && (
             <div>
               <div className={`${GM_TITLE} text-xs! mb-1.5 flex items-center gap-2`}>
                 <span className="h-px w-4 bg-cyan-400/50" aria-hidden="true" />
                 {t('map.linkedPlaces')}
               </div>
               <div className="flex flex-wrap gap-1">
-                {linkedPlaceNames.map((name) => (
-                  <span key={name} className="text-sm bg-white/5 border border-white/10 rounded px-2 py-0.5 text-gray-300">
-                    {name}
-                  </span>
+                {linkedPlaces.map((linked) => (
+                  <button
+                    key={linked.id}
+                    type="button"
+                    onClick={() => onOpenPlace(linked)}
+                    className="text-sm bg-white/5 border border-white/10 rounded px-2 py-0.5 text-gray-300 hover:text-cyan-200 hover:border-cyan-400/40 hover:bg-cyan-400/10 transition-colors"
+                  >
+                    {linked.name}
+                  </button>
                 ))}
               </div>
             </div>
@@ -3233,18 +3617,44 @@ function PlaceDetail({
                 <p className="text-gray-400 text-sm">—</p>
               )}
               {placeChars.map((char) => (
-                <div key={char.id} className="px-2 py-1 rounded-md text-base text-gray-400">
+                <div
+                  key={char.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => onOpenLeader(char)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onOpenLeader(char);
+                    }
+                  }}
+                  className="px-2 py-1 rounded-md text-base text-gray-400 hover:bg-white/5 hover:text-gray-200 transition-colors cursor-pointer"
+                >
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-gray-200">{char.name}</span>
                     {char.isKing && <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" label={t('character.isKing')} />}
-                    <span className="ml-auto flex items-center gap-1 text-sm font-orbitron text-gray-400">
-                      <Ic className="w-3.5 h-3.5"><path d="m6 13 6-6 6 6M6 18l6-6 6 6" /></Ic>
-                      <span className="sr-only">{t('character.troops')}: </span>
-                      {char.troops}
-                    </span>
-                    <span className="text-sm font-orbitron text-gray-400 tabular-nums">
-                      <span className="sr-only">{t('character.gold')}: </span>
-                      {char.gold}
+                    <span className="ml-auto flex items-center gap-3 text-sm font-orbitron">
+                      {/* 兵力配劍、金幣配錢記號，並各自上色。原本兩個數字直接並排、
+                          金幣連圖示都沒有，看不出哪個是兵力哪個是金幣 / Troops get a
+                          sword and gold a coin, each colour-coded. Previously the two
+                          numbers sat side by side and gold had no icon at all, so
+                          there was no way to tell them apart. */}
+                      <span
+                        className="inline-flex items-center gap-1 text-cyan-300"
+                        title={t('character.troops')}
+                      >
+                        <Ic className="w-3.5 h-3.5"><path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2" /></Ic>
+                        <span className="sr-only">{t('character.troops')}: </span>
+                        {char.troops}
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1 text-amber-300"
+                        title={t('character.gold')}
+                      >
+                        <Ic className="w-3.5 h-3.5"><circle cx="12" cy="12" r="8" /><path d="M12 7v10M9.5 9.5h5M9.5 14.5h5" /></Ic>
+                        <span className="sr-only">{t('character.gold')}: </span>
+                        {char.gold}
+                      </span>
                     </span>
                   </div>
                   <div className="flex flex-wrap gap-x-2.5 text-xs font-orbitron text-gray-400">
