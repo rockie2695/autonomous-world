@@ -24,6 +24,32 @@ export const zh = {
     close: '關閉',
   },
 
+  // ── 認證 / Authentication ─────────────────────────────────────────────────
+  auth: {
+    signInTitle: '登入',
+    registerTitle: '建立帳號',
+    signInTab: '登入',
+    registerTab: '註冊',
+    email: '電子信箱',
+    emailPlaceholder: 'you@example.com',
+    password: '密碼',
+    name: '顯示名稱',
+    namePlaceholder: '選填',
+    passwordHint: '至少 8 個字元',
+    signIn: '登入',
+    register: '建立帳號',
+    submitting: '處理中...',
+    orDivider: '或',
+    continueWithGoogle: '使用 Google 繼續',
+    noAccount: '還沒有帳號？',
+    haveAccount: '已經有帳號了？',
+    successRegister: '帳號已建立，正在登入...',
+    successSetPassword: '密碼已設定，之後可以用信箱登入。',
+    setPassword: '設定密碼',
+    setPasswordHint: '你的帳號目前使用 Google 登入。加上密碼之後也可以用信箱登入。',
+    passwordAlreadySet: '此帳號已經設定過密碼。',
+  },
+
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
   home: {
     intro: '這是一個無限運行的自主模擬世界。沒有勝利條件，只有永恆的演化。',

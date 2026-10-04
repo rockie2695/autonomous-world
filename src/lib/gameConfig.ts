@@ -298,7 +298,16 @@ export const CONFIG = {
   // 用這兩個值當後備 / Slider bounds as camera ratios (smaller = closer). Used as
   // the fallback when Sigma leaves min/maxCameraRatio unset
   MAP_ZOOM_MIN_RATIO: 0.05,
-  MAP_ZOOM_MAX_RATIO: 8,
+  // 拉遠上限。「整個世界剛好放得下」是 1.18，所以這個值代表最多再多拉遠到幾倍。
+  // 過去是 8 —— 但 8 倍會把整張地圖縮成一個小點，看起來就像地圖消失；而且
+  // sigma 的 min/maxCameraRatio 當時並沒有真的設到鏡頭上，滾輪可以無限制地
+  // 繼續拉遠。現在上限同時餵給鏡頭與滑桿，兩者行為一致。
+  // Zoom-out limit, as a multiple of "the whole world just fits" (1.18). This used
+  // to be 8, which shrank the world to a speck that read as the map vanishing — and
+  // the bounds were never actually applied to the camera, so the wheel could run
+  // arbitrarily far past it. The same limit now feeds both the camera and the
+  // slider, so they agree.
+  MAP_ZOOM_MAX_RATIO: 3,
   MAP_FOCUS_ZOOM: 0.45,          // 聚焦地點時相對「全覽」的放大倍數（<1 = 拉近）/ Zoom-in factor when focusing a place, relative to the fit view (<1 = closer)
 
   // ── 事件日誌 / Event log ──
@@ -375,10 +384,30 @@ export const CONFIG = {
   // 最多標幾個勢力，畫面才不會變成地名牆 /
   // Cap the labelled factions so the map does not become a wall of names
   TERRITORY_MAX_LABELS: 12,
-  // 領地視圖下的縮放速度：每個 wheel delta 單位乘上 (1 - step) /
-  // Zoom step while the territory layer owns the wheel: each delta unit scales
-  // the ratio by (1 - step)
-  TERRITORY_ZOOM_STEP: 0.0016,
+  // 領地視圖下每「格」滾輪的縮放倍率。sigma 的 ratio 越小越近，所以往上滾
+  // （deltaY < 0）要讓 ratio 變小，也就是這個倍率要 < 1。
+  // Wheel zoom rate per notch while the territory layer owns the wheel. Sigma's
+  // ratio is smaller when closer, so wheel up (deltaY < 0) must *reduce* the
+  // ratio, which means this rate has to be below 1.
+  TERRITORY_ZOOM_RATE: 1.18,
+  // 一格要被算成「已佔領」所需的最低力量。沒有門檻的話任何微弱正值都會贏過「沒有
+  // 勢力」，領地永遠等於各地方圓盤的聯集，勢力大小對面積毫無影響。門檻讓累積的力
+  // 真的決定能推多遠：一個地方靠自己維持到約 65% 半徑，四個地方合力推到約 83%。
+  // 調高 → 領地收縮、界線明確；調低 → 領地膨脹、彼此擠壓。
+  // Minimum force for a cell to count as held. Without it any faint positive force
+  // beats "no faction", the territory is just the union of the per-place discs, and
+  // faction size has no effect on the area. This is what makes accumulated force
+  // decide reach: a lone place holds ~65% of the radius, four together ~83%. Raise
+  // it for tighter, clearer borders; lower it for sprawling, overlapping regions.
+  TERRITORY_MIN_FORCE: 0.12,
+  // 領地視圖裡，游標離地方節點多近算「指到它」。用**螢幕像素**而不是圖座標距離：
+  // 這個視圖的節點很小而且會隨縮放變大變小，用圖座標的話同一個門檻在拉遠時會大到
+  // 整片區域都被當成「指到某個地方」，於是勢力提示永遠出來不了。
+  // How close the cursor must be to a place node for it to count as "pointing at it",
+  // measured in **screen pixels** rather than graph units. The nodes are tiny here and
+  // scale with zoom, so a graph-space threshold would become so large when zoomed out
+  // that the whole region counts as "a place" and the faction readout could never appear.
+  TERRITORY_PLACE_HOVER_PX: 14,
 } as const;
 
 // ─── 動態佈局函數 / Dynamic Layout Functions ─────────────────────────────

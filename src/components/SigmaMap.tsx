@@ -21,9 +21,9 @@ import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
 import {
   buildTerritoryField,
+  factionAt,
   factionRegions,
   neighbourMask,
-  nearestSite,
   territoryAlpha,
   NEIGHBOUR_BOTTOM,
   NEIGHBOUR_LEFT,
@@ -259,7 +259,9 @@ interface SigmaMapProps {
   onControlsReady?: (controls: MapCameraControls | null) => void;
 }
 
-interface Tooltip {
+/** 拉近時的提示：指向一個**地方** / Zoomed-in tooltip: a single *place* */
+interface PlaceTooltip {
+  kind: 'place';
   x: number;
   y: number;
   place: Place;
@@ -267,6 +269,31 @@ interface Tooltip {
   characterCount: number;
   linkedPlaces: string[];
 }
+
+/**
+ * 拉遠時的提示：指向一整塊**勢力領地** / Zoomed-out tooltip: a whole faction region
+ *
+ * 領地視圖畫的是面積而不是節點，所以提示也必須是面積的。這一層原本重用地方提示，
+ * 但它用「最近的地方」回答游標 —— 在這個視圖裡那幾乎永遠是某個跟游標無關的小地點，
+ * 於是 hover 一塊勢力領地卻顯示另一個地方的名字。
+ * The zoomed-out view draws areas rather than nodes, so its tooltip has to describe
+ * an area too. This layer used to reuse the place tooltip, which answered the cursor
+ * with "the nearest place" — in this view that is almost always some unrelated little
+ * place, so hovering a faction's territory named somewhere else entirely.
+ */
+interface FactionTooltip {
+  kind: 'faction';
+  x: number;
+  y: number;
+  /** 勢力名稱 / Faction name */
+  name: string;
+  /** 勢力色（hsl 字串）/ Faction colour, stored as hsl */
+  color: string;
+  /** 該勢力控制的**地方**數（不是格子數）/ Places this faction owns (not cell count) */
+  placeCount: number;
+}
+
+type Tooltip = PlaceTooltip | FactionTooltip;
 
 /**
  * Sigma 地圖元件。 / Sigma Map Component.
@@ -341,6 +368,19 @@ export function SigmaMap({
 
     // 建立 Sigma 實例 / Create Sigma instance
     const sigma = new Sigma(graph, containerRef.current, {
+      // 鏡頭 ratio 必須有上下限。sigma 的 minRatio/maxRatio 預設都是 null，而
+      // getBoundedRatio 在它們是 null 時**完全不做任何夾限**，所以自訂的滾輪處理
+      // 可以把 ratio 推到任意大 —— 拉遠視圖下滾幾下地圖就縮成一個小點，看起來像
+      // 「地圖消失」。設定之後，sigma 自己的滾輪、雙擊、縮放滑桿，以及領地層的
+      // onWheel 全部共用同一組上下限，行為一致。
+      // The camera ratio has to be bounded. Sigma's minRatio/maxRatio both default to
+      // null, and getBoundedRatio does *no* clamping while they are null, so a custom
+      // wheel handler can push the ratio arbitrarily far out — in the zoomed-out view a
+      // few scroll ticks shrink the world to a dot and the map looks like it vanished.
+      // Bounding it here makes Sigma's own wheel, double-click, the zoom slider and the
+      // territory layer's onWheel all share one limit.
+      minCameraRatio: CONFIG.MAP_ZOOM_MIN_RATIO,
+      maxCameraRatio: CONFIG.MAP_ZOOM_MAX_RATIO,
       // 切換桌機／手機時容器會短暫量到 0 高 Sigma 預設直接丟
       // "Container has no height"，整個錯誤邊界就炸掉。容器只是暫時沒有
       // 尺寸，下一次 resize 會補上，所以照官方建議放行 /
@@ -457,6 +497,7 @@ export function SigmaMap({
         .filter((name): name is string => name !== null);
 
       setTooltip({
+        kind: 'place',
         x: viewportPos.x,
         y: viewportPos.y,
         place: attrs.placeData,
@@ -554,6 +595,37 @@ export function SigmaMap({
       );
     };
 
+    // ── 鏡頭邊界 / Camera bounds ────────────────────────────────────────────
+    //
+    // sigma 只限制 ratio（縮放），**完全不限制 camera.x / y**，所以可以把整個世界
+    // 拖出畫面 —— 實測拖一段之後地圖就只剩畫面角落的一小塊，看起來像「地圖消失」。
+    // Sigma bounds only the ratio; it puts **no bound at all** on camera.x / y, so the
+    // whole world can be dragged out of frame. Measured: after a short drag the map is
+    // reduced to a scrap in one corner, which reads as the map vanishing.
+    //
+    // 鏡頭 operates 在**框化（framed）**空間：sigma 的 normalization 把整張圖塞進一個
+    // 以 (0.5, 0.5) 為中心、較長邊剛好為 1 的單位正方框。所以把鏡頭中心夾在 [0, 1]
+    // 就等於「鏡頭永遠在世界上空」，世界不可能被拖到看不見，同時保留完全自由的上限
+    // —— 拉近到 ratio 0.05 時仍然可以從世界左緣一路平移到右緣。
+    // The camera works in **framed** space: sigma's normalization fits the whole graph
+    // into a unit square centred on (0.5, 0.5) whose longer axis is exactly 1. Clamping
+    // the camera centre to [0, 1] therefore means "the camera is always above the
+    // world", so the world can never be dragged out of sight, while still allowing a
+    // full pan across it even when zoomed to ratio 0.05.
+    const clampCameraToWorld = () => {
+      const camera = sigma.getCamera();
+      const x = Math.min(1, Math.max(0, camera.x));
+      const y = Math.min(1, Math.max(0, camera.y));
+      // 已在範圍內就不動，避免每次 updated 都觸發一次 setState 而造成遞迴 /
+      // Do nothing when already inside, so a frame that updates the camera does not
+      // recurse through setState
+      if (x === camera.x && y === camera.y) return;
+      camera.setState({ x, y });
+    };
+    // 綁在 camera 上（sigma 不會把 updated 轉發給 sigma.on()）/
+    // Bound on the camera — sigma consumes `updated` internally and never re-emits it
+    sigma.getCamera().on('updated', clampCameraToWorld);
+
     // ── 點擊事件 / Click Event ─────────────────────────────────────────────
 
     sigma.on('clickNode', (event: { node: string }) => {
@@ -644,6 +716,7 @@ export function SigmaMap({
       onControlsReadyRef.current?.(null);
       zoomSubscribers.clear();
       camera.removeListener('updated', emitZoom);
+      camera.removeListener('updated', clampCameraToWorld);
       sigma.kill();
       sigmaRef.current = null;
       // 清除 hover 狀態，避免殘留舊的高亮標籤
@@ -751,12 +824,13 @@ export function SigmaMap({
     }));
     return {
       sites,
-      field: buildTerritoryField(
-        sites,
-        CONFIG.TERRITORY_MAX_RESOLUTION,
-        CONFIG.TERRITORY_MARGIN,
-        CONFIG.TERRITORY_BLOB_RADIUS
-      ),
+field: buildTerritoryField(
+      sites,
+      CONFIG.TERRITORY_MAX_RESOLUTION,
+      CONFIG.TERRITORY_MARGIN,
+      CONFIG.TERRITORY_BLOB_RADIUS,
+      CONFIG.TERRITORY_MIN_FORCE
+    ),
     };
   }, [places]);
 
@@ -987,44 +1061,136 @@ useEffect(() => {
     }
   };
 
-  const siteAt = (clientX: number, clientY: number) => {
-    const rect = canvas.getBoundingClientRect();
-    const graphPoint = sigma.viewportToGraph({
-      x: clientX - rect.left,
-      y: clientY - rect.top,
-    });
-    const index = nearestSite(sites, graphPoint.x, graphPoint.y);
-    return index < 0 ? null : sites[index];
+  // 勢力 id → 名稱 / 色 / 控制的地方數，tooltip 用 /
+  // Faction id → name / colour / owned place count, for the tooltip. Counted from
+  // the places rather than the density field, so the number matches what the rest
+  // of the UI calls this faction's holdings
+  const factionInfo = new Map<string, { name: string; color: string; placeCount: number }>(
+    factions.map((faction) => [faction.id, { name: faction.name, color: faction.color, placeCount: 0 }])
+  );
+  for (const place of places) {
+    if (!place.factionId) continue;
+    const entry = factionInfo.get(place.factionId);
+    if (entry) entry.placeCount += 1;
+  }
+
+  /**
+   * 游標是否指在某個**地方**節點上（螢幕距離）。
+   * Whether the cursor is over a *place* node, in screen distance.
+   *
+   * 領地視圖裡地方節點仍然可見（只是被半透明的領地層蓋住），所以游標指到某個地方時
+   * **仍然要顯示地方提示**；只有指在勢力的一整片面積上時才顯示勢力提示。這兩種
+   * 提示的差別不在於「有沒有節點」，而在於「節點是不是真的在游標底下」。
+   *
+   * Place nodes stay visible under the translucent territory layer, so pointing
+   * *at a place* must still show the place tooltip; the faction tooltip is for when
+   * the cursor is over a whole area of someone's land. The distinction is not "are
+   * there nodes" but "is a node actually under the cursor".
+   */
+  const placeUnderCursor = (vx: number, vy: number): TerritorySite | null => {
+    let best: TerritorySite | null = null;
+    // `CONFIG` 是 `as const`，所以 `CONFIG.TERRITORY_PLACE_HOVER_PX` 的型別是字面值
+    // `14` 而不是 `number`。若讓型別從它推斷，`bestDistance` 就會被鎖成 `14`，
+    // 接著 `bestDistance = d`（number）就編譯不過。必須顯式標成 `number`。
+    // `CONFIG` is `as const`, so that value's type is the literal `14`, not `number`.
+    // Inferred, `bestDistance` would be pinned to `14` and assigning a plain `number`
+    // would not compile. It has to be annotated explicitly.
+    let bestDistance: number = CONFIG.TERRITORY_PLACE_HOVER_PX;
+    for (const site of sites) {
+      const vp = sigma.graphToViewport({ x: site.x, y: site.y });
+      const d = Math.hypot(vp.x - vx, vp.y - vy);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = site;
+      }
+    }
+    return best;
   };
 
   const onMove = (event: MouseEvent) => {
-    const site = siteAt(event.clientX, event.clientY);
-    if (!site) {
+    const rect = canvas.getBoundingClientRect();
+    const vx = event.clientX - rect.left;
+    const vy = event.clientY - rect.top;
+    const graphPoint = sigma.viewportToGraph({ x: vx, y: vy });
+
+    // ── 指到某個地方 → 地方提示 ──
+    // 勢力領地是「面積」，但地方節點還是看得見、也還能互動，所以指到它就顯示它。
+    // 先做這一步，否則下面用密度場回答「這塊是誰的」會讓地方自己的提示永遠被蓋掉。
+    //
+    // Pointing at a place → the place tooltip. Territory is an *area*, but the place
+    // nodes are still visible and still interactive under it, so pointing at one has to
+    // show that one. This runs first, otherwise answering "whose ground is this" from
+    // the density field would permanently mask the place's own tooltip.
+    const site = placeUnderCursor(vx, vy);
+    if (site) {
+      const attrs = graph.getNodeAttributes(site.id) as {
+        placeData: Place;
+        factionData: Faction | null;
+        characterCount: number;
+      };
+      setTooltip({
+        kind: 'place',
+        x: vx,
+        y: vy,
+        place: attrs.placeData,
+        faction: attrs.factionData,
+        characterCount: attrs.characterCount,
+        // 這個視圖裡道路是隱藏的，所以沒有「相連地點」可列 /
+        // Roads are hidden in this view, so there are no linked places to list
+        linkedPlaces: [],
+      });
+      canvas.style.cursor = 'pointer';
+      hoveredPlaceId = site.id;
+
+      // 仍然把游標底下那格的勢力打亮，維持「這片是誰的」 /
+      // Still light whichever faction owns the ground under the cursor, so
+      // "whose land is this" keeps reading
+      const litKey = factionAt(field, graphPoint.x, graphPoint.y);
+      if (litKey !== null && litKey !== lit) {
+        lit = litKey;
+        paint(litKey);
+        draw();
+      }
+      return;
+    }
+
+    // ── 指在勢力的一片面積上 → 勢力提示 ──
+    // 問的是「游標底下這塊地屬於誰」，由**密度場**回答。用最近的地方會得到一個幾乎
+    // 永遠跟游標無關的小節點，於是 hover 一整片領地卻顯示別的地方名字。
+    // Over a faction's area → the faction tooltip. The *density field* answers "whose
+    // ground is this". Asking for the nearest place instead names some unrelated node,
+    // so hovering a whole region would report somewhere else entirely.
+    const key = factionAt(field, graphPoint.x, graphPoint.y);
+    if (key === null) {
+      // 無主之地或空白：完全沒有提示，而不是錯顯示鄰居的勢力 /
+      // Unowned or blank land: no tooltip at all, rather than wrongly naming a
+      // neighbour whose claim would otherwise flow over it
       canvas.style.cursor = '';
       hoveredPlaceId = null;
       setTooltip(null);
+      if (lit !== null) {
+        lit = null;
+        paint(null);
+        draw();
+      }
       return;
     }
-    const attrs = graph.getNodeAttributes(site.id) as {
-      placeData: Place;
-      factionData: Faction | null;
-      characterCount: number;
-    };
-    const rect = canvas.getBoundingClientRect();
-    setTooltip({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      place: attrs.placeData,
-      faction: attrs.factionData,
-      characterCount: attrs.characterCount,
-      // 這個視圖裡道路是隱藏的，所以沒有「相連地點」可列 /
-      // Roads are hidden in this view, so there are no linked places to list
-      linkedPlaces: [],
-    });
-    canvas.style.cursor = 'pointer';
-    hoveredPlaceId = site.id;
 
-    const key = attrs.factionData?.id ?? null;
+    const owner = factionInfo.get(key);
+    setTooltip({
+      kind: 'faction',
+      x: vx,
+      y: vy,
+      name: owner?.name ?? key,
+      color: owner?.color ?? '#38bdf8',
+      placeCount: owner?.placeCount ?? 0,
+    });
+    canvas.style.cursor = 'default';
+    // 點在勢力面積上不聚焦任何地方（用戶要求：面積上不顯示地方提示）/
+    // Clicking a faction's area focuses nothing — hovering an area must not surface a
+    // place tooltip
+    hoveredPlaceId = null;
+
     if (key !== lit) {
       lit = key;
       paint(key);
@@ -1072,7 +1238,31 @@ useEffect(() => {
     sigma.refresh();
   };
 
-  const factorFor = (event: WheelEvent) => 1 - CONFIG.TERRITORY_ZOOM_STEP * event.deltaY;
+  /**
+   * 滾輪縮放倍率。/ Wheel zoom factor.
+   *
+   * sigma 的 ratio **越小越近**，所以「拉近」是讓 ratio 變小；滾輪往上
+   * （deltaY < 0）要拉近，倍率就必須 < 1。舊寫法 `1 - step * deltaY` 方向相反，
+   * 往上滾會拉遠；而且當時 ratio 沒有上下限，一路拉遠地圖就縮成一個小點，看起來
+   * 像消失。現在倍率以 config 的 `TERRITORY_ZOOM_RATE` 為基準，並由 sigma 的
+   * min/maxCameraRatio 統一夾限。
+   * Sigma's ratio is **smaller when closer**, so zooming in means making the ratio
+   * smaller; wheel up (deltaY < 0) zooms in, so the factor must be < 1. The old
+   * `1 - step * deltaY` ran the other way — wheel up zoomed *out* — and with no
+   * bound on the ratio it ran away until the world was a dot, which read as the map
+   * disappearing. The rate now comes from `TERRITORY_ZOOM_RATE` and sigma's
+   * min/maxCameraRatio clamps it uniformly.
+   *
+   * deltaY 先換算成「格數」並夾住：各裝置／瀏覽器的單位不一致（規格說是像素，
+   * 實務上常見 3 倍或 100 以上），而且單一事件不該跳太多。
+   * deltaY is normalised into notches and clamped: devices and browsers disagree on
+   * the unit (the spec says pixels, but 3x and 100+ are common in practice), and one
+   * event must not jump too far.
+   */
+  const factorFor = (event: WheelEvent) => {
+    const notches = Math.max(-3, Math.min(3, event.deltaY / 100));
+    return CONFIG.TERRITORY_ZOOM_RATE ** notches;
+  };
 
   let dragging = false;
   let draggedFar = false;
@@ -1632,29 +1822,52 @@ useEffect(() => {
           {/* 頂部發光線 / Top glow line */}
           <div className="absolute top-0 left-1/4 right-1/4 h-px bg-gradient-to-r from-transparent via-cyan-400/30 to-transparent" />
 
-          <div className="font-orbitron font-bold text-lg text-white mb-1 tracking-wide">
-            {tooltip.place.name}
-          </div>
-          {tooltip.faction && (
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <div
-                className="w-2.5 h-2.5 rounded-full"
-                style={{ backgroundColor: tooltip.faction.color }}
-              />
-              <span className="text-gray-300 text-sm">{tooltip.faction.name}</span>
-            </div>
-          )}
-          <div className="space-y-0.5 text-gray-400 text-sm">
-            <div>⚔️ 兵力: <span className="text-cyan-400 font-orbitron">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
-            <div>🏰 堡壘: <span className="text-gray-400 font-orbitron">{tooltip.place.fortress}</span></div>
-            <div>🏪 市場: <span className="text-gray-400 font-orbitron">{tooltip.place.market}</span></div>
-            <div>🏯 兵營: <span className="text-gray-400 font-orbitron">{tooltip.place.barracks}</span></div>
-            <div>👥 將領: <span className="text-gray-400 font-orbitron">{tooltip.characterCount}</span></div>
-          </div>
-          {tooltip.linkedPlaces.length > 0 && (
-            <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-400 text-sm">
-              🛣️ {tooltip.linkedPlaces.join('、')}
-            </div>
+          {/* 拉遠的領地視圖顯示**勢力**；拉近才顯示地方細節 /
+           * The zoomed-out territory view describes a *faction*; only the zoomed-in
+           * view has a single place to describe */}
+          {tooltip.kind === 'faction' ? (
+            <>
+              <div className="flex items-center gap-2 mb-1">
+                <div
+                  className="w-3 h-3 rounded-full shrink-0"
+                  style={{ backgroundColor: tooltip.color }}
+                />
+                <span className="font-orbitron font-bold text-lg text-white tracking-wide">
+                  {tooltip.name}
+                </span>
+              </div>
+              <div className="text-gray-400 text-sm">
+                控制地方:{' '}
+                <span className="text-cyan-400 font-orbitron">{tooltip.placeCount}</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="font-orbitron font-bold text-lg text-white mb-1 tracking-wide">
+                {tooltip.place.name}
+              </div>
+              {tooltip.faction && (
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <div
+                    className="w-2.5 h-2.5 rounded-full"
+                    style={{ backgroundColor: tooltip.faction.color }}
+                  />
+                  <span className="text-gray-300 text-sm">{tooltip.faction.name}</span>
+                </div>
+              )}
+              <div className="space-y-0.5 text-gray-400 text-sm">
+                <div>⚔️ 兵力: <span className="text-cyan-400 font-orbitron">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
+                <div>🏰 堡壘: <span className="text-gray-400 font-orbitron">{tooltip.place.fortress}</span></div>
+                <div>🏪 市場: <span className="text-gray-400 font-orbitron">{tooltip.place.market}</span></div>
+                <div>🏯 兵營: <span className="text-gray-400 font-orbitron">{tooltip.place.barracks}</span></div>
+                <div>👥 將領: <span className="text-gray-400 font-orbitron">{tooltip.characterCount}</span></div>
+              </div>
+              {tooltip.linkedPlaces.length > 0 && (
+                <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-400 text-sm">
+                  🛣️ {tooltip.linkedPlaces.join('、')}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

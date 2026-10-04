@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildTerritoryField,
+  factionAt,
   factionRegions,
   meanNeighbourDistance,
   nearestSite,
@@ -70,12 +71,102 @@ describe('buildTerritoryField', () => {
       const py = Math.floor(((site.y - field.minY) / (field.maxY - field.minY)) * field.height);
       const cx = Math.min(field.width - 1, Math.max(0, px));
       const cy = Math.min(field.height - 1, Math.max(0, py));
-      const winner = field.owner[cy * field.width + cx];
+const winner = field.owner[cy * field.width + cx];
       expect(field.factions[winner]).toBe(site.faction);
     }
   });
 
-it('should not leave a seam between two adjacent places of the same faction', () => {
+  it('should leave unowned land unpainted instead of letting a faction claim it', () => {
+    // 一整片 alpha 的土地，中間放一個無主之地。若無主之地只是「自己不畫」，
+    // 周圍勢力的平滑密度場會直接蓋過去，於是無主之地看起來還是 alpha 的 ——
+    // 這正是回報的問題。無主之地必須贏下那個槽位，把格子挖空。
+    // A solid field of alpha land with one unowned place in the middle. If
+    // unowned merely "didn't paint itself", the surrounding smooth density field
+    // would flow straight over it and the place would still read as alpha — which
+    // is the reported bug. Unowned has to *win* its slot and punch the cell out.
+    const grid: TerritorySite[] = [];
+    for (let x = 0; x <= 30; x += 10) {
+      for (let y = 0; y <= 30; y += 10) {
+        grid.push({ id: `s${x}-${y}`, x, y, faction: FACTION_A });
+      }
+    }
+    grid.push({ id: 'free', x: 15, y: 15, faction: null });
+
+    const field = buildTerritoryField(grid, 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+
+    const cellOf = (gx: number, gy: number): number => {
+      const px = Math.floor(((gx - field.minX) / (field.maxX - field.minX)) * field.width);
+      const py = Math.floor(((gy - field.minY) / (field.maxY - field.minY)) * field.height);
+      return field.owner[
+        Math.min(field.height - 1, Math.max(0, py)) * field.width +
+          Math.min(field.width - 1, Math.max(0, px))
+      ];
+    };
+
+    // 空格：無主之地的正中心不屬於任何勢力 /
+    // owner -1: the unowned place's own centre belongs to nobody
+    expect(cellOf(15, 15)).toBe(-1);
+    // 周圍仍然是 alpha —— 洞是被挖出來的，不是整片消失 /
+    // The surroundings stay alpha: a hole was punched, not the region removed
+    expect(field.factions[cellOf(0, 0)]).toBe(FACTION_A);
+    expect(field.factions[cellOf(30, 30)]).toBe(FACTION_A);
+    // 未佔用的 slot 絕不能外洩成 `factions` 的一員，否則會多出一個假勢力 /
+    // The blocked slot must never leak into `factions`, or a phantom faction appears
+    expect(field.factions).not.toContain('');
+    expect(field.factions).toHaveLength(1);
+  });
+
+  it('should grow a faction\'s territory with how many places it holds', () => {
+    // 這是「距離由力的多寡決定」的核心：每個地方推出的力都一樣，所以同勢力的力會
+    // 累加。四個地方的勢力必須比只有一個地方的勢力佔更大面積 —— 舊的機率 OR 版本
+    // 會讓兩者一樣大，因為 OR 飽和在 1，勢力大小完全沒反映在領地上。
+    // This is the heart of "extent is decided by how much force": every place emits
+    // an equal force, so same-faction force accumulates. A faction holding four
+    // places must cover more ground than one holding a single place. The old
+    // probabilistic-OR version made them identical, because OR saturates at 1 and
+    // faction size had no effect on the map at all.
+    // 離得很遠的無主錨點：它們不宣稱任何領地，存在的唯一目的是**把地圖範圍撐大**。
+    // 沒有它們，範圍會緊貼著 alpha 那幾個地方，兩種情況都會把整個網格塗滿，
+    // 數出來當然一樣多，等於什麼都沒測到。
+    // Unowned anchors far away: they claim nothing and exist purely to **inflate the
+    // extent**. Without them the extent hugs alpha's own places, both cases paint the
+    // whole grid, and the comparison is meaningless.
+    const anchors: TerritorySite[] = [];
+    for (let x = 200; x <= 260; x += 20) {
+      for (let y = 200; y <= 260; y += 20) {
+        anchors.push({ id: `anchor-${x}-${y}`, x, y, faction: null });
+      }
+    }
+    const one = [{ id: 'a', x: 0, y: 0, faction: FACTION_A }];
+    const four = [
+      { id: 'a', x: -1, y: -1, faction: FACTION_A },
+      { id: 'b', x: 1, y: -1, faction: FACTION_A },
+      { id: 'c', x: -1, y: 1, faction: FACTION_A },
+      { id: 'd', x: 1, y: 1, faction: FACTION_A },
+    ];
+    const countOwned = (sites: TerritorySite[]) => {
+      const field = buildTerritoryField([...sites, ...anchors], 256, 0.2, 2.4);
+      if (!field) throw new Error('expected a field');
+      let n = 0;
+      for (const v of field.owner) if (v >= 0) n += 1;
+      return n;
+    };
+    const single = countOwned(one);
+    const clustered = countOwned(four);
+    expect(single).toBeGreaterThan(0);
+    expect(clustered).toBeGreaterThan(single);
+  });
+
+  it('should return null when every place is unowned', () => {
+    const unowned: TerritorySite[] = [
+      { id: 'a', x: 0, y: 0, faction: null },
+      { id: 'b', x: 10, y: 10, faction: null },
+    ];
+    expect(buildTerritoryField(unowned, 64, 0.2, 1.8)).toBeNull();
+  });
+
+  it('should not leave a seam between two adjacent places of the same faction', () => {
     // 這是整個改動的重點：舊的 Voronoi 會在同勢力相鄰地方之間畫出一條邊界，
     // 看起來像像素塊。密度場必須把它們融合成一片連續區域。
     // This is the whole point of the rewrite: a Voronoi partition draws a border
@@ -90,7 +181,7 @@ it('should not leave a seam between two adjacent places of the same faction', ()
     // alpha too — that midpoint is exactly where a Voronoi seam would appear
     for (let step = 0; step <= 40; step++) {
       const gx = (step / 40) * 10;
-      expect(factionAt(field, gx, 0)).toBe(alphaIndex);
+      expect(factionAt(field, gx, 0)).toBe(FACTION_A);
     }
   });
 
@@ -119,10 +210,19 @@ it('should not leave a seam between two adjacent places of the same faction', ()
     expect(padded.maxX).toBeCloseTo(15);
   });
 
-  it('should resolve every cell in a dense world, with no holes', () => {
-    // 稀疏或邊緣的格子難免是 -1；密集世界裡出現空洞就會在畫面上破一個洞 /
-    // Sparse or far-edge cells may legitimately be -1, but a hole in a dense world
-    // would punch a visible gap
+  it('should leave no unpainted gap inside a dense world', () => {
+    // 勢力邊緣之外留白是**預期的**：每個地方只推有限距離，遠處本來就沒有人宣稱，
+    // 而且「推多遠由累積的力決定」這條規則本來就會讓最外圈淡出。所以不能統計全局
+    // 留白比例 —— 那會把正常的邊緣也算成失敗。
+    // Unclaimed land beyond the edge is *expected*: each place pushes a finite
+    // distance, and the outermost ring fading out is the whole point of "extent is
+    // decided by accumulated force". Counting the global unpainted fraction would
+    // therefore fail on correct behaviour.
+    //
+    // 真正不能接受的是**被領地包住的空洞**：四鄰都已被佔領、只有自己空著，那會在
+    // 畫面上破一個洞。
+    // What must never happen is a hole *enclosed* by held land, which would show as a
+    // gap on screen.
     const many: TerritorySite[] = Array.from({ length: 80 }, (_, i) => ({
       id: `s${i}`,
       x: (i % 10) * 10,
@@ -131,9 +231,25 @@ it('should not leave a seam between two adjacent places of the same faction', ()
     }));
     const field = buildTerritoryField(many, 256, 0.2, 1.8);
     if (!field) throw new Error('expected a field');
-    let holes = 0;
-    for (const value of field.owner) if (value < 0) holes += 1;
-    expect(holes / field.owner.length).toBeLessThan(0.05);
+    const at = (x: number, y: number) => field.owner[y * field.width + x];
+    let interiorHoles = 0;
+    for (let y = 1; y < field.height - 1; y++) {
+      for (let x = 1; x < field.width - 1; x++) {
+        if (at(x, y) >= 0) continue;
+        // 連對角都算：只靠斜角接觸的縫隙一樣看得見 /
+        // Diagonals count too: a gap touching its neighbours only at the corners
+        // is still visible
+        let held = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            if (at(x + dx, y + dy) >= 0) held += 1;
+          }
+        }
+        if (held === 8) interiorHoles += 1;
+      }
+    }
+    expect(interiorHoles).toBe(0);
   });
 
   it('should be deterministic for the same input', () => {
@@ -268,6 +384,46 @@ describe('factionRegions', () => {
   });
 });
 
+describe('factionAt', () => {
+  it('should report the faction owning the area under the cursor', () => {
+    // 拉遠視圖畫的是「面積」，所以 hover 要問密度場：「游標底下這塊是誰的？」
+    // 而不是「最近的地方是誰」—— 後者幾乎永遠會指向一個無關的小節點。
+    // The zoomed-out view draws *areas*, so a hover has to ask the density field
+    // "whose land is under the cursor?" rather than "which place is nearest?" —
+    // the latter almost always names an unrelated node.
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    expect(factionAt(field, 0, 0)).toBe(FACTION_A);
+    expect(factionAt(field, 10, 10)).toBe(FACTION_B);
+  });
+
+  it('should report null on blank land and outside the extent', () => {
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    // 範圍之外沒有任何勢力宣稱 /
+    // Nothing claims anything outside the extent
+    expect(factionAt(field, field.minX - 1000, field.minY - 1000)).toBeNull();
+    expect(factionAt(field, field.maxX + 1000, field.maxY + 1000)).toBeNull();
+  });
+
+  it('should report null on a hole punched by unowned land', () => {
+    const grid: TerritorySite[] = [];
+    for (let x = 0; x <= 30; x += 10) {
+      for (let y = 0; y <= 30; y += 10) {
+        grid.push({ id: `s${x}-${y}`, x, y, faction: FACTION_A });
+      }
+    }
+    grid.push({ id: 'free', x: 15, y: 15, faction: null });
+    const field = buildTerritoryField(grid, 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    // 游標在無主之地上 → 不顯示任何勢力（也就不是錯顯示鄰居的勢力）/
+    // Cursor on unowned land → no faction at all, rather than wrongly naming a
+    // neighbour whose claim would otherwise flow over it
+    expect(factionAt(field, 15, 15)).toBeNull();
+    expect(factionAt(field, 0, 0)).toBe(FACTION_A);
+  });
+});
+
 describe('territoryAlpha', () => {
   const FULL = 1.2;
   const GONE = 0.8;
@@ -311,15 +467,4 @@ function countFaction(field: { owner: Int32Array; factions: string[] }, key: str
   let count = 0;
   for (const value of field.owner) if (value === index) count += 1;
   return count;
-}
-
-/** 圖座標 → 該格的勢力索引 / Graph-space point to that cell's faction index */
-function factionAt(
-  field: { width: number; height: number; owner: Int32Array; minX: number; minY: number; maxX: number; maxY: number },
-  gx: number,
-  gy: number
-): number {
-  const px = Math.min(field.width - 1, Math.max(0, Math.floor(((gx - field.minX) / (field.maxX - field.minX)) * field.width)));
-  const py = Math.min(field.height - 1, Math.max(0, Math.floor(((gy - field.minY) / (field.maxY - field.minY)) * field.height)));
-  return field.owner[py * field.width + px];
 }

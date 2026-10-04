@@ -23,22 +23,33 @@
  * continuous region with no internal seam.
  *
  * ── 實作 / How it works
- * 每個勢力有一個「密度場」：把該勢力所有地方的影響力以 `1 - Π(1 - wᵢ)`（機率 OR）
- * 合併，其中 `wᵢ` 是距離的平滑衰減。每格取密度最高的勢力。
- * 這個做法同時滿足三件事：相鄰同勢力會融合、邊界是兩個平滑場相等處的曲線、離某地
- * 越近的勢力會把邊界推得越遠 —— 也就是「距離決定邊界」。
- * Each faction gets a density field: its places' influences combined with
- * `1 - Π(1 - wᵢ)` (a probabilistic OR), where `wᵢ` is a smooth distance falloff.
- * Each cell takes the highest density. That satisfies all three requirements at
- * once: adjacent same-faction places fuse, borders are curves where two smooth
- * fields are equal, and whichever faction is nearer pushes the border away —
- * distance decides the border.
+ * 每個地方都推出**一個一樣大的圓形力**（圓＝到中心的距離衰減）。同勢力的力
+ * **累加**，不同勢力的力互相**抵擋**，每一格由力最大的勢力取得。
+ * Every place projects an **equal circular force** (circular because the influence
+ * falls off with distance). Same-faction forces **accumulate**, rival forces **push
+ * against** each other, and each cell goes to whichever faction's force is strongest.
+ * 這個做法同時滿足四件事：
+ *  1. 同勢力的地方相鄰時力直接相加，所以融合成一片連續區域，不留內部接縫。
+ *  2. 邊界是兩個平滑場相等處的曲線，而不是階梯。
+ *  3. 勢力越大（地方越多）累積的力越強，領地自然推得更遠 —— 距離由力的多寡決定。
+ *  4. 離某勢力越近，它就把邊界推得越遠。
+ * That satisfies four things at once:
+ *  1. Adjacent same-faction places add their force directly, so they fuse into one
+ *     continuous region with no internal seam.
+ *  2. A border is a curve where two smooth fields are equal, not a staircase.
+ *  3. A bigger faction (more places) sums to more force and so pushes further — the
+ *     extent is decided by how much force there is.
+ *  4. Whichever faction is nearer pushes the border further away.
  *
- * 用機率 OR 而不是相加，是因為相加會讓領地廣的勢力在遠處也累積出高密度、無限膨脹；
- * 機率 OR 的上限是 1，一個勢力只有在**附近真的有地**時才可能贏。
- * Probabilistic OR rather than a plain sum: a sum keeps accumulating at distance,
- * so a sprawling faction would inflate forever. OR saturates at 1, so a faction
- * can only win where it genuinely holds nearby ground.
+ * 這裡**不是**相加後直接當密度用，而是「最大的那個勢力贏」；相加只是讓同勢力的
+ * 影響疊加起來。早期版本用的是機率 OR（`1 - Π(1 - wᵢ)`），那會讓上限飽和在 1，
+ * 因此一個有十個地方的勢力跟只有一個地方的勢力推得一樣遠 —— 勢力大小完全沒有
+ * 反映在領地上，跟「距離由力的多寡決定」相反。
+ * Note this is "strongest faction wins", not "the sum is the density": the sum only
+ * makes a faction's own places reinforce each other. An earlier version used a
+ * probabilistic OR (`1 - Π(1 - wᵢ)`), which saturates at 1 — so a faction with ten
+ * places pushed exactly as far as one with a single place, and faction size had no
+ * effect on the map at all.
  *
  * 這裡是**純邏輯**：不碰 canvas、不碰 DOM，所以可以在專案的 node vitest 環境下測。
  * This module is **pure logic** — no canvas, no DOM — so it is directly testable
@@ -51,16 +62,23 @@ export interface TerritorySite {
   x: number;
   y: number;
   /**
-   * 所屬勢力；**null 代表此地不宣稱任何領土**。
-   * 仍然把它算進「最近鄰距離」，因為宣稱半徑要跟整張地圖的疏密一致，但密度場
-   * 完全跳過它 —— 所以無主之地不會被塗成一片灰色，原地圖仍然看得見。
-   * Owning faction; **null means this place claims no territory at all.**
+   * 所屬勢力；**null 代表此地不宣稱任何領土，並且會把別人的領地挖開一個洞**。
+   * 仍然把它算進「最近鄰距離」，因為宣稱半徑要跟整張地圖的疏密一致。
+   * Owning faction; **null means this place claims no territory and punches a hole
+   * in everyone else's claims.**
    *
-   * It still counts toward the nearest-neighbour distance, because the claim
-   * radius has to match the density of the whole map — but the field skips it
-   * entirely, so unowned land is never painted over and the map underneath stays
-   * visible. This is the difference between CK3's map modes (ownership is a tint
-   * *on* the map, unclaimed land is untouched) and repainting the map.
+   * 無主之地不只是「自己不畫」—— 那樣一來，旁邊勢力的平滑密度場照樣會蓋過它，
+   * 於是無主之地看起來還是別人的領土（CK3 的省份圖不會這樣）。所以無主之地要
+   * *贏*下那個槽位，贏到的格子直接留白，勢力的邊界就會繞過它。
+   *
+   * It still counts toward the nearest-neighbour distance, because the claim radius
+   * has to match the density of the whole map.
+   *
+   * Merely *not painting* unowned places is not enough: a neighbouring faction's
+   * smooth density field would simply flow over the top, so unowned land would
+   * still read as someone else's territory — which is exactly what CK3's province
+   * map never does. So unowned places have to *win* their slot, and the cells they
+   * win stay blank, which makes the faction border route around them.
    */
   faction: string | null;
 }
@@ -177,13 +195,25 @@ export function meanNeighbourDistance(
  * @param maxResolution - 每軸的格數上限 / Upper bound on cells per axis
  * @param margin - 範圍往外擴張的比例 / Fraction to grow the extent by on side
  * @param radiusFactor - 宣稱半徑 = 半徑因子 × 最近鄰平均距離 / Claim radius = factor × mean neighbour distance
+ * @param minForce - 佔有一格所需的最低力量 / Minimum force for a cell to count as held
  * @returns 密度場 / The field, or null when there are no sites
  */
 export function buildTerritoryField(
   sites: readonly TerritorySite[],
   maxResolution: number,
   margin: number,
-  radiusFactor: number
+  radiusFactor: number,
+  /**
+   * 佔有一格所需的最低力量 /
+   * Minimum force for a cell to count as held.
+   *
+   * 預設 0.12：一個地方靠自己的力就能維持到半徑的 65%，再多幾個地方就能推得更遠，
+   * 但離得夠遠時仍然會自然收掉，不會讓地圖糊成一片 /
+   * Defaults to 0.12: a lone place holds out to ~65% of the claim radius on its own,
+   * a few more places push further, and genuinely distant land still falls away
+   * instead of smearing across the map.
+   */
+  minForce = 0.12
 ): TerritoryField | null {
   const count = sites.length;
   if (count === 0) return null;
@@ -245,25 +275,34 @@ export function buildTerritoryField(
   // ── 勢力索引 / Faction indices ──
   const factionIndex = new Map<string, number>();
   const factionKeys: string[] = [];
-  const siteFaction = new Int32Array(count).fill(-1);
   for (let i = 0; i < count; i++) {
     const key = sites[i].faction;
-    // null = 不宣稱領土：密度場會跳過它，但上面的距離計算仍然把它算進去 /
-    // null = claims nothing: the field skips it, while the distance pass above
-    // still counts it
     if (key === null) continue;
-    let index = factionIndex.get(key);
-    if (index === undefined) {
-      index = factionKeys.length;
-      factionIndex.set(key, index);
-      factionKeys.push(key);
-    }
-    siteFaction[i] = index;
+    if (factionIndex.has(key)) continue;
+    const index = factionKeys.length;
+    factionIndex.set(key, index);
+    factionKeys.push(key);
   }
   const factionCount = factionKeys.length;
   // 一個勢力都沒有就沒有領地圖可畫，交給呼叫端處理 /
   // No faction at all means there is no territory to draw; the caller handles it
   if (factionCount === 0) return null;
+
+  // 無主之地共用一個「不繪製」槽位。**必須在真實勢力之後**配號，否則第一個勢力會
+  // 拿到同一個索引。無主之地沒有自己的勢力，所以它不參與「哪個勢力較強」的比較；
+  // 它只用來標記「這一格離無主之地比離任何有主地方更近」，那一格就不畫。
+  //
+  // Unowned places share one "blocked" slot, allocated *after* the real factions or
+  // the first faction would collide with it. They have no faction of their own, so
+  // they never take part in "which faction is strongest"; they only mark cells that
+  // are nearer to unowned land than to any owned place, and those cells go unpainted.
+  const BLOCKED = factionCount;
+  const siteFaction = new Int32Array(count);
+  for (let i = 0; i < count; i++) {
+    const key = sites[i].faction;
+    const index = key === null ? undefined : factionIndex.get(key);
+    siteFaction[i] = index === undefined ? BLOCKED : index;
+  }
 
   // ── 空間桶：格寬就是宣稱半徑，所以 3×3 鄰域涵蓋所有影響範圍 ──
   // Spatial buckets sized to the claim radius, so a 3×3 neighbourhood covers
@@ -280,9 +319,8 @@ export function buildTerritoryField(
   }
 
   const owner = new Int32Array(width * height).fill(-1);
-  // 每格的密度累積器；用同一個陣列重複使用並在每格開頭歸零，避免每次配置 /
-  // Per-cell density accumulator, reused and zeroed each cell so it is not
-  // reallocated
+  // 每格的勢力力場累積器；用同一個陣列重複使用並在每格開頭歸零，避免每次配置 /
+  // Per-cell force accumulator, reused and zeroed each cell so it is not reallocated
   const density = new Float64Array(factionCount);
 
   for (let py = 0; py < height; py++) {
@@ -293,35 +331,74 @@ export function buildTerritoryField(
       const bx = clampIndex((gx - minX) / bucketW, cols);
 
       density.fill(0);
-      let touched = false;
+      // 無主之地不是用「力的大小」來蓋掉勢力，而是用「誰離得更近」：離無主地方
+      // 比離任何有主地方更近的格子，就是無主之地自己的地盤，不畫。
+      // 用距離而不是比力，是因為同勢力的力會累加 —— 一個有十個地方的勢力在任一點
+      // 的總力遠大於單一無主地方的力，拿來比較會讓無主之地直接被吞掉。
+      // Unowned land does not out-push a faction by force; it wins by being *closer*:
+      // a cell nearer an unowned place than any owned place is that place's own
+      // ground and goes unpainted. Distance rather than force strength, because
+      // same-faction force accumulates — a faction with ten places overwhelms a
+      // single unowned place's force at almost every point, so comparing force
+      // would simply swallow the unowned place.
+      let nearestOwned = Infinity;
+      let nearestUnowned = Infinity;
       for (let ny = Math.max(0, by - 1); ny <= Math.min(rows - 1, by + 1); ny++) {
         for (let nx = Math.max(0, bx - 1); nx <= Math.min(cols - 1, bx + 1); nx++) {
           for (const si of buckets[ny * cols + nx]) {
             const f = siteFaction[si];
-            // -1 = 此地不宣稱領土，直接跳過；地圖在該處保持原樣 /
-            // -1 = claims nothing, so skip it and leave the map untouched there
+            // -1 不會出現：這裡每個 index 都對應某個勢力或 BLOCKED /
+            // -1 never appears here: every index is either a faction or BLOCKED
             if (f < 0) continue;
             const dx = sites[si].x - gx;
             const dy = sites[si].y - gy;
-            const w = falloff(Math.sqrt(dx * dx + dy * dy), radius);
+            const d = Math.sqrt(dx * dx + dy * dy);
+            const w = falloff(d, radius);
             if (w <= 0) continue;
-            touched = true;
-            // 機率 OR：acc ← acc + w - acc·w，等於 1 - Π(1 - wᵢ) /
-            // Probabilistic OR: acc ← acc + w - acc·w, which is 1 - Π(1 - wᵢ)
-            density[f] += w - density[f] * w;
+            if (f === BLOCKED) {
+              if (d < nearestUnowned) nearestUnowned = d;
+            } else {
+              // 同勢力的力**累加**：每個地方推出的力都一樣，勢力越大地方越多，
+              // 累積的力就越強、領地推得越遠 —— 這就是「距離由力的多寡決定」。
+              // 同一勢力的相鄰地方因此自然融合成一整片，中間不會有接縫。
+              // Same-faction force **accumulates**: every place emits an equal force,
+              // so a faction with more places sums to more force and pushes further —
+              // the "extent is decided by how much force" rule. Adjacent same-faction
+              // places therefore fuse into one region with no internal seam.
+              density[f] += w;
+              if (d < nearestOwned) nearestOwned = d;
+            }
           }
         }
       }
-      if (!touched) continue;
+      // 離無主之地更近 → 留白，不繪製；原地圖在該處保持可見 /
+      // Nearer to unowned land → leave the cell blank so the map underneath shows
+      if (nearestUnowned < nearestOwned) continue;
 
       let bestFaction = -1;
-      let bestDensity = 0;
+      let bestForce = 0;
       for (let f = 0; f < factionCount; f++) {
-        if (density[f] > bestDensity) {
-          bestDensity = density[f];
+        if (density[f] > bestForce) {
+          bestForce = density[f];
           bestFaction = f;
         }
       }
+      // 贏家的力要**超過門檻**這格才算被佔有。沒有門檻的話，任何微小的正值都會贏過
+      // 「沒有勢力」，於是領地永遠等於各地方圓盤的聯集，勢力大小對面積毫無影響 ——
+      // 四個地方和一個地方畫出來一樣大。門檻讓「累積的力」真的決定能推多遠：
+      // 一個地方自己就足以達到門檻的半徑是 R·(1-√t)，四個地方合力則是
+      // R·(1-√(t/4))，也就是說勢力越大領地越遠。
+      // The winner must clear a **threshold** for the cell to count as held. Without
+      // one, any tiny positive force beats "no faction at all", so the territory is
+      // always just the union of the per-place discs and faction size has no effect —
+      // four places draw the same area as one. The threshold is what makes
+      // accumulated force decide reach: a lone place holds out to R·(1-√t), four
+      // places together reach R·(1-√(t/4)), so a bigger faction covers more ground.
+      if (bestFaction < 0 || bestForce < minForce) continue;
+      // 不同勢力的力互相**抵擋**，邊界落在兩邊力相等處 —— 所以離哪個勢力近，
+      // 哪個勢力就把邊界推得遠。
+      // Rival forces **push against** each other and the border lands where the two
+      // are equal, so whichever faction is nearer pushes the border further away.
       owner[py * width + px] = bestFaction;
     }
   }
@@ -361,6 +438,44 @@ export function nearestSite(
     }
   }
   return best;
+}
+
+/**
+ * 某個圖座標屬於哪個勢力 —— 領地圖的 hover 用。
+ * Which faction owns a graph point, for hovering the area map.
+ *
+ * 這裡查的是**密度場**，不是「最近的地方」。拉遠視圖裡畫的是面積而不是節點，
+ * 所以游標底下的那一塊到底屬於誰，要由那個格子回答；用最近節點會得到一個幾乎
+ * 永遠是某個小節點的答案，於是 tooltip 會顯示一個根本沒被指向的地點。
+ *
+ * This reads the **density field**, not "the nearest place". The zoomed-out view
+ * draws areas rather than nodes, so what the cursor is over is answered by the
+ * cell under it. Using the nearest node would almost always name some unrelated
+ * little place, and the tooltip would describe somewhere the cursor isn't.
+ *
+ * @param field - 由 buildTerritoryField 產生 / Built by buildTerritoryField
+ * @param gx - 圖座標 X / Graph-space X
+ * @param gy - 圖座標 Y / Graph-space Y
+ * @returns 勢力 key；無主之地或空白處為 null / Faction key; null on unowned or empty land
+ */
+export function factionAt(
+  field: TerritoryField,
+  gx: number,
+  gy: number
+): string | null {
+  const spanX = field.maxX - field.minX;
+  const spanY = field.maxY - field.minY;
+  if (spanX <= 0 || spanY <= 0) return null;
+  const fx = (gx - field.minX) / spanX;
+  const fy = (gy - field.minY) / spanY;
+  // 邊界之外不算：落在外面等於沒有任何勢力宣稱 /
+  // Outside the extent counts as nothing: no faction claims it
+  if (fx < 0 || fx >= 1 || fy < 0 || fy >= 1) return null;
+  const px = Math.min(field.width - 1, Math.max(0, Math.floor(fx * field.width)));
+  const py = Math.min(field.height - 1, Math.max(0, Math.floor(fy * field.height)));
+  const index = field.owner[py * field.width + px];
+  if (index < 0) return null;
+  return field.factions[index] ?? null;
 }
 
 /**

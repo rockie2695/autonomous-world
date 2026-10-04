@@ -24,6 +24,33 @@ export const en = {
     close: 'Close',
   },
 
+  // ── 認證 / Authentication ─────────────────────────────────────────────────
+  auth: {
+    signInTitle: 'Sign in',
+    registerTitle: 'Create an account',
+    signInTab: 'Sign in',
+    registerTab: 'Register',
+    email: 'Email',
+    emailPlaceholder: 'you@example.com',
+    password: 'Password',
+    name: 'Display name',
+    namePlaceholder: 'Optional',
+    passwordHint: 'At least 8 characters',
+    signIn: 'Sign in',
+    register: 'Create account',
+    submitting: 'Working...',
+    orDivider: 'or',
+    continueWithGoogle: 'Continue with Google',
+    noAccount: 'No account yet?',
+    haveAccount: 'Already have an account?',
+    successRegister: 'Account created. Signing you in...',
+    successSetPassword: 'Password set. You can now sign in with your email.',
+    setPassword: 'Add a password',
+    setPasswordHint:
+      'Your account signs in with Google. Add a password to allow email sign-in too.',
+    passwordAlreadySet: 'This account already has a password.',
+  },
+
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
   home: {
     intro: 'An infinitely running autonomous simulation. No victory conditions, only eternal evolution.',

@@ -293,6 +293,16 @@ model User {
   emailVerified DateTime?
   image         String?
 
+  // 信箱＋密碼登入用的 argon2id 雜湊。可空，因為 Google 登入的帳號沒有密碼 ——
+  // 這個欄位可空才能讓兩種登入方式共存於同一張表。
+  // Argon2id hash for email + password sign-in. Nullable because a Google-only
+  // account has no password — this has to be nullable for both sign-in methods to
+  // share one table.
+  //
+  // **永遠不要存明文密碼，也永遠不要記錄這個值到 log。**
+  // Never store the plaintext password, and never log this value.
+  passwordHash  String?
+
   accounts      Account[]
   sessions      Session[]
 }

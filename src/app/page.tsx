@@ -207,7 +207,7 @@ export default async function HomePage() {
                   </p>
 
                   <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:gap-4">
-                    <Link href="/api/auth/signin" className={`${CTA_BASE} ${CTA_PRIMARY}`}>
+                    <Link href="/signin" className={`${CTA_BASE} ${CTA_PRIMARY}`}>
                       <span>{t('home.startButton')}</span>
                       <svg
                         className="size-4 transition-transform duration-300 group-hover:translate-x-1"
@@ -519,7 +519,7 @@ export default async function HomePage() {
 
             <div className="mt-10 flex justify-center">
               <Link
-                href="/api/auth/signin"
+                href="/signin"
                 className={`${CTA_BASE} ${CTA_PRIMARY} px-10 text-base shadow-[0_0_40px_rgba(34,211,238,0.35)] hover:shadow-[0_0_60px_rgba(34,211,238,0.55)]`}
               >
                 <span>{t('home.startButton')}</span>

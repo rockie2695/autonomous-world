@@ -382,26 +382,63 @@ those claims cover — the CK3 map-mode / Stellaris galaxy-map idea. The territo
 tint over the map*, not a replacement for it: the graph, roads and glow stay fully opaque, so you
 read territory and topography at the same time.
 
-- **It is a density field, not a Voronoi partition.** An earlier version assigned each grid cell to
+- **It is a force field, not a Voronoi partition.** An earlier version assigned each grid cell to
   the nearest place. That was wrong twice over: it rendered as visible cell steps, and it drew a
   border between two *adjacent places of the same faction* — the exact artefact that made it look
-  like pixel art rather than Stellaris. Instead each place projects a smooth falloff
-  (`falloff`, squared so both the value and its slope reach zero at the rim, keeping the boundary
-  C1-continuous) and a faction's claims combine with `1 - Π(1 - wᵢ)` — a **probabilistic OR**.
-  A plain sum would let a sprawling faction accumulate density forever and inflate across the map;
-  OR saturates at 1, so a faction can only win where it genuinely holds nearby ground. Because the
-  field is smooth, a cell's border is where two fields are *equal*, which is what makes distance
-  decide the border and same-faction places fuse with no internal seam.
-- **Unowned land claims nothing and is never painted.** `TerritorySite.faction` is `string | null`,
-  and `null` means "present on the map but claims no territory". Those places still count toward
-  `meanNeighbourDistance()` — the claim radius has to match the density of the whole map — but the
-  field skips them entirely. Painting unowned land as one giant grey faction was the second
-  mistake: it buried the map under a slab, when CK3's map modes leave unclaimed land untouched.
+  like pixel art rather than Stellaris. Instead each place projects a smooth **circular force**
+  (squared falloff, so both the value and its slope reach zero at the rim and the boundary stays
+  C1-continuous), and the field resolves per cell as "strongest faction wins".
+- **Every place emits an equal force, and same-faction force *accumulates*** (`density[f] += w`),
+  so a faction holding more places sums to more force and reaches further — the extent is decided
+  by how much force there is. Rival forces push against each other, so a border lands where the two
+  are equal and distance decides who pushes it further out. Adjacent same-faction places therefore
+  fuse into one continuous region with no internal seam.
+- **A cell must clear `TERRITORY_MIN_FORCE` to count as held.** This is the load-bearing part, and
+  it is easy to miss: with plain `argmax` and no threshold, *any* positive force beats "no faction",
+  so the territory is always exactly the union of the per-place discs and **four places draw the same
+  area as one**. The threshold is what makes accumulated force decide reach — a lone place holds
+  ~65% of the claim radius, four together ~83%.
+- **The old probabilistic OR (`1 - Π(1 - wᵢ)`) was removed**, and so was the reason for it. OR
+  saturates at 1, so a faction with ten places pushed exactly as far as one with a single place —
+  faction size had *no* effect on the map at all, which is the opposite of the intended rule. Its
+  original justification ("a plain sum inflates forever") was wrong: we take the argmax, so an
+  unbounded sum never decides anything by magnitude alone.
+- **Unowned land (`faction === null`) is masked by a nearest-site rule, not by force.** A cell
+  nearer to an unowned place than to any owned place is that place's own ground and stays blank.
+  Comparing *force* cannot work here: once same-faction force accumulates, one faction's summed
+  force swamps any single unowned place at nearly every point, so the unowned place simply gets
+  absorbed — which is the bug this rule exists to prevent. Unowned places still count toward
+  `meanNeighbourDistance()`, because the claim radius has to match the density of the whole map.
+- **`factionAt(field, gx, gy)` answers hover from the field, not from the nearest node.** The
+  zoomed-out view draws *areas*, so "whose ground is this" is answered by the cell under the cursor;
+  using the nearest node names an unrelated place and reports somewhere the cursor isn't.
+- **Hovering a *place* still shows the place tooltip.** The place nodes remain visible and
+  interactive under the translucent layer, so `onMove` first hit-tests them in **screen pixels**
+  (`TERRITORY_PLACE_HOVER_PX`) and shows the place tooltip on a hit; only when the cursor is *not*
+  over a node does it fall through to the faction tooltip. Measuring in screen pixels rather than
+  graph units is deliberate: a graph-space threshold becomes so large when zoomed out that the whole
+  region counts as "a place" and the faction readout could never appear.
+- **Sigma bounds the camera ratio but gives `camera.x` / `y` no bound at all**, so the world can be
+  dragged out of frame — measured: a short drag left the map as a scrap in one corner, which reads
+  as the map vanishing. `clampCameraToWorld()` clamps the camera centre to `[0, 1]` on the camera's
+  `updated` event. The camera works in **framed** space, where sigma's normalization fits the graph
+  into a unit square centred on `(0.5, 0.5)`, so `[0, 1]` means "the camera is always above the
+  world" while still allowing a full pan even at `MAP_ZOOM_MIN_RATIO`. It must no-op when the camera
+  is already inside the range, or every frame would recurse through `setState`.
+- **`minCameraRatio` / `maxCameraRatio` must be passed to the `Sigma` constructor.** Sigma defaults
+  both to `null`, and `getBoundedRatio` does *no* clamping while they are null — so any custom wheel
+  handler can push the ratio arbitrarily far. `MAP_ZOOM_MIN_RATIO` / `MAP_ZOOM_MAX_RATIO` used to be
+  used only as slider *fallbacks*, which left the wheel unbounded. Note that sigma's ratio is
+  **smaller when closer**, so wheel-up must reduce it (`TERRITORY_ZOOM_RATE ** notches` where
+  `notches = deltaY / 100`, clamped); the old `1 - step * deltaY` zoomed the *wrong way*.
+  `MAP_ZOOM_MAX_RATIO` is 3, not the old 8 — at 8 the world shrank to a speck, and since "fit
+  everything" is only ~1.18 there is nothing useful past 3.
 - **`src/lib/territory.ts` is pure logic** — `buildTerritoryField()` returns a per-cell faction index
-  plus the covered extent; `nearestSite()` answers hover/click in one scan (deliberately *not* a
-  grid: one mousemove is one query, and scanning 2000 places is cheaper than maintaining a grid);
-  `factionRegions()` returns per-faction centroids for the labels; `neighbourMask()` reports which
-  of a cell's four sides border a different owner. No DOM, so `territory.test.ts` runs under `node`.
+  plus the covered extent; `nearestSite()` answers click in one scan (deliberately *not* a grid: one
+  query is one scan, and scanning 2000 places is cheaper than maintaining a grid);
+  `factionAt()` answers hover from the field; `factionRegions()` returns per-faction centroids for
+  the labels; `neighbourMask()` reports which of a cell's four sides border a different owner.
+  No DOM, so `territory.test.ts` runs under `node`.
 - **The field is built during render**, in a `useMemo` over `places`, not inside the effect and
   pushed into state — `Place` already carries `layoutX`/`layoutY`, and setting state synchronously
   in an effect trips the cascading-render lint rule.
@@ -585,6 +622,46 @@ column, no new dependency.
 - The hover preview panel is itself `pointer-events-none` (it must be, or entering it fires the row's
   `mouseleave` and the panel flickers itself away), so the tooltip is reachable in the **detail
   modal** but not in the transient table preview
+
+### Authentication (Google + email/password)
+
+Two sign-in methods share one `User` table. Google accounts have `passwordHash === null`;
+only password accounts have one, which is exactly why that column is nullable.
+
+- **Hashing lives in `src/lib/password.ts` (server only)** — argon2id via `@node-rs/argon2`, at
+  OWASP's floor (19 MiB / t=2 / p=1). The encoded PHC string carries its own parameters, so
+  raising them later never locks existing users out. `algorithm` is deliberately omitted: the
+  library already defaults to argon2id, and `Algorithm` is an ambient `const enum` that cannot be
+  read under `isolatedModules`.
+- **`PASSWORD_MIN_LENGTH` lives in `src/lib/passwordPolicy.ts`, which imports nothing.** This is
+  not tidiness — `@node-rs/argon2` declares a top-level `browser: browser.js`, and Next's webpack
+  prefers the browser field for the **client** bundle. That file needs
+  `@node-rs/argon2-wasm32-wasi`, which is not installed, so any client component that transitively
+  imports argon2 **500s the whole page**. Keep `SignInForm` importing the policy module, never
+  `password.ts`.
+- **`authorize()` returns `null` for every failure** — wrong password, unknown email, and Google
+  account alike. Distinguishing them turns the sign-in form into an account-enumeration oracle.
+- **`POST /api/auth/register` returns 409 on an existing email and never overwrites its password.**
+  The tempting alternative ("the address exists, so just set the password") is an **account
+  takeover hole**: anyone who knows a Google user's address could register a password and sign in
+  as them. Addresses are easy to learn.
+- **`POST /api/auth/set-password` is the only safe way for a Google account to gain a password** —
+  including admins, who are matched by `ADMIN_EMAIL`. It requires a verified session, and holding
+  one *is* the proof of ownership. It returns 409 if a password already exists rather than
+  overwriting, because silently replacing credentials is not acceptable.
+- **No email verification and no password reset.** Both need a mail provider, and were explicitly
+  deferred. The consequence is that an address can sign in with its password before any
+  confirmation — an accepted trade-off, not an oversight.
+- **There is no rate limiting** on either route. A public deployment needs something in front
+  (Upstash, Vercel WAF, or middleware); registration especially, since it writes to the database.
+- No composition rules, only the length floor: complexity rules mostly push people toward
+  predictable `Password1!`-style strings (NIST SP 800-63B).
+- The migration `20261005000000_align_admin_columns_and_add_password_hash` re-adds
+  `Place.adminChangedRound` and `Character.adminAmbitionRevertRound` with `IF NOT EXISTS`. Those
+  had been applied with `prisma db push` and never recorded, so `migrate dev` saw them as drift and
+  demanded a **reset** — which would have wiped the running world. The two earlier migrations were
+  baselined with `prisma migrate resolve --applied` first. **Do not run `prisma migrate reset`
+  against this database.**
 
 ### Type Safety
 

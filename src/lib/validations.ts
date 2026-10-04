@@ -8,6 +8,7 @@
 // ============================================================================
 
 import { z } from 'zod';
+import { PASSWORD_MIN_LENGTH } from './passwordPolicy';
 
 // ─── 世界相關模式 / World-related Schemas ─────────────────────────────────────
 
@@ -45,6 +46,68 @@ export const AssignAdminBodySchema = z.object({
   characterId: z
     .string()
     .min(1, '角色 ID 為必填 / Character ID is required'),
+});
+
+// ─── 認證 / Authentication ────────────────────────────────────────────────
+// 郵寄地址一律轉小寫：信箱大小寫在實務上不區分，但資料庫的 @unique 會區分，
+// 不正規化的話 Someone@x.com 與 someone@x.com 會變成兩個帳號，之後誰也登不進去。
+// Emails are lower-cased everywhere: mail addresses are case-insensitive in
+// practice but the database's @unique is not, so without normalisation
+// Someone@x.com and someone@x.com become two accounts and only one can sign in.
+
+const emailField = z
+  .string()
+  .trim()
+  .min(1, '電子信箱為必填 / Email is required')
+  .email('電子信箱格式不正確 / Invalid email address')
+  .transform((value) => value.toLowerCase());
+
+/**
+ * 註冊的請求本體驗證。
+ * Request body validation for registration.
+ *
+ * 只限制長度下限，不要求字元組成 —— 複雜度規則實際上只會把人推向可預測的密碼，
+ * 見 `PASSWORD_MIN_LENGTH` 的說明。
+ * Only a minimum length, no composition rules: complexity rules mostly push people
+ * toward predictable passwords (see the note on PASSWORD_MIN_LENGTH).
+ */
+export const RegisterBodySchema = z.object({
+  email: emailField,
+  password: z
+    .string()
+    .min(
+      PASSWORD_MIN_LENGTH,
+      `密碼至少需要 ${PASSWORD_MIN_LENGTH} 個字元 / Password must be at least ${PASSWORD_MIN_LENGTH} characters`
+    )
+    // 密碼有上限：argon2id 的記憶體成本是固定的，但極長的輸入會浪費時間，
+    // 而且極長密碼多半是自動產生或攻擊工具的產物，不是真實使用者 /
+    // Cap the length: argon2id's memory cost is fixed, but an enormous input wastes
+    // time and such a password is almost always machine-generated rather than human
+    .max(200, '密碼不能超過 200 個字元 / Password must be 200 characters or less'),
+  name: z
+    .string()
+    .trim()
+    .max(100, '名稱不能超過 100 個字元 / Name must be 100 characters or less')
+    .optional(),
+});
+
+/**
+ * 為已登入的使用者設定密碼。
+ * Set a password for the already signed-in user.
+ *
+ * 形狀和註冊相同，但走的是「必須先證明自己擁有這個帳號」的路徑 —— 見
+ * `set-password` 路由的說明。
+ * Same shape as registration, but it takes the "prove you already own this account"
+ * path — see the note in the set-password route.
+ */
+export const SetPasswordBodySchema = z.object({
+  password: z
+    .string()
+    .min(
+      PASSWORD_MIN_LENGTH,
+      `密碼至少需要 ${PASSWORD_MIN_LENGTH} 個字元 / Password must be at least ${PASSWORD_MIN_LENGTH} characters`
+    )
+    .max(200, '密碼不能超過 200 個字元 / Password must be 200 characters or less'),
 });
 
 // ─── 統計資料相關模式 / Statistics-related Schemas ────────────────────────────

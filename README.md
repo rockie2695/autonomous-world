@@ -19,7 +19,7 @@ Autonomous World is a browser-based simulation game where hundreds of AI charact
 | Layer | Technology |
 |-------|------------|
 | Framework | Next.js 16 (App Router) |
-| Authentication | Auth.js v5 (next-auth) + Google Provider |
+| Authentication | Auth.js v5 (next-auth) + Google Provider + argon2id email/password |
 | Database | PostgreSQL + Prisma 7 |
 | Map Visualization | Sigma.js + graphology + forceatlas2 |
 | UI | TailwindCSS 4 |
@@ -191,14 +191,15 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
 - Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
 - Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.6), independent of garrison; labels always paint above the spotlight overlay. The hovered place, the selected place, and the hovered place's connected neighbours are the one exception — they keep their names at any zoom, so you can read what a place links to
-- **Zoom controls** — a slider between the zoom-out and zoom-in buttons scrubs the camera ratio directly and shows the level as a percentage (`MAP_ZOOM_MIN_RATIO` 0.05 – `MAP_ZOOM_MAX_RATIO` 8)
-- **Territory view** — zoom out past `TERRITORY_ZOOM_RATIO` and each place projects a claim, marking
-  the area those claims cover: the CK3 map-mode / Stellaris galaxy-map idea. Same-faction claims
-  **merge** into one region, and where two factions' claims meet, distance decides the border. It is
-  a translucent tint **over** the map, not a repaint of it — the graph, roads and glow stay visible
-  underneath — and unowned land is never coloured, because CK3 leaves unclaimed land untouched.
-  Hovering a region lifts that faction's territory and dims the rest, clicking focuses that place,
-  and the view still zooms and pans
+- **Zoom controls** — a slider between the zoom-out and zoom-in buttons scrubs the camera ratio directly and shows the level as a percentage (`MAP_ZOOM_MIN_RATIO` 0.05 – `MAP_ZOOM_MAX_RATIO` 3). The ratio *and* the camera centre are both bounded, so the world can never be zoomed or dragged out of frame
+- **Territory view** — zoom out past `TERRITORY_ZOOM_RATIO` and every place projects an equal
+  circular **force**, marking the area those forces cover: the CK3 map-mode / Stellaris galaxy-map
+  idea. Same-faction force **accumulates**, so a faction holding more places reaches further, and
+  rival forces push against each other — the border lands where two forces are equal, so distance
+  decides it. It is a translucent tint **over** the map, not a repaint of it — the graph, roads and
+  glow stay visible underneath — and unowned land is never coloured, because CK3 leaves unclaimed
+  land untouched. Hovering a *place* still shows that place's tooltip; hovering open territory shows
+  the faction's, and lifting a region dims the rest
 - The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
 - **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
 - **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader
@@ -263,6 +264,21 @@ view of faction power rather than another rendering of one metric.
   and a low-`jing` one less. A lone leader (no king *or* no admin) already receives the whole
   income, so no multiplier applies — the total distributed can never exceed the place's income
 - Characters can buy troops with personal gold
+
+### Accounts
+
+Sign in with **Google** or with **email + password** — both share one `User` table, so either works
+for the same address.
+
+- Passwords are hashed with **argon2id** and never stored or logged in plaintext
+- Registering with an address that already has an account is refused rather than overwriting it, so
+  a Google account can never be taken over by someone who merely knows its address
+- To give a Google account a password (admins included), sign in with Google first and then use
+  `POST /api/auth/set-password` — that requires a verified session, which *is* the proof of ownership
+- The minimum password length is 8 characters, with no composition rules (NIST SP 800-63B)
+- **There is no email verification and no password reset** — both need a mail provider and were
+  deferred, so an address can sign in before any confirmation. A public deployment also needs rate
+  limiting in front of both auth routes
 
 ## API Endpoints
 
