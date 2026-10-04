@@ -189,7 +189,9 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Incremental layout** — new places spawn near their parent
 - **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
 - Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
-- Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.5), independent of garrison; labels always paint above the spotlight overlay
+- Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.6), independent of garrison; labels always paint above the spotlight overlay. The hovered place, the selected place, and the hovered place's connected neighbours are the one exception — they keep their names at any zoom, so you can read what a place links to
+- **Zoom controls** — a slider between the zoom-out and zoom-in buttons scrubs the camera ratio directly and shows the level as a percentage (`MAP_ZOOM_MIN_RATIO` 0.05 – `MAP_ZOOM_MAX_RATIO` 8)
+- The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
 - **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
 - **Node glow + drop shadow** — a second, static overlay canvas under the spotlight layer and under Sigma paints a soft faction-colored halo behind every place, scaled by its on-screen size; it redraws on camera moves only, so an idle map costs nothing
@@ -215,8 +217,8 @@ view of faction power rather than another rendering of one metric.
 - **Leader hover preview** — hovering a row of the leader table floats the leader's radar on the
   right and their procedurally generated head on the left
 - **Leader avatars** are generated from the character id, so a leader always has the same face
-  without storing anything; kings get a crown, high 武力 a helmet, age greys the hair, and the
-  faction colors the robe
+  without storing anything; kings get a crown, high 武力 a helmet, high 統領 a sash, high 經濟
+  abacus beads, age greys the hair, and the faction colors the robe
 - Each axis on a radar normalises against its own maximum (age tops out far above the ability
   stats), so edge lengths are not comparable across axes — read the shape, not the numbers
 

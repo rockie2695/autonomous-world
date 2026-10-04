@@ -6,6 +6,8 @@ function leader(overrides: Partial<AvatarCharacter> = {}): AvatarCharacter {
   return {
     id: 'char-abc',
     wu: 12,
+    tong: 12,
+    jing: 12,
     ambition: 10,
     age: 30,
     isKing: false,
@@ -91,6 +93,39 @@ describe('deriveAvatarTraits', () => {
       const id = `a-${i}`;
       expect(deriveAvatarTraits(leader({ id, ambition: 25 })).sharpBrow).toBe(true);
       expect(deriveAvatarTraits(leader({ id, ambition: 8 })).sharpBrow).toBe(false);
+    }
+  });
+
+  it('should add a sash for very high leadership', () => {
+    for (let i = 0; i < 30; i++) {
+      const id = `t-${i}`;
+      expect(deriveAvatarTraits(leader({ id, tong: 30 })).sash).toBe(true);
+      expect(deriveAvatarTraits(leader({ id, tong: 10 })).sash).toBe(false);
+    }
+  });
+
+  it('should add abacus beads for very high economy', () => {
+    for (let i = 0; i < 30; i++) {
+      const id = `e-${i}`;
+      expect(deriveAvatarTraits(leader({ id, jing: 30 })).beads).toBe(true);
+      expect(deriveAvatarTraits(leader({ id, jing: 10 })).beads).toBe(false);
+    }
+  });
+
+  it('should keep tong and jing independent of wu', () => {
+    // A leader can be wealthy without being a warrior, and vice versa — the two
+    // traits must not be collapsed into wu
+    for (let i = 0; i < 30; i++) {
+      const id = `x-${i}`;
+      const richWarrior = deriveAvatarTraits(leader({ id, wu: 30, jing: 30, tong: 10 }));
+      expect(richWarrior.helmet).toBe(true);
+      expect(richWarrior.beads).toBe(true);
+      expect(richWarrior.sash).toBe(false);
+
+      const poorGeneral = deriveAvatarTraits(leader({ id, wu: 10, jing: 10, tong: 30 }));
+      expect(poorGeneral.helmet).toBe(false);
+      expect(poorGeneral.beads).toBe(false);
+      expect(poorGeneral.sash).toBe(true);
     }
   });
 

@@ -139,6 +139,7 @@ export async function spawnCharacters(
         round,
         type: 'CHARACTER_SPAWNED',
         data: {
+          charId: created.id,
           charName: name,
           placeId: place.id,
         },

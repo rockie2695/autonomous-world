@@ -21,6 +21,7 @@ export const en = {
     details: 'Details',
     status: 'Status',
     back: 'Back',
+    close: 'Close',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
@@ -169,6 +170,7 @@ export const en = {
     zoomIn: 'Zoom In',
     zoomOut: 'Zoom Out',
     resetView: 'Reset View',
+    zoomLevel: 'Zoom level',
     place: 'Place',
     faction: 'Faction',
     troops: 'Troops',

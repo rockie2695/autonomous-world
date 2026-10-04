@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // 遊戲頁面 — 主要遊戲介面 / Game Page — Main Game Interface
 // ============================================================================
 // 深空科幻主題 / Deep Space Sci-Fi Theme
@@ -53,6 +53,25 @@ const SigmaMap = dynamic(
 //     The pointer-coarse: variant replaces the old media query.
 // ============================================================================
 
+/** 窄視窗斷點：面板在此以下預設收合 / Narrow-viewport breakpoint: the panel defaults closed below it */
+const NARROW_MQ = '(max-width: 1023px)';
+
+/** matchMedia 訂閱 / the matchMedia subscription */
+function subscribeNarrow(onChange: () => void) {
+  const mql = window.matchMedia(NARROW_MQ);
+  mql.addEventListener('change', onChange);
+  return () => mql.removeEventListener('change', onChange);
+}
+/** 客戶端快照：true = 窄 / client snapshot: true = narrow */
+function getIsNarrow() {
+  return window.matchMedia(NARROW_MQ).matches;
+}
+/** 伺服器快照：桌面基準，讓 SSR 先輸出展開狀態 /
+ *  Server snapshot: the desktop baseline, so SSR emits the panel open */
+function getIsNarrowServer() {
+  return false;
+}
+
 /** 固定全視窗背景 / the fixed full-viewport backdrop */
 const GM_BACKDROP = 'pointer-events-none fixed inset-0 z-0 overflow-hidden';
 const GM_PHOTO = 'size-full object-cover opacity-[0.17] [filter:saturate(1.1)_contrast(1.04)]';
@@ -60,8 +79,17 @@ const GM_VEIL =
   'absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_0%,rgba(2,6,23,0.3)_0%,rgba(2,6,23,0.78)_55%,rgba(2,6,23,0.96)_100%),linear-gradient(180deg,rgba(2,6,23,0.1),rgba(2,6,23,0.7))]';
 
 /** 世界觀測帶 / the telemetry band */
+/** 觀測帶本體 / telemetry band, standalone row */
 const GM_STRIP =
   'relative z-10 overflow-hidden border-b border-[rgba(34,211,238,0.22)] ' +
+  'bg-[linear-gradient(180deg,rgba(2,6,23,0.5),rgba(2,6,23,0.84))] backdrop-blur-[8px]';
+/** 觀測帶併入頂部列：長成 flex 子項、拿掉自己的下邊線與左右留白，
+ *  讓標頭與世界概況共用一行，地圖多出一整列的高度 /
+ *  Telemetry band merged into the header row: grows as a flex child and drops
+ *  its own bottom border and side padding, so the header and 世界概況 share one
+ *  row and the map gets that height back */
+const GM_STRIP_INLINE =
+  'relative overflow-hidden border-l border-[rgba(34,211,238,0.22)] ' +
   'bg-[linear-gradient(180deg,rgba(2,6,23,0.5),rgba(2,6,23,0.84))] backdrop-blur-[8px]';
 const GM_STRIP_PHOTO = 'size-full object-cover opacity-[0.55]';
 const GM_STRIP_VEIL =
@@ -130,7 +158,16 @@ const GM_HUD_PANEL =
  *  Legend: left, width-capped and horizontally scrollable so it cannot collide
  *  with the right-hand controls on narrow viewports */
 const GM_HUD_LEGEND = `${GM_HUD_PANEL} left-4 max-w-[min(55%,24rem)]`;
-const GM_HUD_CONTROLS = `${GM_HUD_PANEL} right-4`;
+// 相機控制要避開右側面板（內容 19rem + 頁籤 rail 與間距，實測約 405px），
+// 否則 reset/縮小/滑桿會被面板蓋住。面板展開時往左挪、收合時貼齊右緣。
+// 窄視窗下 26rem 會把控制列推出畫面，所以只在 lg 以上套用，窄版維持右緣。
+// Camera controls must clear the side panel (19rem of content plus the tab rail
+// and gutter — measured at ~405px) or reset/zoom-out/the slider end up
+// underneath it. Shift left while the panel is open, back to the edge when closed.
+// A fixed 26rem offset pushes the controls off-screen on narrow viewports, so it
+// only applies from lg up; narrow keeps them on the edge.
+const GM_HUD_CONTROLS_OPEN = `${GM_HUD_PANEL} right-4 lg:right-[26rem]`;
+const GM_HUD_CONTROLS_CLOSED = `${GM_HUD_PANEL} right-4`;
 const GM_CORNER_BASE = 'absolute size-[26px] border-[rgba(34,211,238,0.55)] border-solid';
 const GM_CORNER_TL = `${GM_CORNER_BASE} top-0 left-0 border-w-[1px_0_0_1px]`;
 const GM_CORNER_TR = `${GM_CORNER_BASE} top-0 right-0 border-w-[1px_1px_0_0]`;
@@ -415,6 +452,7 @@ function TelemetryStrip({
   territories,
   aliveCharacters,
   totalTroops,
+  inline = false,
 }: {
   round: number;
   worldName: string;
@@ -422,6 +460,8 @@ function TelemetryStrip({
   territories: number;
   aliveCharacters: number;
   totalTroops: number;
+  /** 併入頂部列而非獨佔一行 / Merged into the header row instead of taking its own */
+  inline?: boolean;
 }) {
   const items = [
     { label: t('game.round'), value: String(round).padStart(4, '0') },
@@ -432,7 +472,10 @@ function TelemetryStrip({
   ];
 
   return (
-    <section className={`${GM_STRIP}`} aria-label={t('home.stats.title')}>
+    <section
+      className={`${inline ? GM_STRIP_INLINE : GM_STRIP} ${inline ? 'flex-1 min-w-0' : ''}`}
+      aria-label={t('home.stats.title')}
+    >
       <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
         <Parallax offset={48} className="absolute -top-1/2 -left-[5%] h-[200%] w-[110%]">
           {/* relative：fill 的影像需要一個 positioned 父層，否則 Next 會警告
@@ -455,7 +498,11 @@ function TelemetryStrip({
       </div>
       <div className={`${GM_STRIP_VEIL}`} aria-hidden="true" />
 
-      <div className="relative flex items-center gap-4 md:gap-6 px-4 md:px-6 py-3 overflow-x-auto ds-gm-noscroll">
+      <div
+        className={`relative flex items-center gap-4 md:gap-6 px-4 md:px-6 py-3 overflow-x-auto ds-gm-noscroll ${
+          inline ? 'px-0 py-0' : ''
+        }`}
+      >
         <div className="hidden sm:block shrink-0 pr-4 md:pr-6 border-r border-cyan-400/20 max-w-[12rem]">
           <div className="ds-eyebrow">{t('home.stats.title')}</div>
           <div className="mt-0.5 text-xs text-white/85 font-orbitron tracking-widest truncate">
@@ -505,6 +552,11 @@ export default function GamePage() {
   const queryClient = useQueryClient();
   /** 地圖視角控制（浮動縮放 / 重設按鈕）/ Map camera controls (floating zoom / reset buttons) */
   const mapControlsRef = useRef<MapCameraControls | null>(null);
+  /** 同一組控制項也放進 state：ZoomSlider 要在 render 期間訂閱縮放變動，
+   *  而 ref 只能在事件處理器裡讀，不能拿來驅動 render /
+   *  The same controls also live in state: ZoomSlider subscribes to zoom
+   *  changes during render, and a ref must never drive rendering */
+  const [mapControls, setMapControls] = useState<MapCameraControls | null>(null);
 
   const locale = useSyncExternalStore(
     subscribeLocale,
@@ -586,9 +638,27 @@ export default function GamePage() {
   };
 
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playSpeed, setPlaySpeed] = useState(1000);
+  // 註解型別：CONFIG 是 `as const`，不加會把 state 鎖成字面值 5000 /
+// Annotated: CONFIG is `as const`, which would otherwise pin the state to the
+// literal 5000 and reject any other speed
+const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(false);
-  const [rightSidebarOpen, setRightSidebarOpen] = useState(false);
+  /** 右側地圖面板：頁籤列常駐，內容可收合；null = 尚未手動開合過，走預設 /
+   *  Map side panel: the rail is always present and the content collapses;
+   *  null means the user has not toggled it yet, so the default applies */
+  const [panelOverride, setPanelOverride] = useState<boolean | null>(null);
+
+  // 窄視窗預設收合：19rem 的面板在 390px 寬吃掉 78% 畫布，會把地圖和 HUD
+  // 一起蓋掉。這裡用 useSyncExternalStore 讀斷點，而不是在 effect 裡
+  // setState：後者會觸發 lint 的 cascading-render 規則，而 lazy initializer
+  // 又會讓 server/client 初始值不一致、直接炸 hydration。
+  // useSyncExternalStore is the sanctioned way to read a media query: React uses
+  // the server snapshot while hydrating and swaps to the client snapshot right
+  // after, so there is no hydration mismatch and no setState-in-effect (which
+  // trips the cascading-render lint rule).
+  const isNarrow = useSyncExternalStore(subscribeNarrow, getIsNarrow, getIsNarrowServer);
+  const rightPanelOpen = panelOverride ?? !isNarrow;
+  const setRightPanelOpen = (next: boolean) => setPanelOverride(next);
   const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats'>('characters');
   
 
@@ -605,12 +675,14 @@ export default function GamePage() {
     if (target) openLeader(target);
   };
 
-  /** 點地名 → 聚焦地圖；順便收起側欄，不然地圖還被蓋著 /
-   *  Clicking a place name focuses the map, collapsing the sidebars first so
-   *  the map is not left covered */
+  /** 點地名 → 聚焦地圖；順便收起左側欄，不然地圖還被蓋著。
+   * 右側地圖面板保持開啟——事件日誌就在裡面，把它關掉等於把使用者正在
+   * 點的東西收走。
+   *  Clicking a place name focuses the map, collapsing the left sidebar first so
+   *  the map is not left covered. The map side panel stays open: the event log
+   *  lives inside it, so collapsing it would hide the very row being clicked. */
   const focusPlaceFromLog = (placeId: string) => {
     setLeftSidebarOpen(false);
-    setRightSidebarOpen(false);
     mapControlsRef.current?.focusPlace(placeId);
   };
 
@@ -631,28 +703,30 @@ export default function GamePage() {
     return () => clearInterval(timer);
   }, [isPlaying, playSpeed, lastRound]);
 
-  // Esc 關閉手機版側欄覆蓋層；若對話框開啟則交由其自行處理。
+  // Esc 關閉手機版左側欄覆蓋層；若對話框開啟則交由其自行處理。
   // 覆蓋層無論怎麼收合（Esc／背景／✕／選回合）都會在 effect 清理時
-  // 把焦點還給開啟它的按鈕 /
-  // Escape closes mobile sidebar overlays; when a dialog is open it consumes
-  // Escape itself. Whatever closes the overlay (Esc, backdrop, ✕, selecting
-  // a round) runs the effect cleanup and returns focus to its toggle button
+  // 把焦點還給開啟它的按鈕。右側地圖面板不算：它常駐頁籤列、由自己的 ✕ 收合，
+  // Esc 不該順手把它關掉。
+  // Escape closes the mobile left sidebar overlay; when a dialog is open it
+  // consumes Escape itself. Whatever closes the overlay (Esc, backdrop, ✕,
+  // selecting a round) runs the effect cleanup and returns focus to its toggle
+  // button. The map side panel is excluded: its rail is always present and it
+  // collapses through its own ✕, so Escape must not close it as a side effect.
   useEffect(() => {
-    if (!leftSidebarOpen && !rightSidebarOpen) return;
+    if (!leftSidebarOpen) return;
     const trigger =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== 'Escape') return;
       if (document.querySelector('[role="dialog"]')) return;
       setLeftSidebarOpen(false);
-      setRightSidebarOpen(false);
     }
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
       if (trigger && trigger.isConnected) trigger.focus();
     };
-  }, [leftSidebarOpen, rightSidebarOpen]);
+  }, [leftSidebarOpen]);
 
   // ── 載入狀態 / Loading State ──────────────────────────────────────────────
 
@@ -701,7 +775,7 @@ export default function GamePage() {
             <div className={`${GM_HUD_LEGEND}`}>
               <div className={`${GM_SKEL} h-5 w-48`} />
             </div>
-            <div className={`${GM_HUD_CONTROLS}`}>
+<div className={GM_HUD_CONTROLS_CLOSED}>
               <div className={`${GM_SKEL} w-9 h-9`} />
               <div className={`${GM_SKEL} w-9 h-9`} />
               <div className={`${GM_SKEL} w-9 h-9`} />
@@ -828,7 +902,19 @@ export default function GamePage() {
           <span className="h-px w-8 bg-gradient-to-l from-transparent to-cyan-400/40" aria-hidden="true" />
         </div>
 
-        <div className="flex items-center gap-2 ml-auto">
+        {/* 世界概況併入這一列，地圖因此多出一整列的高度 /
+            世界概況 lives in this row, giving the map that height back */}
+        <TelemetryStrip
+          inline
+          round={round}
+          worldName={worldState?.world.name ?? ''}
+          aliveFactions={aliveFactions}
+          territories={territories}
+          aliveCharacters={aliveCharacterList.length}
+          totalTroops={totalTroops}
+        />
+
+        <div className="flex items-center gap-2 ml-auto shrink-0">
           {/* 左側邊欄切換按鈕（手機版）/ Left sidebar toggle (mobile) */}
           <button
             onClick={() => setLeftSidebarOpen(!leftSidebarOpen)}
@@ -866,9 +952,9 @@ export default function GamePage() {
             {t('general.logout')}
           </button>
 
-          {/* 右側邊欄切換按鈕（手機版）/ Right sidebar toggle (mobile) */}
+          {/* 右側地圖面板切換（手機版）/ Map side panel toggle (mobile) */}
           <button
-            onClick={() => setRightSidebarOpen(!rightSidebarOpen)}
+            onClick={() => setRightPanelOpen(!rightPanelOpen)}
             className={`${GM_BTN} lg:hidden w-8 h-8`}
             title="將領 & 事件"
             aria-label="將領 & 事件"
@@ -881,16 +967,6 @@ export default function GamePage() {
           </button>
         </div>
       </header>
-
-      {/* ── 世界觀測帶 / World Telemetry Band ──────────────────────────────────── */}
-      <TelemetryStrip
-        round={round}
-        worldName={worldState?.world.name ?? ''}
-        aliveFactions={aliveFactions}
-        territories={territories}
-        aliveCharacters={aliveCharacterList.length}
-        totalTroops={totalTroops}
-      />
 
       {/* ── 主要內容 / Main Content ────────────────────────────────────────── */}
       <div className="relative z-10 flex-1 flex min-h-0">
@@ -976,7 +1052,10 @@ export default function GamePage() {
               moves={worldState?.moves ?? []}
               onPlaceClick={openPlace}
               selectedPlaceId={selectedPlace?.id}
-              onControlsReady={(controls) => { mapControlsRef.current = controls; }}
+              onControlsReady={(controls) => {
+                mapControlsRef.current = controls;
+                setMapControls(controls);
+              }}
             />
           </div>
 
@@ -1005,7 +1084,7 @@ export default function GamePage() {
             </div>
           </div>
 
-          <div className={`${GM_HUD_CONTROLS}`}>
+          <div className={rightPanelOpen ? GM_HUD_CONTROLS_OPEN : GM_HUD_CONTROLS_CLOSED}>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => mapControlsRef.current?.resetView()}
@@ -1021,14 +1100,6 @@ export default function GamePage() {
                 </svg>
               </button>
               <button
-                onClick={() => mapControlsRef.current?.zoomIn()}
-                title="放大 / Zoom in"
-                aria-label="放大 / Zoom in"
-                className={`${GM_BTN} w-9 h-9`}
-              >
-                <Ic className="w-4 h-4"><path d="M12 6v12M6 12h12" /></Ic>
-              </button>
-              <button
                 onClick={() => mapControlsRef.current?.zoomOut()}
                 title="縮小 / Zoom out"
                 aria-label="縮小 / Zoom out"
@@ -1036,103 +1107,58 @@ export default function GamePage() {
               >
                 <Ic className="w-4 h-4"><path d="M6 12h12" /></Ic>
               </button>
+              {/* 縮放滑桿夾在縮小/放大之間：拖曳可連續縮放，右側顯示百分比 /
+                  Slider sits between the two buttons for continuous zoom, with
+                  the current percentage on the right */}
+              <ZoomSlider controls={mapControls} label={t('map.zoomLevel')} />
+              <button
+                onClick={() => mapControlsRef.current?.zoomIn()}
+                title="放大 / Zoom in"
+                aria-label="放大 / Zoom in"
+                className={`${GM_BTN} w-9 h-9`}
+              >
+                <Ic className="w-4 h-4"><path d="M12 6v12M6 12h12" /></Ic>
+              </button>
             </div>
           </div>
+        {/* ── 右側面板：疊在地圖上，不再佔用版面 / Right panel: overlaid on the
+            map so it no longer consumes layout width ──────────────────────────── */}
+        <MapSidePanel
+          activeTab={rightTab}
+          onTabChange={(tab) => {
+            setRightTab(tab);
+            setRightPanelOpen(true);
+          }}
+          open={rightPanelOpen}
+          onClose={() => setRightPanelOpen(false)}
+          loading={isLoading && !worldState}
+        >
+          {rightTab === 'characters' && (
+            <CharacterList
+              characters={worldState?.characters ?? []}
+              places={worldState?.places ?? []}
+              factions={worldState?.factions ?? []}
+              onOpenLeaderDetail={openLeaderDetail}
+            />
+          )}
+          {rightTab === 'events' && (
+            <EventLog
+              worldId={worldState?.world.id ?? ''}
+              onFocusPlace={focusPlaceFromLog}
+              onOpenLeaderDetail={openLeaderDetail}
+            />
+          )}
+          {rightTab === 'stats' && (
+            <StatsCharts
+              worldId={worldState?.world.id ?? ''}
+              currentRound={worldState?.world.currentRound ?? 0}
+              characters={worldState?.characters ?? []}
+              worldFactions={worldState?.factions ?? []}
+            />
+          )}
+        </MapSidePanel>
         </main>
 
-        {/* ── 右側邊欄（桌面版）/ Right Sidebar (desktop) ──────────────────────── */}
-        <aside className={`hidden lg:flex flex-col w-80 shrink-0 border-l border-white/5 ${GM_RAIL} overflow-hidden`}>
-          <RightSidebarTabs
-            activeTab={rightTab}
-            onTabChange={setRightTab}
-          />
-          {/* min-h-0：column flex 的 flex-1 項目預設 min-height:auto，會被內容撐高，
-              overflow-y-auto 就永遠不會捲動（外層 overflow-hidden 直接裁掉）/
-              min-h-0: a flex-1 child of a column flex box defaults to
-              min-height:auto, so it is floored at its content height and
-              overflow-y-auto never engages (the rail's overflow-hidden clips it) */}
-          <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-3">
-            {rightTab === 'characters' && (
-              <CharacterList
-                characters={worldState?.characters ?? []}
-                places={worldState?.places ?? []}
-                factions={worldState?.factions ?? []}
-                onOpenLeaderDetail={openLeaderDetail}
-              />
-            )}
-            {rightTab === 'events' && (
-              <EventLog
-                worldId={worldState?.world.id ?? ''}
-                onFocusPlace={focusPlaceFromLog}
-                onOpenLeaderDetail={openLeaderDetail}
-              />
-            )}
-            {rightTab === 'stats' && (
-              <StatsCharts
-                worldId={worldState?.world.id ?? ''}
-                currentRound={worldState?.world.currentRound ?? 0}
-                characters={worldState?.characters ?? []}
-                worldFactions={worldState?.factions ?? []}
-              />
-            )}
-          </div>
-        </aside>
-
-        {/* ── 右側邊欄（手機版覆蓋）/ Right Sidebar (mobile overlay) ──────────── */}
-        {rightSidebarOpen && (
-          <div className="lg:hidden fixed inset-0 z-40 flex justify-end">
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setRightSidebarOpen(false)} />
-            <div className={`relative w-80 ${GM_RAIL} border-l border-cyan-400/15 flex flex-col overflow-hidden animate-slide-in-right`}>
-              <div className="flex items-center justify-between px-3 pt-3 pb-0">
-                <span className="font-orbitron text-xs text-gray-400 tracking-wider">資訊面板</span>
-                <button
-                  onClick={() => setRightSidebarOpen(false)}
-                  className={`${GM_BTN} w-7 h-7`}
-                  aria-label="關閉"
-                >
-                  <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
-                </button>
-              </div>
-              <RightSidebarTabs
-                activeTab={rightTab}
-                onTabChange={setRightTab}
-              />
-              {/* 手機版兩軸都要能捲：面板只有 w-80，統計圖表比這寬，X 軸不給捲
-                  就會被裁掉。min-h-0 是重點——column flex 的 flex-1 項目預設
-                  min-height:auto 會被內容撐高，overflow 就不會生效 /
-                  Mobile scrolls on both axes: the panel is only w-80 wide and the
-                  charts are wider, so without X they get clipped. min-h-0 is the
-                  load-bearing part — a flex-1 child of a column flex box defaults
-                  to min-height:auto, gets floored at its content height, and the
-                  overflow never engages. */}
-              <div className="flex-1 min-h-0 overflow-auto ds-gm-scroll p-3">
-                {rightTab === 'characters' && (
-                  <CharacterList
-                    characters={worldState?.characters ?? []}
-                    places={worldState?.places ?? []}
-                    factions={worldState?.factions ?? []}
-                    onOpenLeaderDetail={openLeaderDetail}
-                  />
-                )}
-                {rightTab === 'events' && (
-                  <EventLog
-                    worldId={worldState?.world.id ?? ''}
-                    onFocusPlace={focusPlaceFromLog}
-                    onOpenLeaderDetail={openLeaderDetail}
-                  />
-                )}
-                {rightTab === 'stats' && (
-                  <StatsCharts
-                    worldId={worldState?.world.id ?? ''}
-                    currentRound={worldState?.world.currentRound ?? 0}
-                    characters={worldState?.characters ?? []}
-                    worldFactions={worldState?.factions ?? []}
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
 
       {/* ── 地方詳情彈窗 / Place Detail Panel ───────────────────────────────── */}
@@ -1209,14 +1235,14 @@ function LanguageSwitch({
 
 // ─── 右側邊欄分頁 / Right Sidebar Tabs ────────────────────────────────────────────
 
-function RightSidebarTabs({
-  activeTab,
-  onTabChange,
-}: {
-  activeTab: 'characters' | 'events' | 'stats';
-  onTabChange: (tab: 'characters' | 'events' | 'stats') => void;
-}) {
-  const tabs = [
+/** 右側面板的分頁 / Tabs for the right-hand side panel */
+type SideTab = 'characters' | 'events' | 'stats';
+
+/** 分頁圖示與名稱的單一來源，橫向頁籤與地圖上的直向 rail 共用 /
+ *  Single source for tab icons and labels, shared by the horizontal tab bar and
+ *  the vertical rail overlaid on the map */
+function useSideTabs(): Array<{ key: SideTab; label: string; icon: ReactNode }> {
+  return [
     {
       key: 'characters' as const,
       label: t('faction.tab'),
@@ -1250,23 +1276,102 @@ function RightSidebarTabs({
       ),
     },
   ];
+}
 
+
+/**
+ * 地圖右側的內容面板：頁籤直向釘在 map 的右緣，內容由右往左淡入。
+ * 這樣右欄不再佔版面，地圖整個寬度都留給 map /
+ * Content panel pinned to the right of the map: the tabs sit vertically on the
+ * map's right edge and the content fades in from the right, so the panel no
+ * longer steals width from the map.
+ */
+function MapSidePanel({
+  activeTab,
+  onTabChange,
+  open,
+  onClose,
+  loading,
+  children,
+}: {
+  activeTab: SideTab;
+  onTabChange: (tab: SideTab) => void;
+  open: boolean;
+  onClose: () => void;
+  loading: boolean;
+  children: ReactNode;
+}) {
+  const tabs = useSideTabs();
   return (
-    <div className="flex border-b border-white/5" role="tablist">
-      {tabs.map((tab) => (
-        <button
-          key={tab.key}
-          role="tab"
-          aria-selected={activeTab === tab.key}
-          onClick={() => onTabChange(tab.key)}
-          className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-orbitron tracking-wider transition-all duration-200 border-b-2 ${activeTab === tab.key
-            ? 'text-cyan-300 border-cyan-400 bg-cyan-500/5'
-            : 'text-gray-400 border-transparent hover:text-gray-200 hover:bg-white/5'
-            }`}
+    <div className="absolute inset-y-0 right-0 z-[8] flex items-stretch pointer-events-none">
+      {/* 內容：從右往左淡入 / Content: fades in from the right */}
+      <AnimatePresence mode="wait" initial={false}>
+        {open && (
+        <motion.div
+          key={activeTab}
+          initial={{ opacity: 0, x: 28 }}
+          animate={{ opacity: 1, x: 0 }}
+          exit={{ opacity: 0, x: 28 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+          className={`pointer-events-auto h-full w-[19rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
         >
-          <Ic className="w-4 h-4">{tab.icon}</Ic>
-          <span>{tab.label}</span>
-        </button>
+          <div className="flex items-center justify-between px-3 pt-3 pb-2">
+            <span className="font-orbitron text-xs text-gray-400 tracking-wider">
+              {tabs.find((tab) => tab.key === activeTab)?.label}
+            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className={`${GM_BTN} w-7 h-7`}
+              aria-label={t('general.close')}
+            >
+              <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-3 pt-0">
+            {loading ? <PanelSkeleton /> : children}
+          </div>
+        </motion.div>
+        )}
+      </AnimatePresence>
+      {/* 頁籤：直向釘住地圖右緣 / Tabs: vertical rail on the map's right edge */}
+      <div
+        role="tablist"
+        aria-orientation="vertical"
+        className={`pointer-events-auto flex flex-col gap-1 self-center m-3 ${GM_RAIL} rounded-xl border border-white/10 p-1`}
+      >
+        {tabs.map((tab) => (
+          <button
+            key={tab.key}
+            role="tab"
+            aria-selected={activeTab === tab.key}
+            onClick={() => onTabChange(tab.key)}
+            title={tab.label}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-orbitron tracking-wider transition-all duration-200 ${
+              activeTab === tab.key
+                ? 'bg-cyan-500/15 text-cyan-300'
+                : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+            }`}
+          >
+            <Ic className="w-4 h-4">{tab.icon}</Ic>
+            {/* 窄視窗只留圖示：rail 寬度會被面板壓到 80px，帶文字會逐字斷行 */}
+            {/* Icon only when narrow: the panel squeezes the rail to ~80px, and
+                with the label present each character wraps onto its own line */}
+            <span className="hidden sm:inline">{tab.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 側欄面板的載入骨架 / Loading skeleton for a side panel */
+function PanelSkeleton() {
+  return (
+    <div className="space-y-2 pt-1" aria-busy="true">
+      <div className={`${GM_SKEL} h-4 w-2/5`} />
+      {[0, 1, 2, 3, 4].map((i) => (
+        <div key={i} className={`${GM_SKEL} h-9 w-full`} />
       ))}
     </div>
   );
@@ -1392,15 +1497,17 @@ function RoundTimeline({
         <div>
           <input
             type="range"
-            min={500}
-            max={3000}
+            min={CONFIG.AUTOPLAY_MIN_MS}
+            max={CONFIG.AUTOPLAY_MAX_MS}
             step={500}
             value={playSpeed}
             onChange={(e) => onSpeedChange(Number(e.target.value))}
             aria-label={t('game.autoPlaySpeed')}
             className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
           />
-          <span className="text-xs text-gray-400 font-orbitron tabular-nums">{playSpeed}ms</span>
+          <span className="text-xs text-gray-400 font-orbitron tabular-nums">
+            {(playSpeed / 1000).toFixed(1)}s
+          </span>
         </div>
       </div>
       {/* 分批顯示：最新 200 個回合在捲軸內，更早的回合按需載入 /
@@ -2177,10 +2284,13 @@ function EventLog({
     // Leader names are always clickable (events only store charName, so the page
     // resolves by name); places carry placeId and focus the map directly. Without
     // an id we fall back to plain text — inert beats broken.
-    const leaderNode = (name: unknown): ReactNode => {
+    const leaderNode = (id: unknown, name: unknown): ReactNode => {
       const label = typeof name === 'string' ? name : '?';
+      // 有 id 就用 id（名字可能被沿用），舊事件由 API 讀時回填 /
+      // Prefer the id — names get reused. The API backfills it for legacy rows.
+      const key = typeof id === 'string' && id ? id : label;
       return (
-        <button type="button" onClick={() => onOpenLeaderDetail(label)} className={GM_EVENT_LINK}>
+        <button type="button" onClick={() => onOpenLeaderDetail(key)} className={GM_EVENT_LINK}>
           {label}
         </button>
       );
@@ -2202,27 +2312,27 @@ function EventLog({
           place: placeNode(p.placeId, p.placeName),
         });
       case 'CHARACTER_SPAWNED':
-        return fillTemplate(t('events.spawnDesc'), { character: leaderNode(p.charName) });
+        return fillTemplate(t('events.spawnDesc'), { character: leaderNode(p.charId, p.charName) });
       case 'CHARACTER_MOVED':
         return fillTemplate(t('events.moveDesc'), {
-          character: leaderNode(p.charName),
+          character: leaderNode(p.charId, p.charName),
           from: placeNode(p.fromPlaceId, p.fromPlaceName),
           to: placeNode(p.toPlaceId, p.toPlaceName),
         });
       case 'DEATH':
-        return fillTemplate(t('events.deathDesc'), { character: leaderNode(p.charName) });
+        return fillTemplate(t('events.deathDesc'), { character: leaderNode(p.charId, p.charName) });
       case 'BATTLE_DEATH':
         return fillTemplate(t('events.battleDeathDesc'), {
-          character: leaderNode(p.charName),
+          character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
       case 'ESCAPE_SUCCESS':
         return fillTemplate(t('events.escapeSuccessDesc'), {
-          character: leaderNode(p.charName),
+          character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
       case 'DEFECTION':
-        return fillTemplate(t('events.defectionDesc'), { character: leaderNode(p.charName) });
+        return fillTemplate(t('events.defectionDesc'), { character: leaderNode(p.charId, p.charName) });
       case 'FACTION_COLLAPSE':
         return fillTemplate(t('events.collapseDesc'), { faction: text(p.factionName) });
       case 'FACTION_ELIMINATED':
@@ -2237,7 +2347,7 @@ function EventLog({
         return (
           <>
             {fillTemplate(t('events.adminAssignedDesc'), {
-              character: leaderNode(p.charName),
+              character: leaderNode(p.charId, p.charName),
               place: placeNode(p.placeId, p.placeName),
             })}
             {ambitionNote(p.ambitionDelta)}
@@ -2247,7 +2357,7 @@ function EventLog({
         return (
           <>
             {fillTemplate(t('events.adminRemovedDesc'), {
-              character: leaderNode(p.charName),
+              character: leaderNode(p.charId, p.charName),
               place: placeNode(p.placeId, p.placeName),
               newAdmin: text(p.newAdminName),
             })}
@@ -2258,7 +2368,7 @@ function EventLog({
         return (
           <>
             {fillTemplate(t('events.ambitionRecoveredDesc'), {
-              character: leaderNode(p.charName),
+              character: leaderNode(p.charId, p.charName),
               place: placeNode(p.placeId, p.placeName),
             })}
             {ambitionNote(p.ambitionDelta)}
@@ -2266,7 +2376,7 @@ function EventLog({
         );
       case 'PLACE_CAPTURED':
         return fillTemplate(t('events.placeCaptureDesc'), {
-          character: leaderNode(p.charName),
+          character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
       default:
@@ -2285,7 +2395,11 @@ function EventLog({
       {/* 所有回合的事件，高度加倍以便瀏覽 / All rounds' events, doubled height for browsing */}
       <div className="space-y-0.5 max-h-80 overflow-y-auto ds-gm-scroll">
         {isLoading && (
-          <p className="text-gray-400 text-xs">{t('general.loading')}</p>
+          <div className="space-y-1.5 pt-1" aria-busy="true" aria-label={t('general.loading')}>
+            {[92, 78, 85, 64, 90].map((w, i) => (
+              <div key={i} className={`${GM_SKEL} h-3`} style={{ width: `${w}%` }} />
+            ))}
+          </div>
         )}
         {!isLoading && events.length === 0 && (
           <p className="text-gray-400 text-xs">{t('game.noData')}</p>
@@ -3322,6 +3436,13 @@ function StatsCharts({
     series: ChartSeries[];
   } | null>(null);
 
+  // 還沒拿到資料、也還沒失敗 → 顯示骨架，而不是「沒有資料」。這裡刻意用
+  // data/fetchFailed 推導，不加狀態：骨架只是還沒回來，不是另一種事實。
+  // No payload yet and no failure yet → show a skeleton rather than "no data".
+  // Derived from data/fetchFailed instead of extra state: "not back yet" is not
+  // a third fact, it is the absence of the two we already track.
+  const statsPending = currentRound >= 1 && !data && !fetchFailed;
+
   if (currentRound < 1 || !data || data.rounds.length === 0) {
     return (
       <div className={`${GM_PANEL} p-3`}>
@@ -3329,9 +3450,17 @@ function StatsCharts({
           <h3 className={`${GM_TITLE} shrink-0 whitespace-nowrap`}>{t('stats.title')}</h3>
           <ChartTypeSwitch value={chartType} onChange={setChartType} />
         </div>
-        <p className="text-gray-400 text-xs" role={fetchFailed ? 'alert' : undefined}>
-          {fetchFailed ? t('general.error') : t('game.noData')}
-        </p>
+        {statsPending ? (
+          <div className="flex flex-col gap-2" aria-busy="true">
+            <div className={`${GM_SKEL} h-4 w-2/5`} />
+            <div className={`${GM_SKEL} h-32 w-full`} />
+            <div className={`${GM_SKEL} h-32 w-full`} />
+          </div>
+        ) : (
+          <p className="text-gray-400 text-xs" role={fetchFailed ? 'alert' : undefined}>
+            {fetchFailed ? t('general.error') : t('game.noData')}
+          </p>
+        )}
       </div>
     );
   }
@@ -3685,6 +3814,55 @@ function BuildingStat({
     <div className={`${GM_STAT}`}>
       <div className={`${GM_STAT_VALUE}`}>{value}</div>
       <div className={`${GM_STAT_LABEL}`}>{label}</div>
+    </div>
+  );
+}
+
+/**
+ * 縮放滑桿：0 = 最遠、1 = 最近（右＝更近），拖曳時直接 setState 不做動畫，
+ * 這樣游標才跟得��。百分比只是顯示，實際比例由 Sigma 的相機決定 /
+ * Zoom slider: 0 = furthest, 1 = closest (right = closer). Dragging sets the
+ * camera state directly with no animation so the handle tracks the pointer;
+ * the percentage is display only — Sigma owns the real ratio.
+ */
+function ZoomSlider({
+  controls,
+  label,
+}: {
+  controls: MapCameraControls | null;
+  label: string;
+}) {
+  const [zoom, setZoomState] = useState(0);
+
+  // controls 是 ref.current，會在 Sigma 建立後才填入；用 effect 訂閱並清理 /
+  // controls comes from a ref and is only filled once Sigma exists — subscribe
+  // in an effect and always unsubscribe
+  useEffect(() => {
+    if (!controls?.onZoomChange) return;
+    return controls.onZoomChange(setZoomState);
+  }, [controls]);
+
+  return (
+    <div className="flex items-center gap-2 px-1">
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={zoom}
+        disabled={!controls}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          setZoomState(next);
+          controls?.setZoom(next);
+        }}
+        aria-label={label}
+        title={label}
+        className="w-28 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
+      />
+      <span className="text-xs text-gray-400 font-orbitron tabular-nums w-9 text-right">
+        {Math.round(zoom * 100)}%
+      </span>
     </div>
   );
 }

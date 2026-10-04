@@ -1827,6 +1827,65 @@ is already a unit square, so "fit everything" needs no per-world computation.
 
 ---
 
+### 縮放滑桿 / The Zoom Slider
+
+鏡頭比例由 Sigma 擁有，但 HUD 需要一個能追蹤它的滑桿。做法是把比例**反向包裝**成
+`0 = 最近、1 = 最遠`，再包進 `MapCameraControls`：
+
+The camera ratio belongs to Sigma, but the HUD needs a slider that tracks it. The ratio is
+**inverted** into `0 = closest, 1 = furthest` and exposed through `MapCameraControls`:
+
+```typescript
+// SigmaMap.tsx — 以實際 bounds 正規化，bounds 讀不到時退回 CONFIG
+const MIN = camera.minRatio ?? CONFIG.MAP_ZOOM_MIN_RATIO;
+const MAX = camera.maxRatio ?? CONFIG.MAP_ZOOM_MAX_RATIO;
+const ratioToZoom = (r: number) => 1 - (r - MIN) / (MAX - MIN);
+
+// page.tsx — 直接 setState、不做動畫，讓滑桿跟著指標走
+<input type="range" min={0} max={1} step={0.01} value={zoom}
+       onChange={(e) => { const next = Number(e.target.value); setZoom(next); controls?.setZoom(next); }} />
+```
+
+`onZoomChange` 回傳退訂函式，`ZoomSlider` 在 effect 裡訂閱、cleanup 裡退訂。控制物件必須
+**同時**存進 ref（給命令式呼叫）與 state（給渲染）：render 期間讀 `ref.current` 會觸發
+lint "Cannot access refs during render"。
+
+`onZoomChange` returns an unsubscribe function; `ZoomSlider` subscribes in an effect and
+unsubscribes in its cleanup. The controls object must live in **both** a ref (imperative calls)
+and state (rendering): reading `ref.current` during render trips the lint rule above.
+
+### 標籤的可見性例外 / The Label Visibility Exception
+
+縮放規則是純粹的 `camera.ratio <= LABEL_ZOOM_RATIO`，而 `nodeReducer` 用 `label = null`
+隱藏標籤。但 `forceLabel` **只**繞過 `labelRenderedSizeThreshold`——標籤被設成 `null` 時
+就已經離開 Sigma 的 label index，`forceLabel` 什麼都畫不出來。因此 gate 必須排除
+active 節點：
+
+The zoom rule is purely `camera.ratio <= LABEL_ZOOM_RATIO`, and `nodeReducer` hides labels by
+setting `label = null`. But `forceLabel` only bypasses `labelRenderedSizeThreshold` — a `null`
+label has already left Sigma's label index, so `forceLabel` cannot bring it back. The gate
+must therefore exclude active nodes:
+
+```typescript
+const isActive = node === hoveredNodeRef.current
+              || node === selectedPlaceIdRef.current
+              || hoveredNeighborsRef.current.has(node);
+if (!labelsVisibleRef.current && !isActive) res.label = null; // 絕不 null active 節點
+```
+
+### 面板疊在地圖上 / The Overlaid Panel
+
+將領／事件／統計不是版面欄位，而是絕對定位覆蓋在地圖右緣（`z-[8]`），地圖因此保留完整
+寬度。HUD 的相機控制會在面板展開時左移 `26rem` 讓位，而且**只在 `lg` 以上**——固定偏移在
+窄視窗會把控制推出畫面。
+
+The 將領 / 事件 / 統計 tabs are absolutely positioned over the map's right edge (`z-[8]`)
+rather than being a layout column, so the map keeps its full width. The HUD camera controls
+shift left by `26rem` while the panel is open, and **only from `lg` up** — a fixed offset
+pushes them off-screen on narrow viewports.
+
+---
+
 ## 國際化 / Internationalization (i18n)
 
 ### 支援語言 / Supported Languages

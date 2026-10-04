@@ -200,6 +200,13 @@ export interface MapCameraControls {
   resetView: () => void;
   /** 聚焦到某個地點（供事件日誌點擊後呼叫）/ Focus the camera on a place (called when the event log targets one) */
   focusPlace: (placeId: string) => void;
+  /** 目前縮放程度：0 = 最近、1 = 最遠（反向包裝，用於滑桿）/
+   *  Current zoom as 0 = closest, 1 = furthest (inverted for the slider) */
+  getZoom: () => number;
+  /** 設定縮放程度（0..1，同 getZoom 的反向刻度）/ Set zoom (0..1, same inverted scale) */
+  setZoom: (t: number) => void;
+  /** 每次縮放變動時通知（滑桿要跟著動）/ Called whenever the zoom changes so the slider can track it */
+  onZoomChange?: (cb: (zoom: number) => void) => () => void;
 }
 
 interface SigmaMapProps {
@@ -340,22 +347,43 @@ export function SigmaMap({
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(14, Math.min(20, data.size / 2));
 
-        // 拉遠時整張圖都不顯示地名（與兵力無關）；放近才統一出現 /
+        // 正在指向的地方（hover／選中／其鄰居）永遠保留地名 /
+        // The place you are pointing at always keeps its name
+        const isActive =
+          node === hoveredNodeRef.current ||
+          node === selectedPlaceIdRef.current ||
+          hoveredNeighborsRef.current.has(node);
+
+        // 拉遠時整張圖都不顯示地名（與兵力無關）；放近才統一出現。
+        // 例外是 isActive：forceLabel 只繞過 labelRenderedSizeThreshold，
+        // 標籤一旦被設成 null 就脫離 label index，再怎麼 forceLabel 也畫不出來，
+        // 所以這裡絕不能清掉 active 節點的 label。
         // Zoomed out, no place is labelled regardless of garrison; names appear
-        // together once you zoom in
-        if (!labelsVisibleRef.current) res.label = null;
+        // together once you zoom in. isActive is the exception: forceLabel only
+        // bypasses labelRenderedSizeThreshold, so a null label drops out of the
+        // label index and nothing can draw it — never null an active node.
+        if (!labelsVisibleRef.current && !isActive) res.label = null;
 
         // hover / 選中 時標籤變青色，連接節點也高亮 / Label turns cyan on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
           res.labelColor = '#1EBDD6'; // 霓虹青綠 / Neon cyan
           res.zIndex = 1;
           res.highlighted = true;
+          // forceLabel 會跳過縮放門檻，讓「正在看的地方」一定看得到名字 /
+          // forceLabel bypasses the zoom gate so the place you are pointing at
+          // is always named
+          res.forceLabel = true;
         } else if (selectedPlaceIdRef.current === node) {
           res.labelColor = '#1EBDD6';
           res.highlighted = true;
+          res.forceLabel = true;
         } else if (hoveredNeighborsRef.current.has(node)) {
           res.labelColor = '#1EBDD6';
           res.highlighted = true;
+          // 相連地點也強制顯示名字：拉遠時地圖只有線，hover 就能看清連到哪 /
+          // Connected places are named too — zoomed out the map is just lines,
+          // so hovering reveals what this place links to
+          res.forceLabel = true;
         } else {
           res.labelColor = '#e2e8f0'; // 預設淺灰 / Default light gray
         }
@@ -506,6 +534,27 @@ export function SigmaMap({
     labelsVisibleRef.current = sigma.getCamera().ratio <= CONFIG.LABEL_ZOOM_RATIO;
     sigma.getCamera().on('updated', syncLabelVisibility);
 
+    // ── 縮放滑桿 / Zoom slider ───────────────────────────────────────────
+    // sigma 的 ratio 越小越近，滑桿要「越往右越近」所以整段反轉。
+    // Sigma's ratio shrinks as you zoom in; the slider reads right = closer, so
+    // the whole scale is inverted. Bounds come from the camera itself, with
+    // config fallbacks when Sigma leaves them unset (null).
+    const camera = sigma.getCamera();
+    const maxRatio = camera.maxRatio ?? CONFIG.MAP_ZOOM_MAX_RATIO;
+    const minRatio = camera.minRatio ?? CONFIG.MAP_ZOOM_MIN_RATIO;
+    /** ratio → 0..1（1 = 最近）/ ratio to 0..1 (1 = closest) */
+    const ratioToZoom = (ratio: number): number =>
+      1 - (ratio - minRatio) / Math.max(maxRatio - minRatio, 1e-9);
+    const zoomToRatio = (zoom: number): number =>
+      minRatio + (1 - Math.max(0, Math.min(1, zoom))) * (maxRatio - minRatio);
+
+    const zoomSubscribers = new Set<(zoom: number) => void>();
+    const emitZoom = () => {
+      const z = ratioToZoom(camera.ratio);
+      for (const cb of zoomSubscribers) cb(z);
+    };
+    camera.on('updated', emitZoom);
+
     sigmaRef.current = sigma;
 
     // 將視角控制交給父層（浮動縮放 / 重設按鈕使用）
@@ -529,10 +578,27 @@ export function SigmaMap({
         // focusNode no-ops when the node is gone (very old events, destroyed place)
         focusNode(placeId);
       },
+      getZoom: () => ratioToZoom(camera.ratio),
+      // 直接 setState（非動畫）：滑桿拖曳時每幀都要跟手，動畫反而會拖慢手感 /
+      // setState rather than an animation: a dragged slider must track the
+      // pointer每frame, and an animation would lag behind the drag
+      setZoom: (t: number) => {
+        camera.setState({ ratio: zoomToRatio(t) });
+        emitZoom();
+      },
+      onZoomChange: (cb: (zoom: number) => void) => {
+        zoomSubscribers.add(cb);
+        cb(ratioToZoom(camera.ratio));
+        return () => {
+          zoomSubscribers.delete(cb);
+        };
+      },
     });
 
     return () => {
       onControlsReadyRef.current?.(null);
+      zoomSubscribers.clear();
+      camera.removeListener('updated', emitZoom);
       sigma.kill();
       sigmaRef.current = null;
       // 清除 hover 狀態，避免殘留舊的高亮標籤

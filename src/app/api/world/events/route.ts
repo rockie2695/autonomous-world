@@ -94,24 +94,70 @@ export async function GET(request: NextRequest) {
     placeNameById = new Map(places.map((p) => [p.id, p.name]));
   }
 
-  const enriched = placeNameById
-    ? events.map((event) => {
-        if (event.type !== 'CHARACTER_MOVED') return event;
-        const data = event.data as { fromPlaceId?: string; toPlaceId?: string };
-        return {
-          ...event,
-          data: {
-            ...data,
-            fromPlaceName: data.fromPlaceId
-              ? placeNameById.get(data.fromPlaceId) ?? null
-              : null,
-            toPlaceName: data.toPlaceId
-              ? placeNameById.get(data.toPlaceId) ?? null
-              : null,
-          },
-        };
-      })
-    : events;
+  // 舊事件只存 charName，用名字回查 charId 補上，讓事件日誌能準確開啟該將領
+  // （改名或同名時以 id 為準）。仍然不寫回資料庫 /
+  // Legacy events only stored charName — resolve it to a charId at read time so
+  // the log can open the right leader even if a name was reused. Still no
+  // DB backfill: resolution happens per response.
+  const legacyCharNames = new Set<string>();
+  for (const event of events) {
+    const data = event.data as { charId?: unknown; charName?: unknown };
+    if (typeof data.charId === 'string' && data.charId) continue;
+    if (typeof data.charName === 'string' && data.charName) {
+      legacyCharNames.add(data.charName);
+    }
+  }
+
+  let charIdByName: Map<string, string> | null = null;
+  if (legacyCharNames.size > 0) {
+    const chars = await prisma.character.findMany({
+      where: { worldId: world.id, name: { in: [...legacyCharNames] } },
+      select: { id: true, name: true },
+      // 存活優先：名字被沿用時要指向仍在的那位 / Prefer the living match first:
+      // when a name was reused, point at the one still in play
+      orderBy: { alive: 'desc' },
+    });
+    charIdByName = new Map<string, string>();
+    for (const c of chars) {
+      if (!charIdByName.has(c.name)) charIdByName.set(c.name, c.id);
+    }
+  }
+
+  const enriched = events.map((event) => {
+    const data = event.data as Record<string, unknown>;
+
+    // 補 charId（舊事件）/ backfill charId for legacy events
+    const needsCharId =
+      (typeof data.charId !== 'string' || !data.charId) &&
+      typeof data.charName === 'string' &&
+      !!data.charName;
+    const charId =
+      needsCharId && charIdByName ? charIdByName.get(data.charName as string) : undefined;
+
+    const moved =
+      placeNameById && event.type === 'CHARACTER_MOVED'
+        ? (data as { fromPlaceId?: string; toPlaceId?: string })
+        : null;
+
+    if (!moved && !charId) return event;
+    return {
+      ...event,
+      data: {
+        ...data,
+        ...(charId ? { charId } : {}),
+        ...(moved
+          ? {
+              fromPlaceName: moved.fromPlaceId
+                ? placeNameById!.get(moved.fromPlaceId) ?? null
+                : null,
+              toPlaceName: moved.toPlaceId
+                ? placeNameById!.get(moved.toPlaceId) ?? null
+                : null,
+            }
+          : {}),
+      },
+    };
+  });
 
   return NextResponse.json({ events: enriched });
 }

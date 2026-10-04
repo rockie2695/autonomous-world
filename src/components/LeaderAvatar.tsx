@@ -28,6 +28,10 @@ import { createRng } from '@/lib/rng';
 export interface AvatarCharacter {
   id: string;
   wu: number;
+  /** 統領：高的話戴領巾 / Leadership: a high value earns the sash */
+  tong: number;
+  /** 經濟：高的話掛算珠 / Economy: a high value earns the abacus beads */
+  jing: number;
   ambition: number;
   age: number;
   isKing: boolean;
@@ -63,6 +67,8 @@ const MOUTH_SHAPES = ['flat', 'smile', 'firm'] as const;
 const GREY_HAIR_AGE = 60;
 const HELMET_WU = 25;
 const SHARP_BROW_AMBITION = 20;
+const SASH_TONG = 25;
+const BEADS_JING = 25;
 
 interface LeaderAvatarProps {
   character: AvatarCharacter;
@@ -88,6 +94,10 @@ export interface AvatarTraits {
   crown: boolean;
   /** 眉壓低（野心高）/ Brows angled down (high ambition) */
   sharpBrow: boolean;
+  /** 領巾（統領高，帶兵者）/ Collar sash (high leadership) */
+  sash: boolean;
+  /** 算珠（經濟高，帳房氣質）/ Abacus beads (high economy) */
+  beads: boolean;
 }
 
 /**
@@ -135,6 +145,11 @@ export function deriveAvatarTraits(character: AvatarCharacter): AvatarTraits {
     helmet: !character.isKing && character.wu >= HELMET_WU,
     crown: character.isKing,
     sharpBrow: character.ambition >= SHARP_BROW_AMBITION,
+    // 統領與經濟各給一個配件，和頭盔／王冠同一套邏輯：數值到了就戴 /
+    // Leadership and economy each grant an accessory, on the same
+    // threshold logic as the helmet and crown: cross the number, wear the item
+    sash: character.tong >= SASH_TONG,
+    beads: character.jing >= BEADS_JING,
   };
 }
 
@@ -185,6 +200,24 @@ export function LeaderAvatar({
 
       {/* 衣袍與肩膀 / Robe and shoulders */}
       <path d="M8 100 Q50 52 92 100 Z" fill={robe} />
+
+      {/* 統領高 → 斜披領巾（壓在衣袍上）/ High leadership -> sash across the robe */}
+      {traits.sash && (
+        <path
+          d="M26 100 L74 62 L80 70 L36 100 Z"
+          fill="var(--color-ds-void)"
+          opacity={0.55}
+        />
+      )}
+      {/* 經濟高 → 頸前算珠 / High economy -> abacus beads at the collar */}
+      {traits.beads && (
+        <>
+          <rect x="34" y="74" width="32" height="3" rx="1.5" fill="var(--color-ds-void)" opacity={0.6} />
+          {[38, 44, 50, 56, 62].map((cx) => (
+            <circle key={cx} cx={cx} cy="75.5" r="2.1" fill="var(--color-ds-cyan)" opacity={0.9} />
+          ))}
+        </>
+      )}
 
       {/* 耳 / Ears */}
       <circle cx={50 - faceRx + 1} cy="48" r="3.4" fill={skin} />

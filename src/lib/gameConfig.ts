@@ -25,6 +25,14 @@
 // ============================================================================
 
 export const CONFIG = {
+  // ── 自動播放 / Autoplay ───────────────────────────────────────────────────
+  // 每次前進都會打一次 API，所以最短間隔必須留夠網路時間（5 秒），
+  // 太短只會一直撞 rate limit / Each tick hits the API, so the floor has to
+  // leave room for the request — shorter just spams the endpoint
+  AUTOPLAY_MIN_MS: 5000,
+  AUTOPLAY_MAX_MS: 15000,
+  AUTOPLAY_DEFAULT_MS: 5000,
+
   // ── 地點 / Places ────────────────────────────────────────────────────────
   // 控制地圖成長：從 100 開始，每回合增加 1，最大 2000。
   // Controls map growth: starts at 100, grows by 1 per round, max 2000.
@@ -286,6 +294,11 @@ export const CONFIG = {
   // the constant ratio 1 — independent of world size and node count. Both
   // values below are multiples of that baseline, never absolute coordinates.
   MAP_FIT_PADDING: 1.18,         // 全覽時的留白倍數（>1 = 四周留白）/ Padding factor when fitting the whole world (>1 = margin)
+  // 縮放滑桿的上下限（ratio：越小越近）。sigma 沒設定 min/maxCameraRatio 時
+  // 用這兩個值當後備 / Slider bounds as camera ratios (smaller = closer). Used as
+  // the fallback when Sigma leaves min/maxCameraRatio unset
+  MAP_ZOOM_MIN_RATIO: 0.05,
+  MAP_ZOOM_MAX_RATIO: 8,
   MAP_FOCUS_ZOOM: 0.45,          // 聚焦地點時相對「全覽」的放大倍數（<1 = 拉近）/ Zoom-in factor when focusing a place, relative to the fit view (<1 = closer)
 } as const;
 

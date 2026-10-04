@@ -322,8 +322,20 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 1`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
 - The spotlight layer is the map's **only** rAF loop and it obeys the animation rules: it pauses when the canvas leaves the viewport (`IntersectionObserver`) and when `document.hidden`, and under `prefers-reduced-motion` it renders a single static frame (`STATIC_FRAME_MS`) with no loop at all. It listens for a mid-session `matchMedia` change too. Keep the gate in `isAnimating()` and keep the initial `resize()` call **after** `isAnimating`/`renderFrame` are declared (an earlier call hits the temporal dead zone)
 - **Z-order**: the two overlay `<canvas>` elements paint first (below, glow then spotlight), the sigma container div paints last (above) — so place labels always render on top of both. Keep that DOM order.
-- **Label visibility**: labels are a **pure zoom rule** — they show only while `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO` (0.5), regardless of garrison. `nodeReducer` sets `label = null` when zoomed out and `labelRenderedSizeThreshold` is pinned to `0`. Do **not** reintroduce `labelRenderedSizeThreshold`: it compares on-screen node **size**, so garrisoned places kept their names when zoomed out, and the camera ratio cancels out of that comparison, so it was never a zoom threshold. The camera's `updated` event (bound via `sigma.getCamera().on`, since sigma does not re-emit it) refreshes on each crossing. Tune `LABEL_ZOOM_RATIO` in `gameConfig.ts`, not inline.
+- **Label visibility**: labels are a **pure zoom rule** — they show only while `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO` (0.6), regardless of garrison. `nodeReducer` sets `label = null` when zoomed out and `labelRenderedSizeThreshold` is pinned to `0`. Do **not** reintroduce `labelRenderedSizeThreshold`: it compares on-screen node **size**, so garrisoned places kept their names when zoomed out, and the camera ratio cancels out of that comparison, so it was never a zoom threshold. The camera's `updated` event (bound via `sigma.getCamera().on`, since sigma does not re-emit it) refreshes on each crossing. Tune `LABEL_ZOOM_RATIO` in `gameConfig.ts`, not inline.
+- **One exception to the zoom rule**: the hovered node, the selected node, and the hovered node's graph neighbours always keep their label, so you can read a place and what it links to while zoomed out. `forceLabel` alone is **not** enough — it only bypasses `labelRenderedSizeThreshold`, so a `null` label has already left Sigma's label index and nothing can draw it. The gate must therefore read `if (!labelsVisibleRef.current && !isActive) res.label = null`, never null an active node.
 - `GET /api/world/events?round=N` applies read-time enrichment to `CHARACTER_MOVED`: adds `fromPlaceName`/`toPlaceName` by joining `places` (events themselves store only placeIds)
+- **Every character-bearing event carries `charId`**, so a log row links the leader by id. `CHARACTER_SPAWNED` is the one that had to be added (`created.id` in `spawnCharacters.ts`); the other sites already had it. Because the events table predates the column, the route also **backfills at read time**: rows whose `charId` is null but whose `charName` is set are matched against `characters` for that world, preferring `alive` first. The client then calls `leaderNode(charId, charName)` and prefers the id, falling back to the name — and prefers no action over opening the wrong leader.
+
+### Map HUD, Side Panel & Round Playback
+
+- The 將領 / 事件 / 統計 tabs are **absolutely positioned over the map's right edge** (`MapSidePanel`, `z-[8]`), not a layout column — the map keeps the full width. The vertical tab rail is always visible; only the 19rem content panel collapses (its own ✕), and content enters and exits with a right-to-left fade (`AnimatePresence`, `x: 28`)
+- `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `26rem` so they clear the open panel, and **only from `lg` up** — a fixed offset would push them off-screen on narrow viewports, so narrow keeps `right-4`
+- The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 8`
+- Controls are held in **both a ref and state**: `onControlsReady` sets `mapControlsRef` (imperative calls) *and* `mapControls` state (rendering). Reading `ref.current` during render is a lint error ("Cannot access refs during render")
+- The header renders `TelemetryStrip inline`, merging 世界概況 into the header row and handing the height back to the map
+- **Autoplay floor is 5s**: `AUTOPLAY_MIN_MS: 5000`, `AUTOPLAY_MAX_MS: 15000`, `AUTOPLAY_DEFAULT_MS: 5000`. `CONFIG` is `as const`, so the slider state must be `useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS)` or it pins to the literal and rejects every other speed
+- **Loading skeletons** all use `GM_SKEL`: `MapSidePanel` shows `PanelSkeleton` while world state is pending, `EventLog` renders skeleton rows during its own fetch, and `StatsCharts` derives `statsPending = currentRound >= 1 && !data && !fetchFailed` so an unanswered request reads as *loading* rather than `game.noData`. `StatsCharts` fetches with a manual `useEffect`, not `useQuery`, so it has no `isLoading` to read
 
 ### Map Glow, Shadow & Camera
 
@@ -412,8 +424,10 @@ column, no new dependency.
   needs to be stored.
 - **Real data biases the result**, applied *after* the draws so it cannot skew the other
   traits: `isKing` → crown · `wu ≥ 25` → helmet (never on a king, it would cover the crown) ·
-  `age ≥ 60` → grey/white hair and a likelier beard · `ambition ≥ 20` → brows angle down ·
-  faction colour → robe and backdrop.
+  `tong ≥ 25` → sash · `jing ≥ 25` → abacus beads · `age ≥ 60` → grey/white hair and a likelier
+  beard · `ambition ≥ 20` → brows angle down · faction colour → robe and backdrop.
+  All three ability traits share `SASH_TONG` / `BEADS_JING` = 25, matching `wu`'s helmet
+  threshold; each is independent, so one stat never implies another.
 - **Trait logic is a pure exported function**, `deriveAvatarTraits(character)`; the component
   only renders. That's what `LeaderAvatar.test.ts` tests — it needs no DOM, so it runs under
   the project's `node` vitest environment. Keep new traits in the pure function, not in JSX.

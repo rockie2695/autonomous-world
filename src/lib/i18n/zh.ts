@@ -21,6 +21,7 @@ export const zh = {
     details: '詳細資料',
     status: '狀態',
     back: '返回',
+    close: '關閉',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────
@@ -169,6 +170,7 @@ export const zh = {
     zoomIn: '放大',
     zoomOut: '縮小',
     resetView: '重置視圖',
+    zoomLevel: '縮放程度',
     place: '地方',
     faction: '勢力',
     troops: '兵力',
