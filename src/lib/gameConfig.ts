@@ -300,6 +300,85 @@ export const CONFIG = {
   MAP_ZOOM_MIN_RATIO: 0.05,
   MAP_ZOOM_MAX_RATIO: 8,
   MAP_FOCUS_ZOOM: 0.45,          // 聚焦地點時相對「全覽」的放大倍數（<1 = 拉近）/ Zoom-in factor when focusing a place, relative to the fit view (<1 = closer)
+
+  // ── 事件日誌 / Event log ──
+  // 分批載入的筆數；事件總數可能上萬，一次掛載全部 DOM 會卡住 /
+  // Rows loaded per page; the total can reach tens of thousands and mounting it all
+  EVENT_LOG_PAGE_SIZE: 60,
+
+  // ── 統計圖表 / Stats charts ──
+  // 圖表是純 SVG，用 viewBox 座標畫，所以這些是 viewBox 單位而非 px；
+  // 實際顯示大小由容器寬度決定（圖表 w-full，約 240px 寬）。
+  // The charts are plain SVG drawn in viewBox units, not px; the on-screen size
+  // comes from the container (the chart is w-full, roughly 240px wide).
+  CHART_W: 280,                   // viewBox 寬度 / viewBox width
+  CHART_H: 120,                   // viewBox 高度 / viewBox height
+  CHART_PAD: 26,                  // 四邊留白，容納座標軸標籤 / Padding on all sides for axis labels
+  BAR_MAX_ROUNDS: 24,             // 長條圖最多顯示的回合數，較早的回合省略 / Max rounds in bar charts, older rounds are dropped
+  TREEMAP_W: 280,                 // 勢力 treemap 的 viewBox 寬度 / Faction treemap viewBox width
+  TREEMAP_H: 190,                 // 勢力 treemap 的 viewBox 高度 / Faction treemap viewBox height
+  TREEMAP_MAX_FACTIONS: 12,       // treemap 最多顯示的勢力數，太多會糊成一片 / Max factions drawn before it turns to mush
+  RADAR_SIZE: 210,                // 雷達圖的 viewBox 尺寸 / Radar viewBox size
+  RADAR_RADIUS: 68,               // 雷達圖外圈半徑 / Radar outer ring radius
+  RADAR_MAX_FACTIONS: 6,          // 雷達圖最多疊加的勢力多邊形，太多會互相蓋住 / Max faction polygons overlaid before they overlap into noise
+  // 游標 X 超過這個值就把提示翻到游標左側。圖表在面板裡約 240px 寬，提示最少
+  // 144px（min-w-[9rem]）再加 12px 間距，所以超過約 85px 就不該再往右放；取 110px
+  // 留一點餘裕給較長的勢力名。
+  // Past this cursor X the tooltip flips to the cursor's left. The chart is ~240px
+  // wide inside the panel and the tooltip is at least 144px plus a 12px gap, so
+  // anything past ~85px will not fit on the right; 110px leaves slack for longer
+  // faction names.
+  CHART_TIP_FLIP_AT: 110,
+
+  // ── 領地圖（拉遠時的面積視圖）/ Territory view (the area map when zoomed out) ──
+  // 拉遠到 TERRITORY_ZOOM_RATIO 以上就把「節點 + 道路」換成「每個地方的面積」，
+  // 依 owner 著色 —— 类似 Stellaris 星系圖或 CK3 省份圖。兩個值之間是淡入淡出帶，
+  // 用的是 smoothstep，所以兩端都不會出現半透明的瞬間。
+  // Past TERRITORY_ZOOM_RATIO the "nodes + roads" graph is replaced by the *area*
+  // each place covers, coloured by its owner — like a Stellaris galaxy map or
+  // CK3's province map. The band between the two values is the cross-fade, and
+  // territoryAlpha() smoothsteps it so neither end has a half-transparent moment.
+  TERRITORY_ZOOM_RATIO: 1.02,     // 到此比例領地圖完全顯示（全覽 1.18，所以預設視圖就是領地圖）/ Territory fully visible at this ratio (fit is 1.18, so the default view is the territory map)
+  TERRITORY_FADE_RATIO: 0.74,     // 低於此比例完全消失 / Fully gone below this
+  // 領地範圍往外擴張的比例（每邊）。格子邊界若剛好停在最外側的地方上，畫面會
+  // 出現一條明顯的直邊；每一格都歸給最近的地方，所以外圈會自然往外延伸。
+  // Grow the territory extent per side. Without this the grid stops exactly at
+  // the outermost place and the view shows a hard straight edge; since every
+  // cell belongs to its nearest place, the outer ring extends outward by itself.
+  TERRITORY_MARGIN: 0.45,
+  // 每個地方宣稱的半徑 = 半徑因子 × 最近鄰平均距離。用相對尺度（而不是固定世界
+  // 座標）是因為世界密度會變：地方多時固定半徑會糊成一片，地方少時又小到看不見。
+  // 每個地方的宣稱半徑 = 半徑因子 × 最近鄰平均距離 / Claim radius per place = factor × mean
+  // nearest-neighbour distance. A *relative* scale, because world density changes:
+  // a fixed radius smears everything when places are dense and vanishes when sparse
+  TERRITORY_BLOB_RADIUS: 2.4,
+  // 每軸的格數上限；實際解析度還會再依地方數量縮小 /
+  // Cap on cells per axis; the real resolution also scales down with place count
+  TERRITORY_MAX_RESOLUTION: 560,
+  // 領地底圖的不透明度，讓底下的星點背景仍透得出來 /
+  // Base opacity of the territory fill, so the starfield behind still shows through
+  // 領地是**蓋在原圖上的半透明色層**，不是重新畫一張地圖：CK3 的 map mode 就是這樣，
+  // 無主之地不上色、原圖（道路／節點／地形）仍然看得見。調高就會把地圖蓋掉。
+  // The territory is a translucent tint *over* the map, not a repaint of it — the
+  // same idea as CK3's map modes. Unowned land is never tinted, so the roads,
+  // nodes and terrain stay visible. Raise this too far and the map is buried.
+  TERRITORY_FILL_ALPHA: 0.42,
+  // hover 中的領地疊加亮度 /
+  // Brightness of the hovered faction's overlay
+  TERRITORY_HOVER_ALPHA: 0.35,
+  // 邊界亮邊：往白色混多少。**逐邊**套用，所以只要薄就不會糊成一團 /
+  // Rim light: mixed toward white. Applied **per side**, so keep it thin or it smears
+  TERRITORY_RIM_LIGHT: 0.55,
+  // 少於這麼多格子的勢力不標名字，否則小領地上會疊成一團 /
+  // Factions below this cell count get no label, or tiny holdings stack up
+  TERRITORY_MIN_LABEL_CELLS: 10,
+  // 最多標幾個勢力，畫面才不會變成地名牆 /
+  // Cap the labelled factions so the map does not become a wall of names
+  TERRITORY_MAX_LABELS: 12,
+  // 領地視圖下的縮放速度：每個 wheel delta 單位乘上 (1 - step) /
+  // Zoom step while the territory layer owns the wheel: each delta unit scales
+  // the ratio by (1 - step)
+  TERRITORY_ZOOM_STEP: 0.0016,
 } as const;
 
 // ─── 動態佈局函數 / Dynamic Layout Functions ─────────────────────────────

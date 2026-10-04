@@ -199,6 +199,23 @@ export const zh = {
     noKing: '無國王',
   },
 
+  // ── 將領頭像 / Leader Avatar ────────────────────────────────────────────
+  // 頭像的 hover 提示會解說身上的配件是哪一段能力來的 /
+  // The avatar's hover tooltip explains which ability band each accessory is
+  avatar: {
+    label: '將領頭像：{detail}',
+    tier: {
+      high: '高',
+      mid: '中',
+      low: '低',
+    },
+    cue: {
+      wu: { high: '頭盔', mid: '額帶', low: '舊疤' },
+      tong: { high: '金肩章', mid: '素鋼肩章', low: '麻補丁肩帶' },
+      jing: { high: '算盤', mid: '方孔銅錢', low: '空錢袋' },
+    },
+  },
+
   // ── 角色 / Character ────────────────────────────────────────────────────
   character: {
     name: '將領名稱',
@@ -240,9 +257,27 @@ export const zh = {
   },
 
   // ── 事件 / Events ───────────────────────────────────────────────────────
+  chart: {
+    round: '回合',
+  },
   events: {
     title: '事件日誌',
     tab: '事件',
+    filterFaction: '勢力',
+    filterAll: '全部',
+    filterCategory: '類別',
+    filterShow: '顯示',
+    filterPeople: '人物',
+    filterPlace: '地點',
+    filterOther: '其他',
+    filterReset: '清除篩選',
+    filteredOut: '沒有符合篩選的事件',
+    catBattle: '戰鬥',
+    catCharacter: '角色',
+    catEconomy: '經濟',
+    catFaction: '勢力',
+    catAdmin: '行政',
+    catPlace: '拓展',
     battle: '戰鬥',
     battleDesc: '{attacker} 攻打 {place}',
     defeat: '戰敗',

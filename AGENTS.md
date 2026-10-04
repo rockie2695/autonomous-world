@@ -192,10 +192,21 @@ src/components/
                            #   prefers-reduced-motion is set.
 ├── LeaderAvatar.tsx        # Procedural leader head bust, seeded from character.id; pure trait logic in deriveAvatarTraits()
 
-src/app/game/page.tsx also defines locally:
-├── EventLog               # Bilingual event log (i18n t() with parameter substitution); header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
-└── StatsCharts            # Stats panel: 9 time-series charts in 4 switchable styles, plus a faction-power treemap and a character radar. See "Stats Charts" below.
+src/app/game/ is split into focused modules — page.tsx is the orchestrator, and
+everything it delegates to lives in a sibling file:
+├── page.tsx                # Orchestrator: GamePage, map HUD, RoundTimeline, MapSidePanel, CharacterList, PlaceDetail, ZoomSlider
+├── types.ts                # Shared types: WorldInfo, WorldState, GameEvent. Its own module so the components below can share them without an import cycle
+├── icons.tsx               # Ic, Crown, EventGlyph — one copy, shared by the page, the event log and the charts
+├── styles.ts               # The `GM_*` surface strings (GM_PANEL, GM_BTN, GM_SKEL…). Shared because the page, the event log, the charts and the leader modal all render the same surfaces
+├── EventLog.tsx            # Bilingual event log (i18n t() with parameter substitution) + the faction / category / info-kind filters; header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
+├── stats-charts.tsx        # Stats panel: 9 time-series charts in 4 switchable styles, the faction-power treemap, the character radar, and the shared ChartTooltip / ChartLegend. See "Stats Charts" below.
+└── leader-detail.tsx       # DetailModal + FactionRanking. These two MUST stay together: the modal embeds the ranking, and the radar's hover preview opens the modal — splitting them would make stats-charts.tsx import page.tsx back
 ```
+
+**Why `leader-detail.tsx` exists.** `stats-charts.tsx` needs `DetailModal`
+(`CharacterRadarHover` opens it), and `DetailModal` renders `FactionRanking`.
+If both stayed in `page.tsx`, the charts module would have to import the page
+that imports it — a cycle. Co-locating them breaks it at the source.
 
 ### Styling surface (`src/components/home/`)
 
@@ -221,9 +232,11 @@ src/components/home/
 **Styling convention.** Design values live once in `@theme static` in
 `src/app/globals.css`. Surfaces are expressed with Tailwind utilities. A surface
 used more than once has its utility string declared as a module-scope `const` at
-the top of the file that owns it (`src/app/page.tsx`, `src/app/game/page.tsx`) —
-that is where the repeated class lists live, so the same string never appears in
-two files. **Do not add a bespoke CSS class for a surface.** The only two
+the top of the file that owns it — `src/app/page.tsx` for the home page,
+`src/app/game/styles.ts` for the game page. `styles.ts` is its own module
+because the page, the event log, the charts and the leader modal all render the
+same surfaces; a string used by two files belongs in that shared module rather
+than being duplicated. **Do not add a bespoke CSS class for a surface.** The only two
 classes left in the project are `ds-gm-scroll` and `ds-gm-noscroll`, kept
 because scrollbar pseudo-elements cannot be expressed as utilities.
 
@@ -330,12 +343,24 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 ### Map HUD, Side Panel & Round Playback
 
 - The 將領 / 事件 / 統計 tabs are **absolutely positioned over the map's right edge** (`MapSidePanel`, `z-[8]`), not a layout column — the map keeps the full width. The vertical tab rail is always visible; only the 19rem content panel collapses (its own ✕), and content enters and exits with a right-to-left fade (`AnimatePresence`, `x: 28`)
+- **Nothing is a layout column any more.** 選擇回合 (`RoundTimeline`, `GM_TIMELINE`) is absolutely positioned over the map's **left** edge (`absolute left-12 top-12 z-[7] w-60 hidden md:block`), and 勢力排行 (`FactionRanking`) moved into the **統計** tab above the charts. Both used to be a left sidebar; a sidebar column is what forced the map to share width with chrome. The mobile overlay drawer is unaffected — it still stacks timeline, leader list and event log
 - `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `26rem` so they clear the open panel, and **only from `lg` up** — a fixed offset would push them off-screen on narrow viewports, so narrow keeps `right-4`
 - The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 8`
 - Controls are held in **both a ref and state**: `onControlsReady` sets `mapControlsRef` (imperative calls) *and* `mapControls` state (rendering). Reading `ref.current` during render is a lint error ("Cannot access refs during render")
 - The header renders `TelemetryStrip inline`, merging 世界概況 into the header row and handing the height back to the map
 - **Autoplay floor is 5s**: `AUTOPLAY_MIN_MS: 5000`, `AUTOPLAY_MAX_MS: 15000`, `AUTOPLAY_DEFAULT_MS: 5000`. `CONFIG` is `as const`, so the slider state must be `useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS)` or it pins to the literal and rejects every other speed
 - **Loading skeletons** all use `GM_SKEL`: `MapSidePanel` shows `PanelSkeleton` while world state is pending, `EventLog` renders skeleton rows during its own fetch, and `StatsCharts` derives `statsPending = currentRound >= 1 && !data && !fetchFailed` so an unanswered request reads as *loading* rather than `game.noData`. `StatsCharts` fetches with a manual `useEffect`, not `useQuery`, so it has no `isLoading` to read
+
+### Event Log Filters (`src/app/game/EventLog.tsx`)
+
+Three independent filters compose by AND; the header reports how many of the round's
+events survived, and says so when all of them were filtered out.
+
+- **Faction** — a `<select>` (`#gm-evt-faction`) plus 全部. `factionOfEvent()` resolves an event's faction through **`charId` first, then `placeId`**. `charId` is the reliable link (every character-bearing event carries it, backfilled at read time — see above), so a `CHARACTER_MOVED` row filters under the mover's faction rather than the destination's
+- **Category** — six multi-select chips, each an `aria-pressed` toggle. `EVENT_CATEGORY` maps an event `type` to one of `battle` / `character` / `economy` / `faction` / `admin` / `other`, and `EVENT_CATEGORIES` is the chip order. Chips are multi-select, not radio: any subset stays active
+- **Info kind** — 人物 / 地點 / 其他 toggles, derived by `eventInfoOf()` from what the event's `data` carries. This is not a display filter: it decides whether a name renders as a clickable button (`onFocusPlace` / `onOpenLeaderDetail`) or as plain text, which is what makes names in the log navigable
+- Filtering is derived (`filterKey` + `useMemo`), never applied by mutating the fetched list, so toggling filters back off restores the full set for free
+- Rows are paged at `CONFIG.EVENT_LOG_PAGE_SIZE` (60); the total can reach tens of thousands
 
 ### Map Glow, Shadow & Camera
 
@@ -349,6 +374,57 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - The map's inner vignette is a design token, not a bespoke class: `--shadow-ds-map-vignette` in `@theme static` (globals.css), applied as `shadow-ds-map-vignette`
 - Camera animations run through `reducedMotionRef` (populated from `useReducedMotion`), giving `duration: 0`. It is a ref, not a direct closure, because the effect that builds the Sigma instance has an empty dependency array
 - `extract-` note: `readDesignToken` is the only sanctioned way for a canvas layer in this component to obtain a design value
+
+### Map Territory View (the zoom-out area map)
+
+Zoomed out past `TERRITORY_ZOOM_RATIO`, each place projects a **claim** and the map marks the area
+those claims cover — the CK3 map-mode / Stellaris galaxy-map idea. The territory is a *translucent
+tint over the map*, not a replacement for it: the graph, roads and glow stay fully opaque, so you
+read territory and topography at the same time.
+
+- **It is a density field, not a Voronoi partition.** An earlier version assigned each grid cell to
+  the nearest place. That was wrong twice over: it rendered as visible cell steps, and it drew a
+  border between two *adjacent places of the same faction* — the exact artefact that made it look
+  like pixel art rather than Stellaris. Instead each place projects a smooth falloff
+  (`falloff`, squared so both the value and its slope reach zero at the rim, keeping the boundary
+  C1-continuous) and a faction's claims combine with `1 - Π(1 - wᵢ)` — a **probabilistic OR**.
+  A plain sum would let a sprawling faction accumulate density forever and inflate across the map;
+  OR saturates at 1, so a faction can only win where it genuinely holds nearby ground. Because the
+  field is smooth, a cell's border is where two fields are *equal*, which is what makes distance
+  decide the border and same-faction places fuse with no internal seam.
+- **Unowned land claims nothing and is never painted.** `TerritorySite.faction` is `string | null`,
+  and `null` means "present on the map but claims no territory". Those places still count toward
+  `meanNeighbourDistance()` — the claim radius has to match the density of the whole map — but the
+  field skips them entirely. Painting unowned land as one giant grey faction was the second
+  mistake: it buried the map under a slab, when CK3's map modes leave unclaimed land untouched.
+- **`src/lib/territory.ts` is pure logic** — `buildTerritoryField()` returns a per-cell faction index
+  plus the covered extent; `nearestSite()` answers hover/click in one scan (deliberately *not* a
+  grid: one mousemove is one query, and scanning 2000 places is cheaper than maintaining a grid);
+  `factionRegions()` returns per-faction centroids for the labels; `neighbourMask()` reports which
+  of a cell's four sides border a different owner. No DOM, so `territory.test.ts` runs under `node`.
+- **The field is built during render**, in a `useMemo` over `places`, not inside the effect and
+  pushed into state — `Place` already carries `layoutX`/`layoutY`, and setting state synchronously
+  in an effect trips the cascading-render lint rule.
+- **The claim radius is relative**, `TERRITORY_BLOB_RADIUS × meanNeighbourDistance()`. A fixed
+  world-coordinate radius smears everything into one blob when places are dense and vanishes when
+  they are sparse.
+- **The rim is drawn per side.** `neighbourMask()` returns a bitmask and only that side's row of
+  pixels is lightened, so the border is a hairline. Lighting whole boundary cells instead produces a
+  thick white band, and painting a shared seam leaves a two-pixel double line.
+- The bitmap is painted **once per data change** into an offscreen canvas and repainted only when
+  the hovered *faction* changes — never per frame. `imageSmoothing` stays **on**: the field already
+  computes the border as a curve, so smoothing only removes the last of the cell stepping.
+- **The territory canvas sits *under* sigma**, so `draw()` sets `container.style.pointerEvents =
+  'none'` while the layer is active. That also deafens Sigma's own wheel/drag handlers, so the layer
+  drives the camera itself (`onWheel` zooms about the cursor, `onDrag` pans) — otherwise the
+  zoomed-out view could not be zoomed at all. Cleanup must restore `pointerEvents` or sigma loses
+  pointer events for good.
+- Faction names are **DOM**, not canvas: they inherit the app's fonts and i18n for free, and are
+  positioned per frame by writing a `transform` (never React state). Regions smaller than
+  `TERRITORY_MIN_LABEL_CELLS`, and unowned land, are left unlabelled.
+- Opacities are written straight to the DOM rather than through React state — a per-frame
+  `setState` would re-render the whole map.
+- The graph→viewport mapping assumes **camera angle 0** (both camera animations pass `angle: 0`).
 
 ### Stats Charts
 
@@ -365,6 +441,27 @@ switchable styles, and a faction-power treemap — plus a character radar panel.
 | `pie` | donut of the latest round's share, legend with % | **gauge ring** (value vs. historical peak) |
 | `square` | stacked bar per round (last `BAR_MAX_ROUNDS` = 24) | bar per round |
 | `treemap` | *replaces all nine charts* — see below | — |
+
+**Hover tooltips.** All four styles plus the treemap share one `ChartTooltip` DOM panel and
+one `ChartLegend`, so hover reads identically wherever it appears. It is
+`pointer-events-none` — a panel that sits over the chart must not steal the pointer, or the
+crosshair jitters as the tooltip chases the cursor.
+
+- `LineChart` / `BarChart` draw a crosshair and **snap to the nearest round index** rather
+  than interpolating, so the `回合 N` heading lines up with the integer tick labels
+- `PieChart` hit-tests the slice under the cursor and labels the **latest** round
+- `GaugeChart` shows 目前 vs 峰值
+- **The round heading is optional** (`round?: number`). The gauge and the treemap omit it:
+  both are current snapshots rather than one round. Passing an array index as `round` was an
+  actual bug — the gauge has no `rounds` prop, so there is nothing to index
+- **The tooltip flips to the cursor's left past `CHART_TIP_FLIP_AT`.** The chart is only
+  ~240px wide inside the panel and the panel is at least `min-w-[9rem]` (144px), so past
+  roughly 85px there is no room on the right and it would be clipped by the panel edge
+- Chart geometry is **config, not local constants**: `CHART_W` / `CHART_H` / `CHART_PAD` /
+  `CHART_TIP_FLIP_AT` / `BAR_MAX_ROUNDS` / `TREEMAP_*` / `RADAR_*` live in `gameConfig.ts` and
+  are destructured once at the top of `stats-charts.tsx`. These are **viewBox units**, not px;
+  the on-screen size comes from the `w-full` container. Do not reintroduce a local `const` for
+  any of them
 
 **2. A character radar**, its own panel below the charts. It ignores the type toggle.
 One polygon per faction showing the **mean attributes of its living characters**, over six
@@ -406,6 +503,16 @@ absolutely positioned panel would scroll away with the rows.
 - Capped at `TREEMAP_MAX_FACTIONS` (12), largest by territory first.
 - Segment swatches come from `--color-ds-cyan` / `--color-ds-amber` / `--color-ds-purple`;
   faction blocks use the runtime faction colour. No colour is hardcoded.
+- **Hit-testing picks the smallest containing rect**, not the first match. A child segment
+  sits *inside* its parent's rect, so `placed.find(...)` always returned the parent and the
+  subdivided segments could never be hovered at all.
+- A `TreemapNode` carries **two numbers**: `value` is the normalised 0..1 used for the
+  layout split, and `display` is the real count the tooltip prints. Printing `value` verbatim
+  reads as "0.42". The tooltip uses `display ?? value`.
+- Child labels are prefixed with the faction name (`原暉堂 · 兵力`). Hovering a segment on its
+  own would otherwise read as a bare metric name with no indication of whose troops it is.
+- The tooltip prints `node.label`, **not** `node.key` — `key` is the faction id, and rendering
+  it leaks a raw id like `cmusjwryl007dlswzzsbwf1bz14` into the UI.
 
 ### Radar Caveats
 
@@ -423,11 +530,42 @@ column, no new dependency.
   The draw order is fixed, so the same id always yields the same face — which is why nothing
   needs to be stored.
 - **Real data biases the result**, applied *after* the draws so it cannot skew the other
-  traits: `isKing` → crown · `wu ≥ 25` → helmet (never on a king, it would cover the crown) ·
-  `tong ≥ 25` → sash · `jing ≥ 25` → abacus beads · `age ≥ 60` → grey/white hair and a likelier
-  beard · `ambition ≥ 20` → brows angle down · faction colour → robe and backdrop.
-  All three ability traits share `SASH_TONG` / `BEADS_JING` = 25, matching `wu`'s helmet
-  threshold; each is independent, so one stat never implies another.
+  traits: `isKing` → crown · `age ≥ 60` → grey/white hair and a likelier beard ·
+  `ambition ≥ 20` → brows angle down · faction colour → robe and backdrop.
+- **Each ability is banded three ways** rather than rewarded only at the top. `tierFor()` splits
+  the 5–30 range at `ABILITY_HIGH` (25) and `ABILITY_MID` (18) into `high` / `mid` / `low`, and
+  `AvatarTraits` exposes `wuTier` / `tongTier` / `jingTier`. The old rule rewarded only `high`, so
+  ~80% of leaders carried **no** ability signal at all and every one of them looked alike. `mid`
+  being the common band is exactly what makes the population readable at a glance.
+
+  | Band | `wu` (head) | `tong` (shoulders) | `jing` (chest) |
+  |------|------|--------|--------|
+  | high | plumed helmet | wide gold board + fringe | abacus |
+  | mid | knotted headband | plain steel board | square-holed cash coin |
+  | low | scar | thin patched hemp strap | empty drawstring pouch |
+
+  The low band deliberately reads as **worn, not merely different**, so the power structure is
+  legible without a tooltip. Four rules make all nine cues readable, and every one of them was
+  learned from rendering the full 27-combination grid, not from reasoning about it:
+  - **One shared material language.** `TIER_MATERIAL` maps `high`/`mid`/`low` to gold / steel /
+    hemp, and **all three abilities use it**, so rank compares *across* stats. Nine unrelated
+    hues meant the tiers had to be memorised one at a time.
+  - **One body region each, never overlapping.** `wu` on the head, `tong` on the shoulders, `jing`
+    centred on the chest. The first version put the sash/cord at the chest and waist alongside
+    the beads/coin/patch, and they cancelled each other out.
+  - **Each tier is the *same object* degrading, not three different objects.** One board going
+    gold → steel → a thin mended strap; a full abacus → one coin → an empty pouch. A progression
+    is readable; three unrelated shapes are not. The shoulder board also **shrinks** as it
+    degrades, so size carries the rank as well as colour — and the `low` strap is a plain strip
+    because a frayed edge would have mimicked the `high` board's fringe.
+  - **Every weak cue is drawn lighter than the robe, and never in a robe colour.** A dark belt on
+    a dark robe is invisible and a robe-coloured stitch is no stitch at all — either one silently
+    puts the low tier back to no signal. The helmet is raised clear of the brows for the same
+    class of reason: at its original height the brim cut straight across the eyes.
+- **The crown suppresses headwear** but nothing else. A king never wears the `high` helmet or the
+  `mid` headband, yet keeps the `low` scar — a scar is not headwear, and being wounded is not
+  being royalty. The tiers still report the number honestly; suppression belongs to the renderer,
+  which is what keeps `deriveAvatarTraits` testable without a DOM.
 - **Trait logic is a pure exported function**, `deriveAvatarTraits(character)`; the component
   only renders. That's what `LeaderAvatar.test.ts` tests — it needs no DOM, so it runs under
   the project's `node` vitest environment. Keep new traits in the pure function, not in JSX.
@@ -436,6 +574,17 @@ column, no new dependency.
   runtime data and is applied inline, as everywhere else.
 - Currently used for the leader-table hover preview (left side, mirroring the radar on the
   right). Reuse it anywhere a leader needs to be recognisable.
+- **Hovering the avatar explains the cues** — three rows (`武力 高 · 頭盔`), because a plumed helmet
+  and a gold board are only meaningful once you know what they encode. The wrapper is focusable and
+  carries the same text in `aria-label`, so keyboard and screen-reader users get it too. The row
+  mapping is a pure exported function, `avatarCues(traits)`, with **no strings in it** — the wording
+  is i18n's job, which keeps the mapping testable without a DOM. `className` goes on the **wrapper**,
+  not the `<svg>`: both call sites centre with `mx-auto`, which would measure against the
+  shrink-wrapped wrapper if it stayed on the SVG. The tooltip is `pointer-events-none` so moving the
+  cursor onto it cannot dismiss it before it is read
+- The hover preview panel is itself `pointer-events-none` (it must be, or entering it fires the row's
+  `mouseleave` and the panel flickers itself away), so the tooltip is reachable in the **detail
+  modal** but not in the transient table preview
 
 ### Type Safety
 
@@ -629,8 +778,10 @@ pnpm dev
 - **Express surfaces with Tailwind utilities.** Do not add a bespoke CSS class
   for a surface; the two that remain (`ds-gm-scroll`, `ds-gm-noscroll`) exist
   only because scrollbar pseudo-elements have no utility equivalent.
-- **Repeated surfaces get a module-scope `const`** at the top of the owning file
-  (`src/app/page.tsx`, `src/app/game/page.tsx`), not a CSS class.
+- **Repeated surfaces get a module-scope `const`** at the top of the owning module
+  (`src/app/page.tsx` for the home page, `src/app/game/styles.ts` for the game
+  page), not a CSS class. Anything the page *and* a sibling module both render
+  belongs in that shared module rather than being written twice.
 - **Pseudo-elements go through `before:` / `after:`**, not hand-written `::`
   rules. Use `@utility` when a pseudo-element must compose with a variant.
 - **Deliberate same-layer overrides need the important modifier** (suffix `!`),

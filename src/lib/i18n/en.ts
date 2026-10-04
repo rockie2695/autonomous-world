@@ -199,7 +199,23 @@ export const en = {
     noKing: 'No King',
   },
 
-  // ── 角色 / Character ────────────────────────────────────────────────────
+  // ── Leader Avatar ───────────────────────────────────────────────────────
+  // The avatar's hover tooltip explains which ability band each accessory is
+  avatar: {
+    label: 'Leader avatar: {detail}',
+    tier: {
+      high: 'High',
+      mid: 'Mid',
+      low: 'Low',
+    },
+    cue: {
+      wu: { high: 'Helmet', mid: 'Headband', low: 'Old scar' },
+      tong: { high: 'Gold board', mid: 'Plain steel board', low: 'Patched hemp strap' },
+      jing: { high: 'Abacus', mid: 'Cash coin', low: 'Empty pouch' },
+    },
+  },
+
+  // ── Character ───────────────────────────────────────────────────────────
   character: {
     name: 'Character Name',
     wu: 'Martial',
@@ -240,9 +256,27 @@ export const en = {
   },
 
   // ── 事件 / Events ───────────────────────────────────────────────────────
+  chart: {
+    round: 'Round',
+  },
   events: {
     title: 'Event Log',
     tab: 'Events',
+    filterFaction: 'Faction',
+    filterAll: 'All',
+    filterCategory: 'Category',
+    filterShow: 'Show',
+    filterPeople: 'People',
+    filterPlace: 'Places',
+    filterOther: 'Other',
+    filterReset: 'Clear filters',
+    filteredOut: 'No events match these filters',
+    catBattle: 'Battle',
+    catCharacter: 'Character',
+    catEconomy: 'Economy',
+    catFaction: 'Faction',
+    catAdmin: 'Administration',
+    catPlace: 'Expansion',
     battle: 'Battle',
     battleDesc: '{attacker} attacks {place}',
     defeat: 'Defeat',

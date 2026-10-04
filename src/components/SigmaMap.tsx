@@ -13,12 +13,24 @@
 
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
 import { drawDiscNodeHover } from 'sigma/rendering';
 import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
+import {
+  buildTerritoryField,
+  factionRegions,
+  neighbourMask,
+  nearestSite,
+  territoryAlpha,
+  NEIGHBOUR_BOTTOM,
+  NEIGHBOUR_LEFT,
+  NEIGHBOUR_RIGHT,
+  NEIGHBOUR_TOP,
+  type TerritorySite,
+} from '@/lib/territory';
 
 /**
  * 將 HSL 字串轉換為 hex 格式 / Convert HSL string to hex format
@@ -80,6 +92,29 @@ function readDesignToken(name: string, fallback: string): string {
 
 /** 發光／陰影 sprite 的像素尺寸 / Pixel size of the glow/shadow sprites */
 const SPRITE_SIZE = 64;
+
+/**
+ * 把 `#rgb` / `#rrggbb` 轉成三個 0–255 的通道值。
+ * Turn `#rgb` / `#rrggbb` into three 0–255 channels.
+ *
+ * 領地層要自己寫 ImageData，所以自己解色碼。圖節點的顏色一律是 hex（有主之地
+ * 已經過 hslToHex，無主之地固定 '#374151'），因此不必支援其他色彩格式。
+ * The territory layer writes its own ImageData, so it parses colours itself.
+ * Graph node colours are always hex, so no other format needs supporting.
+ */
+function hexToRgb(hex: string): [number, number, number] {
+  const raw = hex.replace('#', '');
+  const full =
+    raw.length === 3
+      ? raw
+          .split('')
+          .map((c) => c + c)
+          .join('')
+      : raw;
+  const value = Number.parseInt(full, 16);
+  if (Number.isNaN(value)) return [0, 0, 0];
+  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
+}
 
 /**
  * 建立一張中心向外淡出的徑向漸層 sprite，並依色票快取。
@@ -251,8 +286,14 @@ export function SigmaMap({
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
   const glowRef = useRef<HTMLCanvasElement>(null);
+  /** 領地圖層（最底層，area view）/ Territory layer (bottom-most, the area view) */
+  const territoryRef = useRef<HTMLCanvasElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
+  /** 讓領地層的點擊能借用主 effect 裡的 focusNode，不必重複一份動畫邏輯 /
+   *  Lets the territory layer reuse the main effect's focusNode instead of
+   *  duplicating the camera animation */
+  const focusPlaceRef = useRef<((node: string) => void) | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hoveredNodeRef = useRef<string | null>(null);
   const hoveredNeighborsRef = useRef<Set<string>>(new Set());
@@ -480,6 +521,10 @@ export function SigmaMap({
         { duration: animMs() }
       );
     };
+    // 領地層點擊時借用同一個 focusNode，避免複製一份鏡頭動畫 /
+    // The territory layer borrows this same focusNode rather than duplicating
+    // the camera animation
+    focusPlaceRef.current = focusNode;
 
     /** 鏡頭動畫到「整個世界剛好放得下」/ Animate the camera to fit the whole world */
     const fitWorld = () => {
@@ -689,6 +734,430 @@ export function SigmaMap({
   //      必須在此清除殘留的高亮，否則節點會殘留白色標籤底框）
   //    (while the popup overlay intercepts mouse events, leaveNode never
   //     fires — clear stale highlights here or nodes keep a white pill) ────
+
+  // ── 領地密度場 ──/ Territory density field
+  // 在 render 期間就從 places / factions 算出來，而不是在 effect 裡算完再 setState：
+  // 後者會觸發 lint 的 cascading-render 規則，而 Place 本身就帶 layoutX/layoutY，
+  // 並不必要等 sigma 的 graph 建好。
+  // Computed during render from places/factions rather than built inside the effect
+  // and pushed into state: the latter trips the cascading-render lint rule, and
+  // Place already carries layoutX/layoutY, so there is no reason to wait for sigma.
+  const territory = useMemo(() => {
+    const sites: TerritorySite[] = places.map((place) => ({
+      id: place.id,
+      x: place.layoutX,
+      y: place.layoutY,
+      faction: place.factionId,
+    }));
+    return {
+      sites,
+      field: buildTerritoryField(
+        sites,
+        CONFIG.TERRITORY_MAX_RESOLUTION,
+        CONFIG.TERRITORY_MARGIN,
+        CONFIG.TERRITORY_BLOB_RADIUS
+      ),
+    };
+  }, [places]);
+
+  // 要標名字的勢力區域；同時當成位置表與名字表的共同來源，兩者才會對齊 /
+  // The regions worth labelling. This is the single source for both the positions
+  // and the names, so the two lists cannot drift out of index alignment.
+  const territoryRegions = useMemo(() => {
+    if (!territory.field) return [];
+    return factionRegions(territory.field)
+      .filter(
+        (region) =>
+          region.cellCount >= CONFIG.TERRITORY_MIN_LABEL_CELLS
+      )
+      .slice(0, CONFIG.TERRITORY_MAX_LABELS);
+  }, [territory]);
+
+  const territoryLabels = useMemo(
+    () =>
+      territoryRegions.map((region) => {
+        const faction = factions.find((entry) => entry.id === region.key);
+        return {
+          id: region.key,
+          name: faction?.name ?? '',
+          color: faction?.color ?? '#94a3b8',
+        };
+      }),
+    [territoryRegions, factions]
+  );
+
+  // ── 勢力名字的 DOM 元素 / DOM elements for the faction names
+  // 位置每幀用 transform 寫，不進 state / Positioned per frame with a transform, never state
+  const territoryLabelEls = useRef<Array<HTMLSpanElement | null>>([]);
+
+  // ── 領地圖層 / Territory layer ──────────────────────────────────────────────
+// 拉遠時把「節點 + 道路」換成「每個地方所佔的面積」，類似 Stellaris 星系圖或
+// CK3 省份圖。這是最底層，掛 afterRender 重繪（與發光層同一個理由：沒有額外
+// rAF，閒置時零成本），而且只有鏡頭確實拉遠時才開啟互動。
+// When zoomed out this replaces "nodes + roads" with the area each place covers,
+// like a Stellaris galaxy map or CK3's province map. It is the bottom-most
+// layer, redrawn on afterRender for the same reason as the glow layer (no extra
+// rAF, so an idle map costs nothing), and it only takes pointer events while the
+// camera is genuinely zoomed out.
+useEffect(() => {
+  const sigma = sigmaRef.current;
+  const graph = graphRef.current;
+  const canvas = territoryRef.current;
+  const glow = glowRef.current;
+  const container = containerRef.current;
+  if (!sigma || !graph || !canvas || !glow || !container) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+// 密度場與調色盤都在 render 期間算好了（見上方 useMemo），這裡只負責畫 /
+  // The field and palette were computed during render (see the useMemo above);
+  // this effect only draws
+  const { sites, field } = territory;
+  if (!field) return;
+  territoryLabelEls.current = territoryRegions.map(() => null);
+
+  // 每個勢力索引的 RGB；索引順序對應 field.factions。顏色一律經過 hslToHex，
+  // 因為勢力色在資料庫裡是 hsl，WebGL 與 canvas 都要 hex。
+  // RGB per faction index, in field.factions order. Colours always go through
+  // hslToHex because faction colours are stored as hsl and both WebGL and canvas
+  // need hex
+  const colourOf = new Map<string, [number, number, number]>(
+    factions.map((faction) => [faction.id, hexToRgb(hslToHex(faction.color))])
+  );
+  const palette: [number, number, number][] = field.factions.map(
+    (key) => colourOf.get(key) ?? [55, 65, 81]
+  );
+
+  // 領地畫成離屏點陣圖並快取，只有 hover 的勢力改變時才重畫 /
+  // The territory is cached as an offscreen bitmap, repainted only when the
+  // hovered faction changes
+  const bitmap = document.createElement('canvas');
+  bitmap.width = field.width;
+  bitmap.height = field.height;
+  const bctx = bitmap.getContext('2d');
+  if (!bctx) return;
+
+  const paint = (lit: string | null) => {
+    const litIndex = lit === null ? -1 : field.factions.indexOf(lit);
+    const image = bctx.createImageData(field.width, field.height);
+    const data = image.data;
+    for (let cell = 0; cell < field.owner.length; cell++) {
+      const faction = field.owner[cell];
+      const at = cell * 4;
+      if (faction < 0) {
+        data[at + 3] = 0;
+        continue;
+      }
+      const px = cell % field.width;
+      const py = (cell - px) / field.width;
+      const colour = palette[faction] ?? [55, 65, 81];
+      // 被 hover 的勢力整片打亮、其餘壓暗，一眼看出「這塊是誰的」/
+      // Lighten the hovered faction's whole region and dim the rest, so it
+      // reads at a glance whose land this is
+      const alpha =
+        litIndex < 0
+          ? CONFIG.TERRITORY_FILL_ALPHA
+          : faction === litIndex
+            ? Math.min(1, CONFIG.TERRITORY_FILL_ALPHA + CONFIG.TERRITORY_HOVER_ALPHA)
+            : CONFIG.TERRITORY_FILL_ALPHA * 0.45;
+      // 無主之地是「地圖的一部分」，所以比節點用的深灰再亮一點，否則會和背景
+      // 融在一起、連邊界都看不出來 /
+      // Unowned land is still part of the map, so it is lifted above the node
+      // grey — otherwise it melts into the background and its border is lost
+      const body = 0;
+      const edge = body + (1 - body) * CONFIG.TERRITORY_RIM_LIGHT;
+
+      const shade = (offset: number, mix: number) => {
+        data[offset] = Math.round(colour[0] + (255 - colour[0]) * mix);
+        data[offset + 1] = Math.round(colour[1] + (255 - colour[1]) * mix);
+        data[offset + 2] = Math.round(colour[2] + (255 - colour[2]) * mix);
+        data[offset + 3] = Math.round(alpha * 255);
+      };
+
+      shade(at, body);
+      // 邊界逐邊畫：只把該方向那一排像素往白色混，border 才是細線而不是厚白塊。
+      // 每格畫自己那一側，兩鄰格才會剛好接成一條線。
+      // Rim per side: only that side's row of pixels mixes toward white, so the
+      // border is a hairline rather than a thick band. Each cell paints its own
+      // side so two neighbours meet edge-to-edge.
+      const mask = neighbourMask(field, px, py);
+      if ((mask & NEIGHBOUR_LEFT) !== 0) shade(at - 4, edge);
+      if ((mask & NEIGHBOUR_RIGHT) !== 0 && px < field.width - 1) shade(at + 4, edge);
+      if ((mask & NEIGHBOUR_TOP) !== 0) shade(at - field.width * 4, edge);
+      if ((mask & NEIGHBOUR_BOTTOM) !== 0 && py < field.height - 1) {
+        shade(at + field.width * 4, edge);
+      }
+    }
+    bctx.putImageData(image, 0, 0);
+  };
+  paint(null);
+
+  let viewWidth = 0;
+  let viewHeight = 0;
+  let dpr = 1;
+  let lit: string | null = null;
+  let hoveredPlaceId: string | null = null;
+
+  const resize = () => {
+    dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    viewWidth = rect.width;
+    viewHeight = rect.height;
+    canvas.width = Math.max(1, Math.round(rect.width * dpr));
+    canvas.height = Math.max(1, Math.round(rect.height * dpr));
+    draw();
+  };
+
+  const draw = () => {
+    const alpha = territoryAlpha(
+      sigma.getCamera().ratio,
+      CONFIG.TERRITORY_ZOOM_RATIO,
+      CONFIG.TERRITORY_FADE_RATIO
+    );
+
+    // 這些不透明度由鏡頭即時決定，屬於執行期資料，所以直接寫在 DOM 上而不走
+    // React state —— 每幀 setState 會讓整張地圖重新渲染 /
+    // These opacities are camera-driven runtime data, so they are written
+    // straight to the DOM instead of React state — a per-frame setState would
+    // re-render the whole map
+    // 領地是**疊在原圖上的半透明色層**，所以圖表本身**不會**淡出——這與較早的
+    // 版本相反，那個版本把節點與道路淡到 0，等於把地圖整張換掉，正是使用者指出的
+    // 「 Stellaris / CK3 是用地圖標出面積、不是另外畫一張圖」。
+    // 淡出的只有發光層（半透明色層疊上去時，過強的光暈會讓領地邊界糊掉）。
+    // The territory is a translucent tint *over* the map, so the graph does NOT
+    // fade — the opposite of the earlier version, which faded nodes and roads to
+    // zero and so replaced the map outright. Only the glow dims, since a strong
+    // halo under a translucent wash would blur the territory border.
+    canvas.style.opacity = String(alpha);
+    glow.style.opacity = String(1 - alpha * 0.75);
+    container.style.opacity = '1';
+    // 領地層在 sigma「之下」，所以必須讓 sigma 別攔指標事件，滑鼠才碰得到它；
+    // 滾輪與拖曳則由本層自己驅動相機（見下方 onWheel / onDrag）/
+    // The territory layer sits *under* sigma, so sigma has to stop taking pointer
+    // events or the cursor never reaches it. Wheel and drag are driven from this
+    // layer instead (see onWheel / onDrag below).
+    container.style.pointerEvents = alpha > 0.5 ? 'none' : 'auto';
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, viewWidth, viewHeight);
+    if (alpha <= 0) return;
+
+    // 把格子範圍對應到 viewport。這裡假設 camera angle 為 0（本專案兩處鏡頭
+    // 動畫都明確傳了 angle: 0），因此圖→viewport 只是縮放加平移。
+    // Map the grid extent onto the viewport. This assumes camera angle 0 — both
+    // camera animations here pass angle: 0 explicitly — so graph→viewport is a
+    // scale plus a translation.
+    const topLeft = sigma.graphToViewport({ x: field.minX, y: field.minY });
+    const bottomRight = sigma.graphToViewport({ x: field.maxX, y: field.maxY });
+    const sx = (bottomRight.x - topLeft.x) / (field.maxX - field.minX);
+    const sy = (bottomRight.y - topLeft.y) / (field.maxY - field.minY);
+
+    // 邊界要清楚，所以**關閉**平滑：開著會把 Voronoi 的格子糊成一片漸層，
+    // 那正是「不像 Stellaris」的原因。rim light 也只有在硬邊下才看得見。
+    // Crisp boundaries need smoothing OFF — with it on, the Voronoi cells blur
+    // into gradients, which is exactly why this did not read as Stellaris. The
+    // rim light is only visible on hard edges too.
+    // 這裡要**開啟**平滑：密度場本來就已經把邊界算成曲線，開平滑只是讓格子邊界
+    // 不再露出階梯，得到星雲一樣的有機形狀。這與 Voronoi 版本相反 —— 那個版本
+    // 關了平滑會變像素塊，開了則糊掉。
+    // Smoothing stays ON here, the opposite of the Voronoi version: the density
+    // field already computes the border as a curve, so smoothing only removes the
+    // last of the cell stepping and gives the organic nebula-like shape.
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
+    ctx.drawImage(bitmap, field.minX, field.minY, field.maxX - field.minX, field.maxY - field.minY);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // 勢力名字：位置由重心算，但每幀只寫 transform，不進 React state /
+    // Faction names: positioned from the centroid, but only the transform is
+    // written per frame — never React state
+    const showLabels = alpha > 0.6;
+    for (let i = 0; i < territoryLabelEls.current.length; i++) {
+      const el = territoryLabelEls.current[i];
+      const region = territoryRegions[i];
+      if (!el || !region) continue;
+      if (!showLabels) {
+        el.style.opacity = '0';
+        continue;
+      }
+      const vp = sigma.graphToViewport({ x: region.cx, y: region.cy });
+      el.style.opacity = '1';
+      el.style.transform = `translate(-50%, -50%) translate(${vp.x}px, ${vp.y}px)`;
+    }
+  };
+
+  const siteAt = (clientX: number, clientY: number) => {
+    const rect = canvas.getBoundingClientRect();
+    const graphPoint = sigma.viewportToGraph({
+      x: clientX - rect.left,
+      y: clientY - rect.top,
+    });
+    const index = nearestSite(sites, graphPoint.x, graphPoint.y);
+    return index < 0 ? null : sites[index];
+  };
+
+  const onMove = (event: MouseEvent) => {
+    const site = siteAt(event.clientX, event.clientY);
+    if (!site) {
+      canvas.style.cursor = '';
+      hoveredPlaceId = null;
+      setTooltip(null);
+      return;
+    }
+    const attrs = graph.getNodeAttributes(site.id) as {
+      placeData: Place;
+      factionData: Faction | null;
+      characterCount: number;
+    };
+    const rect = canvas.getBoundingClientRect();
+    setTooltip({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      place: attrs.placeData,
+      faction: attrs.factionData,
+      characterCount: attrs.characterCount,
+      // 這個視圖裡道路是隱藏的，所以沒有「相連地點」可列 /
+      // Roads are hidden in this view, so there are no linked places to list
+      linkedPlaces: [],
+    });
+    canvas.style.cursor = 'pointer';
+    hoveredPlaceId = site.id;
+
+    const key = attrs.factionData?.id ?? null;
+    if (key !== lit) {
+      lit = key;
+      paint(key);
+      draw();
+    }
+  };
+
+  const onLeave = () => {
+    canvas.style.cursor = '';
+    hoveredPlaceId = null;
+    setTooltip(null);
+    if (lit !== null) {
+      lit = null;
+      paint(null);
+      draw();
+    }
+  };
+
+  // ── 縮放與平移 ──/ Zoom and pan
+  // 領地層啟用時 sigma 容器是 pointer-events:none（否則底下的這層收不到
+  // hover），代價是 sigma 自己的 wheel/drag 監聽也一起失效——於是拉遠視圖
+  // 完全不能縮放與平移。這裡直接驅動相機補回來。
+  // While the territory layer owns the pointer, the sigma container is
+  // pointer-events:none (otherwise this lower layer never sees hover), and the
+  // cost is that sigma's own wheel/drag handlers go deaf too — so the zoomed-out
+  // view could not be zoomed or panned at all. Drive the camera directly here.
+  const onWheel = (event: WheelEvent) => {
+    event.preventDefault();
+    const camera = sigma.getCamera();
+    const rect = canvas.getBoundingClientRect();
+    const vx = event.clientX - rect.left;
+    const vy = event.clientY - rect.top;
+    // 以游標為中心縮放：先記下縮放前游標的圖座標，改變 ratio 後再取一次，
+    // 把差值補回鏡頭中心，zoomed-in 的那一點才不會從游標下跑掉。
+    // Zoom about the cursor: remember the graph point under the pointer, change
+    // the ratio, read it again, then shift the camera by the difference — so the
+    // point you are pointing at does not slide away.
+    const before = sigma.viewportToGraph({ x: vx, y: vy });
+    camera.setState({ ratio: camera.getBoundedRatio(camera.ratio * factorFor(event)) });
+    const after = sigma.viewportToGraph({ x: vx, y: vy });
+    camera.setState({
+      x: camera.x + (before.x - after.x),
+      y: camera.y + (before.y - after.y),
+    });
+    sigma.refresh();
+  };
+
+  const factorFor = (event: WheelEvent) => 1 - CONFIG.TERRITORY_ZOOM_STEP * event.deltaY;
+
+  let dragging = false;
+  let draggedFar = false;
+  let dragStart: { px: number; py: number; cx: number; cy: number } | null = null;
+
+  const onDown = (event: MouseEvent) => {
+    if (event.button !== 0) return;
+    const camera = sigma.getCamera();
+    dragging = true;
+    draggedFar = false;
+    dragStart = { px: event.clientX, py: event.clientY, cx: camera.x, cy: camera.y };
+    canvas.style.cursor = 'grabbing';
+  };
+
+  const onDrag = (event: MouseEvent) => {
+    if (!dragging || !dragStart) return;
+    const dxPx = event.clientX - dragStart.px;
+    const dyPx = event.clientY - dragStart.py;
+    if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) draggedFar = true;
+    // 把 viewport 的像素位移換算成圖座標位移。拖曳期間 ratio 不變，所以這個
+    // 換算比例是固定的；仍然每次重算，因為它便宜而且不會在 resize 後失準。
+    // Convert the viewport pixel delta into a graph delta. The ratio does not
+    // change mid-drag, so the scale is constant; it is still recomputed per move
+    // because that is cheap and cannot go stale after a resize.
+    const p0 = sigma.graphToViewport({ x: 0, y: 0 });
+    const p1 = sigma.graphToViewport({ x: 1, y: 1 });
+    const unitsPerPxX = 1 / (p1.x - p0.x);
+    const unitsPerPxY = 1 / (p1.y - p0.y);
+    sigma.getCamera().setState({
+      x: dragStart.cx - dxPx * unitsPerPxX,
+      y: dragStart.cy + dyPx * unitsPerPxY,
+    });
+    sigma.refresh();
+  };
+
+  const onUp = () => {
+    dragging = false;
+    dragStart = null;
+    canvas.style.cursor = '';
+  };
+
+  const onClick = () => {
+    // 拖曳之後瀏覽器還是會送 click；那時不該順手把地點聚焦 /
+    // The browser still fires click after a drag, and focusing a place then
+    // would be an accident
+    if (draggedFar) {
+      draggedFar = false;
+      return;
+    }
+    if (hoveredPlaceId) focusPlaceRef.current?.(hoveredPlaceId);
+  };
+
+  canvas.addEventListener('mousemove', onMove);
+  canvas.addEventListener('mouseleave', onLeave);
+  canvas.addEventListener('click', onClick);
+  canvas.addEventListener('wheel', onWheel, { passive: false });
+  canvas.addEventListener('mousedown', onDown);
+  canvas.addEventListener('mousemove', onDrag);
+  window.addEventListener('mouseup', onUp);
+  sigma.on('afterRender', draw);
+  sigma.on('resize', resize);
+  const resizeObserver = new ResizeObserver(resize);
+  resizeObserver.observe(canvas);
+
+  resize();
+
+  return () => {
+    canvas.removeEventListener('mousemove', onMove);
+    canvas.removeEventListener('mouseleave', onLeave);
+    canvas.removeEventListener('click', onClick);
+    canvas.removeEventListener('wheel', onWheel);
+    canvas.removeEventListener('mousedown', onDown);
+    canvas.removeEventListener('mousemove', onDrag);
+    window.removeEventListener('mouseup', onUp);
+    sigma.off('afterRender', draw);
+    sigma.off('resize', resize);
+    resizeObserver.disconnect();
+    // 離開時一定要還原，否則 sigma 會永久失去指標事件 /
+    // Restore on the way out, or sigma loses pointer events for good
+    container.style.opacity = '';
+    container.style.pointerEvents = '';
+    glow.style.opacity = '';
+    canvas.style.opacity = '';
+  };
+}, [places, factions]);
 
   useEffect(() => {
     // 清除 hover refs 並重繪。sigma 內部的 hoveredNode / highlightedNodes
@@ -1089,12 +1558,50 @@ export function SigmaMap({
     // The inner vignette frames the world and focuses the centre (token lives in
     // globals.css @theme static)
     <div className="w-full h-full relative shadow-ds-map-vignette">
-      {/* 節點發光 + 陰影（最底層裝飾）/ Node glow + drop shadow (bottom decoration layer)
+      {/* 領地圖的勢力名字（DOM 而非 canvas：字體與 i18n 直接沿用現有設定，
+          每幀只改 transform）/ Faction names on the territory map. Rendered as DOM
+          rather than on the canvas so they inherit the app's fonts and i18n, and
+          positioned per frame with a transform only. */}
+      {territoryLabels.length > 0 && (
+        <div className="pointer-events-none absolute inset-0 z-[1] overflow-hidden">
+          {territoryLabels.map((label, index) => (
+            <span
+              key={label.id}
+              ref={(el) => {
+                territoryLabelEls.current[index] = el;
+              }}
+              className="absolute left-0 top-0 whitespace-nowrap font-orbitron text-sm tracking-widest opacity-0"
+              style={{
+                color: label.color,
+                // 勢力色是執行期資料；文字陰影讓名字在深色與淺色領地上都讀得到 /
+                // Faction colour is runtime data. The shadow keeps the name legible
+                // on both dark and light territory
+                textShadow: '0 0 6px #020617, 0 1px 2px #020617',
+              }}
+            >
+              {label.name}
+            </span>
+          ))}
+        </div>
+      )}
+      {/* 領地圖層（最底層：拉遠時的面積視圖）/ Territory layer (bottom-most: the area view when zoomed out)
+          必須在發光層「之前」—— 領地是背景，發光、聚光燈與節點都要壓在它上面。
+          刻意不加 pointer-events-none：拉遠時這一層要自己收 hover / click。
+          所以互動是靠 draw() 把 sigma container 的 pointer-events 關掉來讓路，
+          因為它在 DOM 上位於 sigma 之下。
+          Must come BEFORE the glow: territory is the background, so the glow, the
+          spotlight and the nodes all paint on top of it. Deliberately NOT
+          pointer-events-none — while zoomed out this layer handles hover and
+          click itself. draw() yields to it by switching the sigma container's
+          pointer-events off, since sigma sits above it in the DOM. */}
+      <canvas ref={territoryRef} className="absolute inset-0 w-full h-full" />
+      {/* 節點發光 + 陰影 / Node glow + drop shadow
           w-full h-full 理由同覆蓋層：canvas 是替換元素 / same reason as the overlay: canvas is a replaced element
-          DOM 順序：發光層 → 聚光燈層 → sigma container。發光要在聚光燈環之下，
+          DOM 順序：領地層 → 發光層 → 聚光燈層 → sigma container。發光要在聚光燈環之下，
           sigma 的節點與標籤又在最上面。
-          DOM order: glow → spotlight overlay → sigma container. The glow sits under
-          the spotlight rings, and sigma's nodes and labels sit above both. */}
+          DOM order: territory → glow → spotlight overlay → sigma container. The
+          glow sits under the spotlight rings, and sigma's nodes and labels sit
+          above both. */}
       <canvas
         ref={glowRef}
         className="absolute inset-0 w-full h-full pointer-events-none"

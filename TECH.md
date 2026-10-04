@@ -94,7 +94,7 @@ src/app/
 │       ├── run-round/     # POST /api/admin/run-round
 │       ├── reset-world/   # POST /api/admin/reset-world
 │       └── assign-admin/  # POST /api/admin/assign-admin
-├── game/                  # 主遊戲頁面（含 SigmaMap、EventLog、StatsCharts）
+├── game/                  # 主遊戲頁面（頁面本體 + 事件日誌 + 統計圖表等模組，見下）/ Main game page (orchestrator plus the EventLog / stats-charts modules)
 ├── page.tsx                # 首頁 (Server Component)
 ├── layout.tsx              # 全域佈局
 └── globals.css             # 全域樣式
@@ -618,12 +618,16 @@ namespace for it, so it stays in `:root`.
    New design value → add it to `@theme static`. Never hardcode a colour, size,
    spacing, radius, shadow, or duration in TSX.
 2. **用 utility 表達表面**，不要新增自訂元件類別。`src/app/page.tsx` 與
-   `src/app/game/page.tsx` 頂端各有一組模組層級的常數，把重複的 utility 字串
-   收在一處，避免同一串類別在多檔之間漂移。
-   Express surfaces with utilities; do not add bespoke component classes. Each
-   of `src/app/page.tsx` and `src/app/game/page.tsx` declares its repeated
+   `src/app/game/styles.ts` 各有一組模組層級的常數，把重複的 utility 字串
+   收在一處，避免同一串類別在多檔之間漂移。遊戲頁之所以把常數獨立成
+   `styles.ts`，是因為頁面本體、事件日誌、統計圖表與將領彈窗都會用到同一組
+   面板／按鈕／骨架字串。
+   Express surfaces with utilities; do not add bespoke component classes.
+   `src/app/page.tsx` and `src/app/game/styles.ts` each declare their repeated
    utility strings once at module scope so the same class list cannot drift
-   between files.
+   between files. The game page keeps them in a separate module because the page
+   itself, the event log, the stats charts and the leader modal all render the
+   same panel / button / skeleton surfaces.
 3. **同層覆寫要加 important 修飾符（後綴 `!`）**。過去自訂類別在
    `@layer components`、utility 在 `utilities` 層，前者永遠輸給後者。現在兩者
    同層，這條保護消失，刻意要覆寫時必須寫 `text-xs!`。
@@ -1451,7 +1455,7 @@ nodeSize = 4 + log(troops + 1) × 2     // troops = garrison + 該地點所有�
 - ForceAtlas2 全域重算每 `LAYOUT_RECALC_INTERVAL(100)` 回合
 - 新節點：鄰居重心 + 隨機偏移 `radius ∈ [20, 50]`；最小節點間距 15，碰撞重試 10 次
 
-#### 統計圖表 / Stats Charts（`src/app/game/page.tsx`）
+#### 統計圖表 / Stats Charts（`src/app/game/stats-charts.tsx`）
 
 統計分頁畫兩件獨立的東西：九張時間序列圖（可切四種樣式），加上一張勢力力量區塊圖
 與一張將領雷達圖。
@@ -1552,18 +1556,46 @@ const hairStyle = HAIR_STYLES[rng.int(0, HAIR_STYLES.length - 1)];
 // 真實資料只在抽取「之後」覆寫，因此不會影響其他特徵的分佈
 // Real data overrides only *after* the draws, so it cannot skew their spread
 if (character.age >= GREY_HAIR_AGE) hairColor = ...;
-return { ..., helmet: !isKing && wu >= HELMET_WU, crown: isKing };
+return { ..., crown: isKing, wuTier: tierFor(character.wu) };
 ```
 
 資料如何影響外觀 / how real data shows up:
 
 | 資料 | 影響 |
 |------|------|
-| `isKing` | 王冠（且**不**戴頭盔，否則王冠會被蓋掉） |
-| `wu ≥ 25` | 頭盔 |
+| `isKing` | 王冠（且**不**戴頭飾，否則王冠會被蓋掉） |
 | `age ≥ 60` | 髮色轉灰／白，且較容易留鬍 |
-| `ambition ≥ 20` | 眉壓低， 看起來較兇 |
-| 陣營色 | 衣袍與底色 |
+| `ambition ≥ 20` | 眉壓低，看起來較兇 |
+| 陣營色 | 衣袍、額帶與底色 |
+
+三項能力各自分**三段**（`high` / `mid` / `low`），門檻集中在 `gameConfig` 之外的一組常數：
+`tierFor()` 以 `ABILITY_HIGH = 25`、`ABILITY_MID = 18` 切開 5–30 的值域。
+
+| 段 | `wu`（頭） | `tong`（肩） | `jing`（胸前） |
+|----|------|--------|--------|
+| high | 有盔翎的頭盔 | 寬金肩章 + 流蘇 | 算盤 |
+| mid | 有結的額帶 | 素鋼肩章 | 方孔銅錢 |
+| low | 疤痕 | 細麻補丁肩帶 | 空的束口袋 |
+
+舊規則只有 `high` 給配件，結果約八成的將領身上完全讀不出能力差異。`mid` 是最常見的一檔，
+所以「大多數將領有額帶、素肩章、銅錢」本身就是資訊；`low` 則刻意畫成破舊的樣子，讓強弱一眼可辨。
+
+`TIER_MATERIAL` 把三段對應到**三種材質**（金 / 鋼 / 麻），三項能力共用同一組顏色，所以階級
+是橫向可比的。銅錢一定要挖方孔——圓外形人人會畫，方孔才是辨識關鍵。
+
+四條渲染規則是實際渲染 27 種組合後才發現的 / four rendering rules, each learned from
+rendering all 27 combinations:
+
+1. **各占一個身體區域**：`wu` 在頭、`tong` 在肩、`jing` 在胸前中央。舊版把披巾／細繩與
+   算盤珠／銅錢／補丁全擠在胸口與腰間，於是互相干擾而看不清楚。
+2. **同一個物件逐級劣化**：肩章是金寬板 → 素鋼板 → 細麻補丁；經濟是滿算盤 → 一枚銅錢 → 空袋。
+   漸層看得見「順序」，三個無關物件則看不出來。肩章劣化時**還會變小**，因此大小也帶著階級。
+3. **弱的線索要比衣袍亮，且絕不用衣袍的顏色**：深色腰帶疊在深色衣袍上等於看不見，與衣袍同色的
+   縫線等於沒有縫線——兩者都會讓 `low` 段悄悄地退回「沒有訊號」。`low` 肩帶刻意是一條素帶，
+   因為毛邊會模仿 `high` 肩章的流蘇。頭盔也往上挪到眉毛之上，原本的高度讓盔緣直接橫切過雙眼。
+4. **王冠壓掉頭飾**：君王不戴 `high` 頭盔、也不戴 `mid` 額帶，但保留 `low` 疤痕——疤痕不是
+   頭飾，受過傷不等於是君王。分級本身如實回報數值，抑制是渲染層的工作，這樣
+   `deriveAvatarTraits` 才測得到分級。
 
 **特徵邏輯是純函式** `deriveAvatarTraits(character)`，元件只負責畫。測試因此不需要 DOM，
 可以在專案既有的 `node` vitest 環境下跑（`LeaderAvatar.test.ts`）—— 專案的 vitest 只收
@@ -1883,6 +1915,53 @@ The 將領 / 事件 / 統計 tabs are absolutely positioned over the map's right
 rather than being a layout column, so the map keeps its full width. The HUD camera controls
 shift left by `26rem` while the panel is open, and **only from `lg` up** — a fixed offset
 pushes them off-screen on narrow viewports.
+
+### 領地圖 / Territory View
+
+每個地方各自宣稱一塊範圍，同勢力的宣稱**合併**，兩方宣稱相遇處形成邊界 —— 也就是
+Stellaris / CK3 的做法。**領地是蓋在原圖上的半透明色層**：節點、道路、光暈都保持
+不透明，無主之地不上色，所以地形與領地可以同時閱讀。
+
+`src/lib/territory.ts` 是**純邏輯**，所以可以在專案的 `node` vitest 環境下直接測：
+
+```typescript
+// faction 為 null 代表「此地不宣稱任何領土」，密度場會跳過它
+const field = buildTerritoryField(sites, MAX_RES, MARGIN, BLOB_RADIUS);
+const site = nearestSite(sites, gx, gy);   // hover／點擊：一次查詢就夠，不做網格
+const mask = neighbourMask(field, px, py); // 邊界畫在哪些邊
+```
+
+### 為什麼不能用 Voronoi / Why not a Voronoi partition
+
+最直覺的作法是「每格歸給最近的地方」。那是錯的，理由有兩個，而第二個更要緊：
+
+1. 格子邊界會露出階梯，看起來像像素圖。
+2. **同一勢力相鄰的兩個地方之間會多出一條邊界。** 這正是「看起來像 pixel art 而不是
+   Stellaris」的主因。
+
+正確做法是密度場：每個地方投出一個平滑衰減 `falloff`，同勢力用機率 OR
+（`1 - Π(1 - wᵢ)`）合併，每格取密度最高者。相加會讓領地廣的勢力在遠處持續累積、
+無限膨脹；機率 OR 上限為 1，一個勢力只有在**附近真的有地**時才可能贏。場是平滑的，
+所以邊界是兩條場相等處的曲線 —— 這就是「距離決定邊界」，而相鄰同勢力自然融合。
+
+### 四個容易踩到的地雷
+
+1. **無主之地不能上色。** 把它當成一個巨大的灰色勢力會把地圖整張蓋掉；CK3 的 map mode
+   是把勢力色當成**蓋在地圖上的半透明色層**，未宣稱的土地完全不動。
+   `TerritorySite.faction` 因此是 `string | null`，`null` = 不宣稱領土，但仍算進最近鄰距離，
+   因為宣稱半徑必須跟整張地圖的疏密一致。
+2. **半徑要相對。** 用「最近鄰距離平均 × 倍數」，不要用固定世界座標常數，否則地方一多
+   就糊成一片、地方一少就小到看不見。
+3. **邊界要逐邊畫。** 把整格點亮會變成厚白塊；共用接縫又會變成兩條線。要用
+   `neighbourMask()` 逐邊只點亮該方向那一排像素。
+4. **領地層在 sigma「之下」**，所以 `draw()` 必須把 `container.style.pointerEvents` 設成
+   `none`；代價是 sigma 自己的 wheel/drag 也失效了，於是本層要自己驅動相機
+   （`onWheel` 以游標為中心縮放、`onDrag` 平移），離開時一定要還原。
+
+密度場在 **render 期間**用 `useMemo` 從 `places` 算出來，不在 effect 裡算完再 setState：
+`Place` 本來就帶 `layoutX`/`layoutY`，而 effect 內同步 setState 會觸發 lint 的
+cascading-render 規則。`imageSmoothing` 保持**開啟**：場本身已把邊界算成曲線，平滑只是
+去掉最後一點格子階梯。
 
 ---
 

@@ -95,7 +95,8 @@ autonomous-world/
 │   │   │       ├── run-round/     # POST /api/admin/run-round
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
 │   │   │       └── assign-admin/  # POST /api/admin/assign-admin
-│   │   ├── game/                  # Main game page (with SigmaMap, EventLog, StatsCharts)
+│   │   ├── game/                  # Main game page — page.tsx orchestrates; EventLog.tsx,
+│   │   │                          # stats-charts.tsx, leader-detail.tsx, types/icons/styles hold the rest
 │   │   ├── layout.tsx             # Root layout (with QueryProvider)
 │   │   ├── page.tsx               # Homepage
 │   │   └── globals.css            # Global styles
@@ -121,7 +122,7 @@ autonomous-world/
 │   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
 │   ├── LeaderAvatar.tsx           # Procedural leader head bust (seeded from character.id)
 │   └── home/                      # Homepage sections (three.js scenes, live poller, hooks)
-│                                  # (EventLog & StatsCharts are defined in game/page.tsx)
+│                                  # (the event log and charts live in src/app/game/)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
 │   ├── adminAssign.ts             # grantAdmin/revokeAdmin — shared admin assignment rules (ambition + cooldown)
@@ -191,7 +192,16 @@ The game features an interactive force-directed graph map using Sigma.js:
 - Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
 - Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.6), independent of garrison; labels always paint above the spotlight overlay. The hovered place, the selected place, and the hovered place's connected neighbours are the one exception — they keep their names at any zoom, so you can read what a place links to
 - **Zoom controls** — a slider between the zoom-out and zoom-in buttons scrubs the camera ratio directly and shows the level as a percentage (`MAP_ZOOM_MIN_RATIO` 0.05 – `MAP_ZOOM_MAX_RATIO` 8)
+- **Territory view** — zoom out past `TERRITORY_ZOOM_RATIO` and each place projects a claim, marking
+  the area those claims cover: the CK3 map-mode / Stellaris galaxy-map idea. Same-faction claims
+  **merge** into one region, and where two factions' claims meet, distance decides the border. It is
+  a translucent tint **over** the map, not a repaint of it — the graph, roads and glow stay visible
+  underneath — and unowned land is never coloured, because CK3 leaves unclaimed land untouched.
+  Hovering a region lifts that faction's territory and dims the rest, clicking focuses that place,
+  and the view still zooms and pans
 - The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
+- **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
+- **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader
 - **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
 - **Node glow + drop shadow** — a second, static overlay canvas under the spotlight layer and under Sigma paints a soft faction-colored halo behind every place, scaled by its on-screen size; it redraws on camera moves only, so an idle map costs nothing
@@ -212,13 +222,30 @@ The stats tab renders nine time-series charts in four switchable styles:
 Selecting **Treemap** replaces the nine charts with the single combined view, since it is a
 view of faction power rather than another rendering of one metric.
 
+- **Hover tooltips** — all four styles plus the treemap share one tooltip panel and one legend,
+  so hover reads the same everywhere. Line and bar draw a crosshair that snaps to the nearest
+  round; pie hit-tests the slice under the cursor; the gauge shows 目前 vs 峰值. The gauge and
+  the treemap deliberately show **no round heading** — both are current snapshots rather than
+  one round. The panel flips to the cursor's left near the right edge so it is never clipped
 - **Character radar** — one polygon per faction showing its living characters' mean attributes
   across 武力 / 統領 / 經濟 / 速度 / 野心 / 年齡, with the world average as a dashed reference
 - **Leader hover preview** — hovering a row of the leader table floats the leader's radar on the
   right and their procedurally generated head on the left
 - **Leader avatars** are generated from the character id, so a leader always has the same face
-  without storing anything; kings get a crown, high 武力 a helmet, high 統領 a sash, high 經濟
-  abacus beads, age greys the hair, and the faction colors the robe
+  without storing anything; kings get a crown, age greys the hair, and the faction colors the robe
+- Each of 武力 / 統領 / 經濟 is banded **three** ways, so *every* leader carries a readable cue
+  instead of only the strongest few, and each cue owns its own body region so they never overlap:
+
+  | Band | 武力 (head) | 統領 (shoulders) | 經濟 (chest) |
+  |------|------|--------|--------|
+  | high | plumed helmet | wide gold board + fringe | abacus |
+  | mid | knotted headband | plain steel board | square-holed cash coin |
+  | low | scar | thin patched hemp strap | empty drawstring pouch |
+
+  All three abilities share one material language — gold is an officer, steel a lieutenant, hemp
+  a commoner — so rank compares across stats, and the low band is deliberately made to look worn
+- **Hovering a leader's avatar explains those cues**, listing all three (武力 高 · 頭盔). The same
+  text is on the wrapper's `aria-label`, so keyboard and screen-reader users get it too
 - Each axis on a radar normalises against its own maximum (age tops out far above the ability
   stats), so edge lengths are not comparable across axes — read the shape, not the numbers
 
