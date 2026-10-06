@@ -280,6 +280,34 @@ export const CONFIG = {
   BATTLE_FLEET_LINE_ALPHA: 0.14,
   /** 曳光飛彈拖尾長度（世界單位）/ Tracer tail length in world units */
   BATTLE_FLEET_BOLT_LEN: 26,
+  /** 頭像呼吸：胸口在 SVG 單位的起伏量 / Avatar breathing: chest rise, in SVG units */
+  AVATAR_BREATH_RISE: 0.012,
+  /** 頭像呼吸：胸口上移量（SVG 單位）/ Avatar breathing: chest lift, in SVG units */
+  AVATAR_BREATH_LIFT: 0.9,
+  /** 頭像呼吸：頭部後仰量（SVG 單位），必須小於胸口才不會像整張圖在動 /
+   *  Avatar breathing: head tilt in SVG units; must be smaller than the chest or
+   *  the whole image reads as one moving mass */
+  AVATAR_BREATH_HEAD_LIFT: 0.45,
+
+  // ── 太空塵埃背景 / Space dust background ───────────────────────────────────
+  // 氣氛，不是主角：地圖上的圓點與道路才是資訊。所以顆粒小、暗、慢、少。
+  //
+  // Atmosphere, not the protagonist: the dots and roads on the map are the
+  // information. So the particles are small, dim, slow and few.
+  //
+  // 刻意留在這一份 CONFIG 裡，不另開 UI_CONFIG —— 專案只有一份 CONFIG。
+  //
+  // Deliberately in this one CONFIG rather than a separate `UI_CONFIG`: the project
+  // keeps exactly one.
+  SPACE_PARTICLE_COUNT: 300,        // 粒子數（上限 800）/ particle count (hard cap 800)
+  SPACE_PARTICLE_MAX_SPEED: 0.15,   // 每幀最大位移（px）/ max travel per frame, px
+  SPACE_PARTICLE_MIN_SIZE: 0.5,     // 最小半徑 / min radius
+  SPACE_PARTICLE_MAX_SIZE: 1.8,     // 最大半徑 / max radius
+  SPACE_PARTICLE_MIN_ALPHA: 0.15,   // 最小不透明度 / min opacity
+  SPACE_PARTICLE_MAX_ALPHA: 0.7,    // 最大不透明度 / max opacity
+  SPACE_PARTICLE_TWINKLE: 0.01,     // 閃爍速度 / twinkle rate
+  SPACE_PARTICLE_RGB: '180, 220, 255', // 基礎色（不透明度另外乘）/ base colour, opacity applied separately
+  SPACE_DPR_CAP: 2,                 // DPR 上限，4K 螢幕不要用原值 / DPR cap; do not use the native value on 4K
   /** 艦隊的前後深度展開（世界單位），給 3D 場景分層用 / Depth spread for layering the fleet in 3D */
   BATTLE_FLEET_DEPTH: 40,
 

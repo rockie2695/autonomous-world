@@ -40,9 +40,10 @@
 //    A progression is readable, three unrelated shapes are not.
 // ============================================================================
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createRng } from '@/lib/rng';
 import { t } from '@/lib/i18n';
+import { CONFIG } from '@/lib/gameConfig';
 
 /** 頭像只需要這些欄位 / The only fields the avatar needs */
 export interface AvatarCharacter {
@@ -141,6 +142,60 @@ interface LeaderAvatarProps {
   /** 邊長（px）/ Edge length in px */
   size?: number;
   className?: string;
+  /**
+   * 是否讓頭像「呼吸」/ Whether the avatar breathes.
+   *
+   * 預設關閉。呼吸在 40px 的列表列幾乎看不出來，卻會讓整列表持續重繪；只有
+   * 大尺寸的單一展示（詳情彈窗）才值得開，而且那裡本來就只掛一個實例。
+   *
+   * Off by default. Breathing is barely legible at the ~40px list size but keeps
+   * a whole list repainting; it is only worth it for a single large presentation
+   * (the detail modal), which has exactly one instance anyway.
+   */
+  breathe?: boolean;
+}
+
+/**
+ * 一次呼吸的週期（秒）/ One breath cycle, in seconds.
+ *
+ * 真人的安靜呼吸約每分鐘 12–20 次，也就是 3–5 秒一輪。這裡取 4 秒。
+ *
+ * A resting human breathes 12–20 times a minute, i.e. a 3–5 second cycle. 4s it is.
+ */
+export const BREATH_PERIOD_S = 4;
+
+/**
+ * 某個相位下的呼吸量，0..1。純函式，所以可以在沒有 DOM 的情況下測。
+ * The breath amount at a given phase, 0..1. Pure, so it is testable without a DOM.
+ *
+ * 用 `sin` 的**一半**週期（0 → 1 → 0），而不是整個週期：整個週期的話吸氣與
+ * 呼氣會各佔一半但方向相反，看起來像「忽大忽小」而不是起伏。用半週期加一個偏置，
+ * 上升比下降慢一點，才像真的在呼吸。
+ *
+ * Half a sine period (0 → 1 → 0), not a whole one: a whole period makes the rise
+ * and fall symmetrical, which reads as "pulsing" rather than breathing. A half
+ * period with a bias makes the inhale slower than the exhale.
+ *
+ * @param tSeconds - 自循環起點經過的秒數 / seconds since the cycle started
+ * @returns 0（吐氣末端）到 1（吸氣頂點）/ 0 (end of exhale) to 1 (top of inhale)
+ */
+export function breathAmount(tSeconds: number): number {
+  const cycle = (tSeconds % BREATH_PERIOD_S) / BREATH_PERIOD_S;
+  // 峰值落在 0.45，不是 0.5 —— 讓吸氣比呼氣短，這才是呼吸而不是脈動 /
+  // The peak sits at 0.45, not 0.5 — a shorter inhale is what makes it read as
+  // breathing rather than pulsing
+  const PEAK = 0.45;
+  // 以峰值為中心取半個正弦，並用偏置把峰值拉回 1。`sin` 在 0.45 處並不是 1，
+  // 所以正規化是必要的，否則這張臉永遠吸不到頂。
+  //
+  // A half sine centred on the peak, then normalised so the peak actually reaches
+  // 1: `sin` is not 1 at 0.45, so without the normalisation the face never finishes
+  // an inhale.
+  const sine = cycle <= PEAK ? Math.sin((cycle / PEAK) * (Math.PI / 2)) : Math.sin(((1 - cycle) / (1 - PEAK)) * (Math.PI / 2));
+  // 峰值處的 sine 值，用來反向正規化 /
+  // `sin` at the peak, used to normalise in reverse
+  const peakSine = Math.sin(Math.PI / 2);
+  return Math.min(1, sine / peakSine);
 }
 
 /** 一張臉所有已解析的特徵 / Every resolved trait that makes up one face */
@@ -266,6 +321,7 @@ export function LeaderAvatar({
   factionColor,
   size = 96,
   className,
+  breathe = false,
 }: LeaderAvatarProps) {
   const traits = deriveAvatarTraits(character);
   const { skin, hairColor, hairStyle, eyeShape, mouthShape, facialHair } = traits;
@@ -273,6 +329,69 @@ export function LeaderAvatar({
   // 提示預設收合，只有 hover 或鍵盤 focus 才出現 /
   // The tooltip stays collapsed until hover or keyboard focus
   const [showCues, setShowCues] = useState(false);
+
+  // ── 呼吸 / Breathing ───────────────────────────────────────────────────────
+  // 動畫用 `requestAnimationFrame` 直接寫 SVG 元素的 transform，**不進 React
+  // state**：每幀一次 setState 會讓整個頭像（以及它的所有呼叫點）跟著重繪，而這裡
+  // 要動的只有兩個節點。
+  //
+  // The animation drives `requestAnimationFrame` straight onto two SVG nodes and
+  // keeps **out of React state**: a per-frame setState would re-render the whole
+  // avatar and every call site, when only two nodes need to move.
+  const chestRef = useRef<SVGGElement>(null);
+  const headRef = useRef<SVGGElement>(null);
+  useEffect(() => {
+    if (!breathe) return;
+    const chest = chestRef.current;
+    const head = headRef.current;
+    if (!chest || !head) return;
+
+    const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    let raf = 0;
+    let start = 0;
+    let reduced = motionQuery.matches;
+
+    const apply = (amount: number) => {
+      // 胸口起伏 + 頭部微幅後仰：兩個節點不同相位才不會像整張圖在縮放 /
+      // Chest rise plus a slight head tilt; the two nodes are out of phase so it
+      // does not read as the whole image scaling
+      const rise = 1 + amount * CONFIG.AVATAR_BREATH_RISE;
+      chest.setAttribute('transform', `translate(0 ${(amount * CONFIG.AVATAR_BREATH_LIFT).toFixed(3)}) scale(1 ${rise.toFixed(4)})`);
+      head.setAttribute('transform', `translate(0 ${(amount * CONFIG.AVATAR_BREATH_HEAD_LIFT).toFixed(3)})`);
+    };
+
+    // 收斂動態效果時只畫一格，不啟動迴圈 /
+    // Under reduced motion, render a single frame and start no loop
+    if (reduced) {
+      apply(0);
+      return;
+    }
+
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      if (start === 0) start = now;
+      apply(breathAmount((now - start) / 1000));
+    };
+    raf = requestAnimationFrame(loop);
+
+    const onMotionChange = () => {
+      reduced = motionQuery.matches;
+      if (reduced) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        apply(0);
+      } else if (raf === 0) {
+        start = 0;
+        raf = requestAnimationFrame(loop);
+      }
+    };
+    motionQuery.addEventListener('change', onMotionChange);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      motionQuery.removeEventListener('change', onMotionChange);
+    };
+  }, [breathe]);
   const cueRows = avatarCues(traits).map((cue) => ({
     ...cue,
     statLabel: t(`character.${cue.stat}`),
@@ -329,6 +448,15 @@ export function LeaderAvatar({
       {/* 頸部陰影：讓頭不會像貼在脖子上 / A neck shadow so the head is not pasted on */}
       <ellipse cx="50" cy="60.5" rx="7" ry="2.6" fill="#0f172a" opacity={0.22} />
 
+      {/* ── 胸口起伏 / The breathing chest ──
+          衣袍、肩章與頸前配件全部包在這一組裡，所以呼吸時它們會一起動；頭部另外
+          一組，兩者不同相位。呼吸預設關閉（見 `breathe`），所以這兩個 transform
+          在沒開時不會被寫入。
+          The robe, shoulder board and neck pieces all live in this group so they
+          rise together; the head is a second group, out of phase. Breathing is off
+          by default (see `breathe`), so these transforms are never written unless
+          it is on. */}
+      <g ref={chestRef}>
       {/* 衣袍與肩膀 / Robe and shoulders */}
       <path d="M5 100 Q50 40 95 100 Z" fill={robe} />
 
@@ -448,7 +576,10 @@ export function LeaderAvatar({
           />
         </g>
       )}
+      </g>
 
+      {/* ── 頭部（呼吸時微幅後仰）/ The head, which tilts slightly while breathing ── */}
+      <g ref={headRef}>
       {/* 耳 / Ears */}
       <circle cx={50 - faceRx + 1} cy="46" r="3.2" fill={skin} />
       <circle cx={50 + faceRx - 1} cy="46" r="3.2" fill={skin} />
@@ -620,6 +751,7 @@ export function LeaderAvatar({
           <circle cx="50" cy="9" r="2.4" fill="#ef4444" />
         </>
       )}
+      </g>
       </svg>
       {showCues && (
         // pointer-events-none：滑鼠移到提示上不能讓它自己消失，否則 tooltip

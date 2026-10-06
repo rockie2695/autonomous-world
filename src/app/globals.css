@@ -335,6 +335,23 @@ body {
      frames the world and pulls the eye toward the centre */
   --shadow-ds-map-vignette: inset 0 0 170px 34px rgba(2, 6, 23, 0.66);
 
+  /* 深空底色：兩團極淡的星雲 + 一道垂直漸層。純裝飾，所以住在 @theme static 當
+     token，再由 Tailify utility 引用——不另開一個 .space-bg class。/
+     The deep-space base: two very faint nebula washes over a vertical gradient.
+     Purely decorative, so it lives in @theme static as a token and is referenced
+     by utility — not a bespoke `.space-bg` class. */
+  --color-ds-space: linear-gradient(
+    180deg,
+    #05060a 0%,
+    #0a0c14 50%,
+    #05060a 100%
+  );
+  --color-ds-space-nebula: radial-gradient(
+    ellipse at 20% 30%,
+    rgba(30, 20, 80, 0.4) 0%,
+    transparent 50%
+  ), radial-gradient(ellipse at 80% 70%, rgba(20, 40, 90, 0.3) 0%, transparent 50%);
+
   /* ── 缓動 / Easing ───────────────────────────────────────────────────── */
   --ease-ds: cubic-bezier(0.22, 0.61, 0.36, 1);
 
@@ -364,6 +381,11 @@ body {
   --ds-ease: var(--ease-ds);
   --ds-glow-cyan: var(--shadow-ds-glow);
   --ds-map-vignette: var(--shadow-ds-map-vignette);
+  /* 底色與星雲疊成單一 utility；`space` 是底，`space-nebula` 疊在它上面 /
+     The base and the nebula compose into one utility pair: `space` underneath,
+     `space-nebula` layered on top of it */
+  --gradient-ds-space: var(--color-ds-space);
+  --gradient-ds-space-nebula: var(--color-ds-space-nebula);
 }
 
 html {

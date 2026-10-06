@@ -42,6 +42,14 @@ const BattleFleet = dynamic(
   () => import('@/components/BattleFleet').then((mod) => mod.BattleFleet),
   { ssr: false }
 );
+// 太空塵埃層。跟艦隊分開動態載入，因為它是第一個出現的層，早到可以獨立載入，
+// 晚載也不會擋住地圖。/
+// The dust layer. Loaded separately from the fleet because it paints first, so it
+// can arrive on its own without holding the map back.
+const SpaceDust = dynamic(
+  () => import('@/components/SpaceDust').then((mod) => mod.SpaceDust),
+  { ssr: false }
+);
 
 // ============================================================================
 // 表面 utility / Surface utilities — Tailwind v4
@@ -1302,11 +1310,17 @@ function LeaderDetail({
   return (
     <div className="flex flex-col gap-4 sm:flex-row">
       <div className="shrink-0">
+        {/* 呼吸只在詳情彈窗開：這裡是全頁唯一的單一大頭像，動得起來也值得動。
+            列表列與 hover 預覽不開 —— 那兩處在 40–56px，動畫看不出來卻會持續重繪。
+            Breathing only in the detail modal: the one large avatar on the page.
+            The list rows and the hover preview leave it off — at 40–56px the motion
+            is invisible but the repaints are real. */}
         <LeaderAvatar
           character={char}
           factionColor={faction ? faction.color : null}
           size={168}
           className="rounded-[14px]"
+          breathe
         />
         <div className="mt-2 flex flex-col items-center gap-0.5">
           <span className="flex items-center gap-1.5">
@@ -2005,7 +2019,19 @@ function GameGraph({
   }, [places]);
 
   return (
-    <div className="w-full h-full bg-[#020617] relative">
+    // 深空底色與星雲來自 @theme static，兩個 utility 疊在一起 /
+    // The deep-space base and nebula come from @theme static; two utilities
+    // layered together
+    <div className="w-full h-full bg-ds-space relative">
+      <div className="absolute inset-0 bg-ds-space-nebula" aria-hidden="true" />
+      {/* 塵埃必須在 SigmaMap **之前**：DOM 順序就是繪製順序，而 sigma 的容器
+          本身帶一層不透明底色，放在後面會被完全蓋掉。SigmaMap 的外層底色也已經
+          拿掉，改由上層的 bg-ds-space 提供。/
+          The dust must come BEFORE SigmaMap: DOM order is paint order, and sigma's
+          container carries its own opaque background, which would hide the dust
+          completely. SigmaMap's own backdrop was removed too — bg-ds-space above
+          now provides it. */}
+      <SpaceDust />
       <SigmaMap
         places={places}
         factions={factions}

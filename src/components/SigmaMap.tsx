@@ -1754,6 +1754,12 @@ useEffect(() => {
     // 四內陰影讓世界聚焦在中央（token 在 globals.css 的 @theme static）/
     // The inner vignette frames the world and focuses the centre (token lives in
     // globals.css @theme static)
+    //
+    // 這裡**不畫底色**：深空底色由上層的 `bg-ds-space` 提供，本層若再鋪一層不透明
+    // 底，底下的太空塵埃就會被完全蓋掉。
+    //
+    // No backdrop at this level: the deep-space base comes from `bg-ds-space`
+    // above, and an opaque fill here would hide the space dust underneath.
     <div ref={surfaceRef} className="w-full h-full relative shadow-ds-map-vignette">
       {/* 領地圖的勢力名字（DOM 而非 canvas：字體與 i18n 直接沿用現有設定，
           每幀只改 transform）/ Faction names on the territory map. Rendered as DOM
