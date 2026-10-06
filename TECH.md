@@ -229,6 +229,67 @@ file, so components never import types back out of the API layer.
        │<───────────────────│                    │
 ```
 
+### 電子信箱 + 密碼登入 / Email + Password Sign-in
+
+除了 Google OAuth，還可以用「電子信箱 + 密碼」登入。兩者共用同一張 `User` 表：
+Google 帳號的 `passwordHash` 為 `null`，只有信箱密碼帳號才有 —— 這個欄位可空是兩種
+登入能並存的前提。
+
+Besides Google OAuth, users can sign in with an email and password. Both share one
+`User` table: a Google account has a `passwordHash` of `null` and only password
+accounts have one — which is exactly why that column is nullable.
+
+```
+註冊 / Register                     登入 / Sign in
+──────────────                     ─────────────
+POST /api/auth/register             Auth.js Credentials provider
+  ├ Zod 驗證（email / password）      ├ 1. email 轉小寫後查 User
+  ├ 信箱已存在 → 409，不覆寫          ├ 2. passwordHash 為 null → null（Google 帳號）
+  └ argon2id 雜湊後寫入              ├ 3. argon2id 驗證失敗 → null
+                                       └ 4. 通過 → 回傳 user，發 session
+```
+
+#### 密碼雜湊 / Password hashing
+
+- **`src/lib/password.ts`（僅 server）** — argon2id via `@node-rs/argon2`，OWASP 最低建議值
+  （19 MiB / t=2 / p=1）。編碼後的 PHC 字串自帶參數，所以之後調高參數不會讓舊帳號
+  驗證失敗。刻意**不寫** `algorithm`：套件預設就是 argon2id，而 `Algorithm` 是 ambient
+  `const enum`，在本專案開了 `isolatedModules` 時無法取值。
+- **`PASSWORD_MIN_LENGTH` 住在 `src/lib/passwordPolicy.ts`，而這個檔案不 import 任何東西。**
+  這不是潔癖：`@node-rs/argon2` 在 package.json 有頂層的 `browser: browser.js`，Next 的
+  webpack 在**client** bundle 會優先採用 browser 欄位，而那個檔案需要沒安裝的
+  `@node-rs/argon2-wasm32-wasi` —— 只要任何 client component 連帶 import 到 argon2，
+  整頁就會 500。`SignInForm` 必須 import 政策模組，永遠不要 import `password.ts`。
+  This is not tidiness: `@node-rs/argon2` declares a top-level `browser: browser.js`,
+  webpack prefers it for the client bundle, and that file needs an uninstalled wasm
+  package — so any client component that transitively imports argon2 **500s the whole
+  page**. `SignInForm` must import the policy module, never `password.ts`.
+- **不限制字元組成，只限制長度下限 8** —— NIST SP 800-63B 明確建議不要再加複雜度規則，
+  因為它只會把人推向 `Password1!` 這種可預測的密碼。
+  No composition rules, only the 8-character floor: NIST SP 800-63B explicitly advises
+  against composition rules, which mostly push people toward predictable passwords.
+
+#### 為什麼需要 set-password 這個端點 / Why a separate set-password route
+
+Google 帳號的 `passwordHash` 是 `null`，因此無法用密碼登入。理論上有兩種做法：
+
+| 做法 | 結果 |
+|------|------|
+| (a) 註冊時若信箱已存在，直接幫它設密碼 | **帳號接管漏洞**：任何知道某個 Google 使用者信箱的人都能註冊密碼並登入成他。信箱容易得知（公開 commit、截圖、猜測） |
+| (b) 要求先證明自己擁有帳號 | ✅ 安全：需要一個已驗證的 session，而取得 session 正是「證明身份」這件事本身 |
+
+採 (b)，也就是 `POST /api/auth/set-password`。它**已經有密碼時回 409**，不覆寫 ——
+無聲地改掉使用者的憑證不應該發生，要換密碼應該是一個明確的動作（先重新輸入舊密碼之類的），
+而這一版刻意不實作那個流程。管理員也在此列：以 `ADMIN_EMAIL` 判定的管理員若只有 Google
+帳號，同樣走這條路取得密碼登入能力。
+
+- **`authorize()` 對所有失敗都回 `null`** —— 密碼錯、信箱不存在、或是 Google 帳號，
+  一律相同。區分它們會把登入表單變成一個帳號列舉工具。
+- **不做 email 驗證、不做密碼重設**，兩者都需要寄信服務，已明確延後。代價是信箱在任何
+  確認之前就能用密碼登入 —— 這是「先不做驗證」的已知取捨。
+- **兩個端點都沒有速率限制。** 公開環境需要在前面加一層（Upstash、Vercel WAF 或中介層），
+  註冊端點尤其需要，因為它會寫入資料庫。
+
 ### Auth.js v5 API 差異 / Auth.js v5 API Differences
 
 **重要**：v5 API 與 v4 有顯著差異：
@@ -1918,16 +1979,23 @@ pushes them off-screen on narrow viewports.
 
 ### 領地圖 / Territory View
 
-每個地方各自宣稱一塊範圍，同勢力的宣稱**合併**，兩方宣稱相遇處形成邊界 —— 也就是
-Stellaris / CK3 的做法。**領地是蓋在原圖上的半透明色層**：節點、道路、光暈都保持
-不透明，無主之地不上色，所以地形與領地可以同時閱讀。
+每個地方各自推出**一個一樣大的圓形力**，同勢力的力**累加**，不同勢力的力互相**抵擋**，
+邊界落在兩邊力相等處 —— 也就是 Stellaris / CK3 的做法。**領地是蓋在原圖上的半透明色層**：
+節點、道路、光暈都保持不透明，無主之地不上色，所以地形與領地可以同時閱讀。
+
+Every place projects an **equal circular force**; same-faction force **accumulates** and
+rival forces **push against** each other, so the border lands where the two are equal —
+the Stellaris / CK3 idea. The territory is a **translucent tint over the map**: nodes,
+roads and glow stay opaque and unowned land is never coloured, so topography and territory
+read at the same time.
 
 `src/lib/territory.ts` 是**純邏輯**，所以可以在專案的 `node` vitest 環境下直接測：
 
 ```typescript
-// faction 為 null 代表「此地不宣稱任何領土」，密度場會跳過它
-const field = buildTerritoryField(sites, MAX_RES, MARGIN, BLOB_RADIUS);
-const site = nearestSite(sites, gx, gy);   // hover／點擊：一次查詢就夠，不做網格
+// faction 為 null 代表「此地不宣稱任何領土」，並且會把別人的領地挖開一個洞
+const field = buildTerritoryField(sites, MAX_RES, MARGIN, BLOB_RADIUS, MIN_FORCE);
+const key = factionAt(field, gx, gy);   // hover 勢力面積：問密度場，不是最近節點
+const site = nearestSite(sites, gx, gy); // 點擊：一次查詢就夠，不做網格
 const mask = neighbourMask(field, px, py); // 邊界畫在哪些邊
 ```
 
@@ -1939,17 +2007,38 @@ const mask = neighbourMask(field, px, py); // 邊界畫在哪些邊
 2. **同一勢力相鄰的兩個地方之間會多出一條邊界。** 這正是「看起來像 pixel art 而不是
    Stellaris」的主因。
 
-正確做法是密度場：每個地方投出一個平滑衰減 `falloff`，同勢力用機率 OR
-（`1 - Π(1 - wᵢ)`）合併，每格取密度最高者。相加會讓領地廣的勢力在遠處持續累積、
-無限膨脹；機率 OR 上限為 1，一個勢力只有在**附近真的有地**時才可能贏。場是平滑的，
-所以邊界是兩條場相等處的曲線 —— 這就是「距離決定邊界」，而相鄰同勢力自然融合。
+正確做法是**力場**：每個地方投出一個平滑的圓形衰減 `falloff`，同勢力的力**相加**
+（`density[f] += w`），每格由力最大的勢力取得。場是平滑的，所以邊界是兩條場相等處的曲線 ——
+這就是「距離決定邊界」，而相鄰同勢力因為力直接相加，自然融合成一整片。
 
-### 四個容易踩到的地雷
+**這裡必須有一個最低力量門檻**，而這一點最容易漏掉：單純取最大值時，**任何微小的正值都會
+贏過「沒有勢力」**，於是領地永遠等於各地方圓盤的聯集 —— 四個地方畫出來和一個地方一樣大，
+勢力大小對面積毫無影響。門檻讓累積的力真的決定能推多遠：一個地方靠自己維持到約 65% 半徑，
+四個地方合力推到約 83%。調高門檻＝領地收縮、界線明確；調低＝領地膨脹、彼此擠壓。
 
-1. **無主之地不能上色。** 把它當成一個巨大的灰色勢力會把地圖整張蓋掉；CK3 的 map mode
-   是把勢力色當成**蓋在地圖上的半透明色層**，未宣稱的土地完全不動。
-   `TerritorySite.faction` 因此是 `string | null`，`null` = 不宣稱領土，但仍算進最近鄰距離，
-   因為宣稱半徑必須跟整張地圖的疏密一致。
+The correct model is a **force field**: each place emits a smooth circular `falloff`,
+same-faction force **sums** (`density[f] += w`), and each cell goes to the strongest faction.
+The field is smooth, so a border is a curve where two fields are equal — which is what makes
+distance decide it — and adjacent same-faction places fuse because their force adds directly.
+
+**A minimum-force threshold is load-bearing here, and easy to miss**: with a plain argmax, *any*
+tiny positive force beats "no faction", so the territory is always exactly the union of the
+per-place discs — four places draw the same area as one and faction size has no effect on it.
+The threshold is what makes accumulated force decide reach: a lone place holds ~65% of the
+radius, four together ~83%.
+
+### 六個容易踩到的地雷
+
+1. **無主之地不能上色，而且要用「離誰近」而不是「力多大」來判定。** 把它當成一個巨大的灰色
+   勢力會把地圖整張蓋掉；CK3 的 map mode 是把勢力色當成**蓋在地圖上的半透明色層**，未宣稱的
+   土地完全不動。`TerritorySite.faction` 因此是 `string | null`。比較**力**是行不通的：力一旦
+   開始累加，一個有十個地方的勢力在任一點的總力遠大於單一無主地方的力，無主之地會直接被吞掉。
+   正確做法是**最近鄰規則**：離無主地方比離任何有主地方更近的格子，就是無主之地自己的地盤，
+   留白不畫。`null` 仍然算進最近鄰距離，因為宣稱半徑必須跟整張地圖的疏密一致。
+   Comparing *force* cannot work here: once force accumulates, a faction's summed force
+   swamps any single unowned place at nearly every point, so the unowned place gets absorbed.
+   The rule is **nearest-site**: a cell nearer unowned land than to any owned place is that
+   place's own ground and goes unpainted.
 2. **半徑要相對。** 用「最近鄰距離平均 × 倍數」，不要用固定世界座標常數，否則地方一多
    就糊成一片、地方一少就小到看不見。
 3. **邊界要逐邊畫。** 把整格點亮會變成厚白塊；共用接縫又會變成兩條線。要用
@@ -1957,8 +2046,33 @@ const mask = neighbourMask(field, px, py); // 邊界畫在哪些邊
 4. **領地層在 sigma「之下」**，所以 `draw()` 必須把 `container.style.pointerEvents` 設成
    `none`；代價是 sigma 自己的 wheel/drag 也失效了，於是本層要自己驅動相機
    （`onWheel` 以游標為中心縮放、`onDrag` 平移），離開時一定要還原。
+5. **縮放一定要有上下限，而且方向別搞反。** sigma 的 `minRatio`/`maxRatio` 預設都是 `null`，
+   而 `getBoundedRatio` 在它們是 `null` 時**完全不做任何夾限** —— 自訂的滾輪處理可以把 ratio
+   推到任意大，實測拉遠視圖滾幾下地圖就縮成一個小點、看起來像「地圖消失」。所以要在
+   `new Sigma()` 傳 `minCameraRatio` / `maxCameraRatio`。另外 sigma 的 ratio **越小越近**，
+   往上滾必須讓 ratio 變小；舊的 `1 - step * deltaY` 方向相反，往上滾會拉遠。
+   Bounds must be passed to the `Sigma` constructor, and note that a smaller ratio is closer.
+6. **相機的 x / y 也要夾住。** sigma 只限制 ratio，對 `camera.x`/`y` **完全不設限**，所以可以把
+   整個世界拖出畫面 —— 實測拖一段之後地圖只剩畫面角落的一小塊。鏡頭 operates 在**框化
+   （framed）**空間（sigma 把整張圖塞進以 (0.5,0.5) 為中心、較長邊為 1 的單位正方框），
+   所以把鏡頭中心夾在 `[0, 1]` 就等於「鏡頭永遠在世界上空」，同時在 ratio 0.05 時仍可完整平移。
+   已在範圍內時必須直接返回，否則每一幀都會遞迴 `setState`。
+   Sigma bounds the ratio but nothing else, so the world can be dragged out of frame;
+   clamping the camera centre to `[0, 1]` in framed space fixes it.
 
-密度場在 **render 期間**用 `useMemo` 從 `places` 算出來，不在 effect 裡算完再 setState：
+### hover 要分兩種 / Two different hover readouts
+
+領地視圖畫的是**面積**，但地方節點仍然可見、仍然可互動，所以提示要分兩種：
+
+- **指在某個地方節點上 → 顯示該地方的提示。** 先用**螢幕像素**命中測試
+  （`TERRITORY_PLACE_HOVER_PX`）判斷有沒有指到節點，有就顯示地方細節。
+  用圖座標距離是錯的：拉遠時同一個門檻會大到整片區域都被算成「指到某個地方」，
+  勢力提示就永遠不會出現。
+- **指在勢力的一片面積上（不在節點上）→ 顯示勢力提示**，由 `factionAt()` 問**密度場**
+  「游標底下這塊是誰的」。用最近節點會得到一個幾乎永遠跟游標無關的小節點。
+- 滑鼠停在無主之地或空白處 → **完全沒有提示**，而不是錯顯示鄰居的勢力。
+
+力場在 **render 期間**用 `useMemo` 從 `places` 算出來，不在 effect 裡算完再 setState：
 `Place` 本來就帶 `layoutX`/`layoutY`，而 effect 內同步 setState 會觸發 lint 的
 cascading-render 規則。`imageSmoothing` 保持**開啟**：場本身已把邊界算成曲線，平滑只是
 去掉最後一點格子階梯。
@@ -2079,7 +2193,7 @@ pnpm prisma migrate reset
 Autonomous World 使用現代化的技術棧：
 
 1. **Next.js 16** — 提供 SSR、API Routes、Server Components
-2. **Auth.js v5** — 處理 Google OAuth 認證
+2. **Auth.js v5** — 處理 Google OAuth 與電子信箱／密碼（argon2id）認證 / handles Google OAuth plus email + password (argon2id) authentication
 3. **Prisma 7** — 型別安全的資料庫 ORM（使用 PrismaPg driver adapter）
 4. **TypeScript** — 嚴格型別檢查
 5. **TailwindCSS 4** — 實用優先的 CSS 框架

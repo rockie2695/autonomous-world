@@ -49,6 +49,12 @@ export const en = {
     setPasswordHint:
       'Your account signs in with Google. Add a password to allow email sign-in too.',
     passwordAlreadySet: 'This account already has a password.',
+    skipForNow: 'Skip for now',
+    skipHint: 'You can add one later from this page.',
+    alreadySignedIn: 'Already signed in',
+    alreadyHasPassword:
+      'This account already has a password, so you can sign in with your email.',
+    continueToGame: 'Continue to the world',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────

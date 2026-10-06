@@ -19,7 +19,7 @@
 // ============================================================================
 
 import { useState, type FormEvent } from 'react';
-import { signIn } from 'next-auth/react';
+import { signIn, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { t } from '@/lib/i18n';
 // 密碼規則必須從**無依賴**的模組來：這個檔案是 client component，而 argon2 在
@@ -58,7 +58,14 @@ const SECONDARY =
 const DIVIDER =
   'flex items-center gap-3 text-xs tracking-[0.2em] text-slate-500 uppercase';
 
-export function SignInForm({ isSignedIn }: { isSignedIn: boolean }) {
+export function SignInForm({
+  isSignedIn,
+  hasPassword,
+}: {
+  isSignedIn: boolean;
+  /** 已登入的帳號是否**已經**有密碼 / Whether the signed-in account already has a password */
+  hasPassword: boolean;
+}) {
   const router = useRouter();
   const [mode, setMode] = useState<'signin' | 'register'>('signin');
   const [email, setEmail] = useState('');
@@ -90,8 +97,19 @@ export function SignInForm({ isSignedIn }: { isSignedIn: boolean }) {
           setError(data?.error ?? t('general.error'));
           return;
         }
+        // 設定成功就**直接進遊戲**。使用者此刻已經有 session（Google 登入），所以
+        // 「自動登入」就是把 session 帶進遊戲，而不是停在這裡看一句提示。
+        // 停在頁面上會讓人懷疑剛才到底成功了沒有，而且多半是從 Google 登入後被帶過來
+        // 的，本來就只想繼續玩。
+        // On success, go straight into the game. The session already exists (they came
+        // from Google), so "sign in automatically" means carrying that session into the
+        // game rather than leaving them here staring at a confirmation. Sitting on this
+        // page makes people doubt it worked, and they only got here mid-flow anyway —
+        // they just want to play.
         setNotice(t('auth.successSetPassword'));
         setPassword('');
+        router.push('/game');
+        router.refresh();
         return;
       }
 
@@ -131,6 +149,42 @@ export function SignInForm({ isSignedIn }: { isSignedIn: boolean }) {
       setBusy(false);
     }
   };
+
+  // ── 已登入且**已經有密碼** → 不再顯示設定密碼表單 ──
+  // 已登入而且已經設定過密碼的人，回到這一頁不該再被要求設定一次：set-password
+  // 會回 409，整個畫面看起來就像壞掉。這裡直接給「繼續進遊戲」與「登出」。
+  // Already signed in *with* a password: don't ask again. set-password would refuse
+  // with 409, so re-showing the form makes a working feature look broken. Offer the way
+  // forward instead.
+  if (isSignedIn && hasPassword) {
+    return (
+      <div className="w-full max-w-md text-center">
+        <h1 className="font-orbitron text-2xl font-bold tracking-wide text-white">
+          {t('auth.alreadySignedIn')}
+        </h1>
+        <p className="mt-1.5 text-sm text-slate-400">{t('auth.alreadyHasPassword')}</p>
+        <button
+          type="button"
+          onClick={() => {
+            router.push('/game');
+            router.refresh();
+          }}
+          className={`${SUBMIT} mt-6`}
+        >
+          {t('auth.continueToGame')}
+        </button>
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={() => signOut({ callbackUrl: '/signin' })}
+            className="text-sm text-slate-400 underline underline-offset-4 transition-colors duration-200 hover:text-slate-200"
+          >
+            {t('general.logout')}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full max-w-md">
@@ -266,6 +320,28 @@ export function SignInForm({ isSignedIn }: { isSignedIn: boolean }) {
                 : t('auth.register')}
         </button>
       </form>
+
+      {/* 已是登入狀態、正在設定密碼時，可以直接略過。
+          設定密碼對 Google 使用者是**選用**的，不是進入遊戲的前提 —— 把它當成必填
+          關卡會擋住只是想馬上開始玩的人。
+          While setting a password on an existing Google account, allow skipping it.
+          Having a password is *optional* for a Google user, not a gate to the game —
+          making it mandatory blocks people who just want to play. */}
+      {isSignedIn && (
+        <div className="mt-5 text-center">
+          <button
+            type="button"
+            onClick={() => {
+              router.push('/game');
+              router.refresh();
+            }}
+            className="text-sm text-slate-400 underline underline-offset-4 transition-colors duration-200 hover:text-slate-200"
+          >
+            {t('auth.skipForNow')}
+          </button>
+          <p className="mt-1.5 text-xs text-slate-500">{t('auth.skipHint')}</p>
+        </div>
+      )}
 
       {!isSignedIn && (
         <>

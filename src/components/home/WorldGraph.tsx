@@ -35,11 +35,21 @@ const WorldGraphScene = dynamic(() => import('./WorldGraphScene'), {
   ),
 });
 
+// 艦隊層與圖譜同一組資料、同一段純邏輯（`battleFleet.ts`），只是用 3D 的方式畫。
+// 同樣 ssr:false，因為 three.js 只能在瀏覽器跑。/
+// The fleet layer runs the same pure logic (`battleFleet.ts`) over the same data,
+// drawn in 3D instead. Also ssr:false, since three.js is browser-only.
+const FleetScene = dynamic(() => import('./FleetScene'), { ssr: false });
+
 export default function WorldGraph({ places, roads, colors, label, note }: WorldGraphProps) {
   return (
     <div className="relative aspect-[5/4] w-full overflow-hidden rounded-ds-panel border border-ds-line bg-ds-void">
       <div role="img" aria-label={label} className="size-full">
         <WorldGraphScene places={places} roads={roads} colors={colors} />
+        {/* 艦隊壓在圖譜之上：它是氣氛，所以 aria-hidden 且不吃指標事件。/
+            The fleet sits above the graph: it is atmosphere, so it is aria-hidden
+            and never takes pointer events. */}
+        <FleetScene places={places} roads={roads} colors={colors} />
       </div>
       {note ? (
         <p className="absolute bottom-3.5 left-3.5 max-w-[min(20rem,calc(100%-1.75rem))] rounded-lg border border-ds-line bg-[#020617]/80 px-2.5 py-1.5 text-ds-label leading-[1.4] text-slate-200">

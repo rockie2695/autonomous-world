@@ -48,6 +48,11 @@ export const zh = {
     setPassword: '設定密碼',
     setPasswordHint: '你的帳號目前使用 Google 登入。加上密碼之後也可以用信箱登入。',
     passwordAlreadySet: '此帳號已經設定過密碼。',
+    skipForNow: '先略過',
+    skipHint: '之後隨時可以回到這一頁設定。',
+    alreadySignedIn: '已經登入',
+    alreadyHasPassword: '此帳號已經有密碼了，可以用電子信箱登入。',
+    continueToGame: '進入世界',
   },
 
   // ── 首頁 / Homepage ─────────────────────────────────────────────────────

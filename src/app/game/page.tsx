@@ -8,7 +8,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore, Fragment, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, Fragment, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
@@ -31,6 +31,15 @@ import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_COR
 
 const SigmaMap = dynamic(
   () => import('@/components/SigmaMap').then((mod) => mod.SigmaMap),
+  { ssr: false }
+);
+// 艦隊交戰層。跟 SigmaMap 分開動態載入，因为它自己是一個 canvas + rAF 迴圈，
+// 而且首頁與遊戲頁共用同一段純邏輯（`battleFleet.ts`）。/
+// The battle fleet layer. Dynamically imported apart from SigmaMap because it is
+// its own canvas plus rAF loop, and because the home page shares the same pure
+// logic (`battleFleet.ts`).
+const BattleFleet = dynamic(
+  () => import('@/components/BattleFleet').then((mod) => mod.BattleFleet),
   { ssr: false }
 );
 
@@ -1954,6 +1963,47 @@ function GameGraph({
   selectedPlaceId?: string | null;
   onControlsReady?: (controls: MapCameraControls | null) => void;
 }) {
+  // 艦隊用的世界座標與勢力色票。座標直接沿用 ForceAtlas2 的 layoutX / layoutY，
+  // 所以艦隊與地圖上的據點一定落在同一個位置。/
+  // World coordinates and faction colours for the fleet. The coordinates reuse
+  // ForceAtlas2's layoutX / layoutY, so the ships and the map's settlements are
+  // always in the same place.
+  const fleetSites = useMemo(
+    () =>
+      places.map((p) => ({
+        id: p.id,
+        x: p.layoutX,
+        y: p.layoutY,
+        factionId: p.factionId,
+        garrison: p.garrison,
+      })),
+    [places],
+  );
+  const fleetRoads = useMemo(() => roads.map((r) => ({ aId: r.aId, bId: r.bId })), [roads]);
+  const fleetColors = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const f of factions) out[f.id] = f.color;
+    return out;
+  }, [factions]);
+  // 可見範圍要留一點餘裕，否則邊緣的戰線會被切掉 /
+  // A little slack on the extent, or a front line at the edge gets clipped
+  const fleetBounds = useMemo(() => {
+    let minX = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const p of places) {
+      if (p.layoutX < minX) minX = p.layoutX;
+      if (p.layoutX > maxX) maxX = p.layoutX;
+      if (p.layoutY < minY) minY = p.layoutY;
+      if (p.layoutY > maxY) maxY = p.layoutY;
+    }
+    if (!Number.isFinite(minX)) return { minX: -1, maxX: 1, minY: -1, maxY: 1 };
+    const padX = Math.max((maxX - minX) * 0.05, 1);
+    const padY = Math.max((maxY - minY) * 0.05, 1);
+    return { minX: minX - padX, maxX: maxX + padX, minY: minY - padY, maxY: maxY + padY };
+  }, [places]);
+
   return (
     <div className="w-full h-full bg-[#020617] relative">
       <SigmaMap
@@ -1966,6 +2016,18 @@ function GameGraph({
         onPlaceClick={onPlaceClick}
         selectedPlaceId={selectedPlaceId}
         onControlsReady={onControlsReady}
+      />
+      {/* 艦隊壓在 sigma 之上、覆蓋層之下：它只是氣氛，不該擋住地圖互動，也不該蓋掉
+          地名。pointer-events 已在元件裡關掉。/
+          The fleet sits above sigma and below the overlays: it is atmosphere, so it
+          must not block map interaction nor cover place names. The component already
+          sets pointer-events: none. */}
+      <BattleFleet
+        sites={fleetSites}
+        roads={fleetRoads}
+        colors={fleetColors}
+        bounds={fleetBounds}
+        className="z-[1]"
       />
     </div>
   );

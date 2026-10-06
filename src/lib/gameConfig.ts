@@ -251,6 +251,38 @@ export const CONFIG = {
   MOVE_ANIM_DURATION: 1500, // 移動點行進時間（毫秒）/ Travel time of the move dot (ms)
   MOVE_ANIM_PAUSE: 2500, // 每週期停頓（毫秒）/ Pause between animation cycles (ms)
 
+  // ── 艦隊交戰 / Battle Fleet ───────────────────────────────────────────────
+  // 首頁與遊戲頁共用的戰艦動畫。交戰**不是**靠事件推播，而是直接由「誰控制哪裡」
+  // 推導：兩端屬於不同勢力的道路就是戰線。現實資料一變，戰線跟著變，所以這個動畫
+  // 永遠跟得上模擬，而且兩個頁面用的是同一段純邏輯。
+  //
+  // The fleet animation shared by the home page and the game page. Engagements are
+  // **not** driven by an event stream but derived from who owns what: a road whose
+  // two ends belong to rival factions *is* a front line. Real data changes, the
+  // front lines change with it, so the animation always matches the simulation —
+  // and both pages run the same pure logic.
+
+  /** 同時作戰的戰線上限，超出的依駐軍總和取大者 / Max simultaneous front lines; the rest are dropped smallest-first */
+  BATTLE_FLEET_MAX_FRONTS: 24,
+  /** 每條戰線上各方各幾艘 / Ships per side on one front line */
+  BATTLE_FLEET_SHIPS_PER_SIDE: 2,
+  /** 艦隊沿戰線巡航速度（世界單位 / 秒）/ Cruise speed along the line (world units/sec) */
+  BATTLE_FLEET_SPEED: 42,
+  /** 開火間隔（毫秒）/ Interval between shots (ms) */
+  BATTLE_FLEET_FIRE_MS: 700,
+  /** 曳光飛彈速度（世界單位 / 秒）/ Tracer speed (world units/sec) */
+  BATTLE_FLEET_BOLT_SPEED: 320,
+  /** 交戰雙方各自的航道偏移（世界單位），避免疊在一起 / Per-side lane offset so the two sides do not overlap */
+  BATTLE_FLEET_LANE: 9,
+  /** 艦體長度（螢幕像素）/ Ship length in screen pixels */
+  BATTLE_FLEET_SHIP_PX: 8,
+  /** 戰線底線透明度 / Opacity of the front-line base stroke */
+  BATTLE_FLEET_LINE_ALPHA: 0.14,
+  /** 曳光飛彈拖尾長度（世界單位）/ Tracer tail length in world units */
+  BATTLE_FLEET_BOLT_LEN: 26,
+  /** 艦隊的前後深度展開（世界單位），給 3D 場景分層用 / Depth spread for layering the fleet in 3D */
+  BATTLE_FLEET_DEPTH: 40,
+
   // ── 地名標籤顯示 / Place Label Visibility ──────────────────────────────────
   // 純粹依「鏡頭縮放」決定：camera.ratio ≤ 此值才顯示地名，與兵力無關。
   // 舊做法用 sigma 的 labelRenderedSizeThreshold（比節點螢幕尺寸），結果是
@@ -363,7 +395,14 @@ export const CONFIG = {
   TERRITORY_BLOB_RADIUS: 2.4,
   // 每軸的格數上限；實際解析度還會再依地方數量縮小 /
   // Cap on cells per axis; the real resolution also scales down with place count
-  TERRITORY_MAX_RESOLUTION: 560,
+  // 每軸的格數上限。格數越多，邊界曲線越平滑（放大後不會看到階梯），但密度場是
+  // 每格計算，成本隨格數線性成長。560 時曲線已經相當平滑，調到 720 略為更細，
+  // 再往上只是線性變慢而肉眼幾乎看不出差異。
+  // Cap on cells per axis. More cells means a smoother border curve (no visible
+  // stepping once upscaled), but the field is computed per cell so the cost grows
+  // linearly. 560 is already smooth; 720 is slightly finer, and beyond that it is
+  // just linear cost for no visible gain.
+  TERRITORY_MAX_RESOLUTION: 720,
   // 領地底圖的不透明度，讓底下的星點背景仍透得出來 /
   // Base opacity of the territory fill, so the starfield behind still shows through
   // 領地是**蓋在原圖上的半透明色層**，不是重新畫一張地圖：CK3 的 map mode 就是這樣，
@@ -377,7 +416,15 @@ export const CONFIG = {
   TERRITORY_HOVER_ALPHA: 0.35,
   // 邊界亮邊：往白色混多少。**逐邊**套用，所以只要薄就不會糊成一團 /
   // Rim light: mixed toward white. Applied **per side**, so keep it thin or it smears
-  TERRITORY_RIM_LIGHT: 0.55,
+    // Rim light: mixed toward white. Drawn on the cell's **own** pixel, so it costs one
+  // cell of thickness — raise it for contrast, not for width.
+  // 邊界往白色混合。畫在格子**自己**的像素上，所以厚度只有一格 —— 這個值調的是
+  // 對比，不是粗細。
+  TERRITORY_RIM_LIGHT: 0.78,
+  // Extra rim brightness for the hovered faction, so the region you are pointing at
+  // has a clearly brighter outline than its neighbours
+  // 被 hover 勢力的邊界額外加亮，讓指到的區域輪廓比鄰居明顯
+  TERRITORY_HOVER_RIM_LIGHT: 0.15,
   // 少於這麼多格子的勢力不標名字，否則小領地上會疊成一團 /
   // Factions below this cell count get no label, or tiny holdings stack up
   TERRITORY_MIN_LABEL_CELLS: 10,

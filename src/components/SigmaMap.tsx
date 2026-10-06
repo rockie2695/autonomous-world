@@ -315,6 +315,17 @@ export function SigmaMap({
   const glowRef = useRef<HTMLCanvasElement>(null);
   /** 領地圖層（最底層，area view）/ Territory layer (bottom-most, the area view) */
   const territoryRef = useRef<HTMLCanvasElement>(null);
+  /**
+   * 同時包住領地 canvas 與 sigma container 的那一層 /
+   * The one element that wraps both the territory canvas and the sigma container.
+   *
+   * hover / 點選掛在這裡：sigma 的 container 在 DOM 上位於領地 canvas，而且必須保持
+   * `pointer-events`，所以事件只能靠冒泡到這一層。
+   *
+   * Hover and selection bind here: the sigma container sits above the territory canvas
+   * in the DOM and must keep its pointer events, so events only arrive by bubbling.
+   */
+  const surfaceRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
   const graphRef = useRef<Graph | null>(null);
   /** 讓領地層的點擊能借用主 effect 裡的 focusNode，不必重複一份動畫邏輯 /
@@ -595,37 +606,23 @@ export function SigmaMap({
       );
     };
 
-    // ── 鏡頭邊界 / Camera bounds ────────────────────────────────────────────
+    // sigma .. ratio /...**..... camera.x / y**.........
+    // Sigma bounds the ratio; it puts **no bound at all** on camera.x / y.
     //
-    // sigma 只限制 ratio（縮放），**完全不限制 camera.x / y**，所以可以把整個世界
-    // 拖出畫面 —— 實測拖一段之後地圖就只剩畫面角落的一小塊，看起來像「地圖消失」。
-    // Sigma bounds only the ratio; it puts **no bound at all** on camera.x / y, so the
-    // whole world can be dragged out of frame. Measured: after a short drag the map is
-    // reduced to a scrap in one corner, which reads as the map vanishing.
+    // ..**.....**... reset (..) .......
     //
-    // 鏡頭 operates 在**框化（framed）**空間：sigma 的 normalization 把整張圖塞進一個
-    // 以 (0.5, 0.5) 為中心、較長邊剛好為 1 的單位正方框。所以把鏡頭中心夾在 [0, 1]
-    // 就等於「鏡頭永遠在世界上空」，世界不可能被拖到看不見，同時保留完全自由的上限
-    // —— 拉近到 ratio 0.05 時仍然可以從世界左緣一路平移到右緣。
-    // The camera works in **framed** space: sigma's normalization fits the whole graph
-    // into a unit square centred on (0.5, 0.5) whose longer axis is exactly 1. Clamping
-    // the camera centre to [0, 1] therefore means "the camera is always above the
-    // world", so the world can never be dragged out of sight, while still allowing a
-    // full pan across it even when zoomed to ratio 0.05.
-    const clampCameraToWorld = () => {
-      const camera = sigma.getCamera();
-      const x = Math.min(1, Math.max(0, camera.x));
-      const y = Math.min(1, Math.max(0, camera.y));
-      // 已在範圍內就不動，避免每次 updated 都觸發一次 setState 而造成遞迴 /
-      // Do nothing when already inside, so a frame that updates the camera does not
-      // recurse through setState
-      if (x === camera.x && y === camera.y) return;
-      camera.setState({ x, y });
-    };
-    // 綁在 camera 上（sigma 不會把 updated 轉發給 sigma.on()）/
-    // Bound on the camera — sigma consumes `updated` internally and never re-emits it
-    sigma.getCamera().on('updated', clampCameraToWorld);
-
+    // Panning is **deliberately unbounded** . the space is infinite, so the camera may
+    // leave the world entirely; the reset button brings the view back at any time.
+    //
+    // ..[0, 1]....75% ...... mousemove .....
+    //
+    // The old [0, 1] clamp was wrong, and wrong in a worse way than the bug it replaced:
+    // not "the map vanishes" but "the map sticks and jitters". The camera lives in
+    // framed space, so once you zoom out past ~75% the world occupies only a small
+    // patch in the middle of the viewport . dragging that patch across the screen
+    // *requires* camera.x / y to leave [0, 1]. Clamped, every mousemove hit the limit,
+    // so the map stopped tracking the cursor and the travel no longer matched the
+    // cursor travel at all. Infinite space is the correct behaviour.
     // ── 點擊事件 / Click Event ─────────────────────────────────────────────
 
     sigma.on('clickNode', (event: { node: string }) => {
@@ -716,7 +713,6 @@ export function SigmaMap({
       onControlsReadyRef.current?.(null);
       zoomSubscribers.clear();
       camera.removeListener('updated', emitZoom);
-      camera.removeListener('updated', clampCameraToWorld);
       sigma.kill();
       sigmaRef.current = null;
       // 清除 hover 狀態，避免殘留舊的高亮標籤
@@ -879,7 +875,8 @@ useEffect(() => {
   const canvas = territoryRef.current;
   const glow = glowRef.current;
   const container = containerRef.current;
-  if (!sigma || !graph || !canvas || !glow || !container) return;
+  const surface = surfaceRef.current;
+  if (!sigma || !graph || !canvas || !glow || !container || !surface) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
@@ -1005,12 +1002,17 @@ useEffect(() => {
     canvas.style.opacity = String(alpha);
     glow.style.opacity = String(1 - alpha * 0.75);
     container.style.opacity = '1';
-    // 領地層在 sigma「之下」，所以必須讓 sigma 別攔指標事件，滑鼠才碰得到它；
-    // 滾輪與拖曳則由本層自己驅動相機（見下方 onWheel / onDrag）/
-    // The territory layer sits *under* sigma, so sigma has to stop taking pointer
-    // events or the cursor never reaches it. Wheel and drag are driven from this
-    // layer instead (see onWheel / onDrag below).
-    container.style.pointerEvents = alpha > 0.5 ? 'none' : 'auto';
+    // sigma 的 container **無條件**保留指標事件。它以前會在領地層啟用時被關掉，讓下面
+    // 那層 canvas 收得到 hover / click —— 而那也正是本元件自己實作拖曳與滾輪的原因。
+    // 兩者都已移除：相機歸 sigma 管，hover / 點選掛在外層 wrapper（見 surfaceRef），
+    // 所以不必再把 container 移出指標路徑。把任何一個加回來就會讓雙寫入的 bug 重現。
+    //
+    // The sigma container keeps its pointer events **unconditionally**. It used to be
+    // switched off while the territory layer was active so the canvas underneath could
+    // receive hover and click — which is also why this component hand-rolled its own
+    // drag and wheel. Both are gone: sigma owns the camera, and hover / selection bind
+    // to the wrapper (see surfaceRef), so the container never has to leave the pointer
+    // path. Re-adding either would resurrect the two-writer bug.
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewWidth, viewHeight);
@@ -1217,91 +1219,73 @@ useEffect(() => {
   // pointer-events:none (otherwise this lower layer never sees hover), and the
   // cost is that sigma's own wheel/drag handlers go deaf too — so the zoomed-out
   // view could not be zoomed or panned at all. Drive the camera directly here.
-  const onWheel = (event: WheelEvent) => {
-    event.preventDefault();
-    const camera = sigma.getCamera();
-    const rect = canvas.getBoundingClientRect();
-    const vx = event.clientX - rect.left;
-    const vy = event.clientY - rect.top;
-    // 以游標為中心縮放：先記下縮放前游標的圖座標，改變 ratio 後再取一次，
-    // 把差值補回鏡頭中心，zoomed-in 的那一點才不會從游標下跑掉。
-    // Zoom about the cursor: remember the graph point under the pointer, change
-    // the ratio, read it again, then shift the camera by the difference — so the
-    // point you are pointing at does not slide away.
-    const before = sigma.viewportToGraph({ x: vx, y: vy });
-    camera.setState({ ratio: camera.getBoundedRatio(camera.ratio * factorFor(event)) });
-    const after = sigma.viewportToGraph({ x: vx, y: vy });
-    camera.setState({
-      x: camera.x + (before.x - after.x),
-      y: camera.y + (before.y - after.y),
-    });
-    sigma.refresh();
-  };
 
-  /**
-   * 滾輪縮放倍率。/ Wheel zoom factor.
-   *
-   * sigma 的 ratio **越小越近**，所以「拉近」是讓 ratio 變小；滾輪往上
-   * （deltaY < 0）要拉近，倍率就必須 < 1。舊寫法 `1 - step * deltaY` 方向相反，
-   * 往上滾會拉遠；而且當時 ratio 沒有上下限，一路拉遠地圖就縮成一個小點，看起來
-   * 像消失。現在倍率以 config 的 `TERRITORY_ZOOM_RATE` 為基準，並由 sigma 的
-   * min/maxCameraRatio 統一夾限。
-   * Sigma's ratio is **smaller when closer**, so zooming in means making the ratio
-   * smaller; wheel up (deltaY < 0) zooms in, so the factor must be < 1. The old
-   * `1 - step * deltaY` ran the other way — wheel up zoomed *out* — and with no
-   * bound on the ratio it ran away until the world was a dot, which read as the map
-   * disappearing. The rate now comes from `TERRITORY_ZOOM_RATE` and sigma's
-   * min/maxCameraRatio clamps it uniformly.
-   *
-   * deltaY 先換算成「格數」並夾住：各裝置／瀏覽器的單位不一致（規格說是像素，
-   * 實務上常見 3 倍或 100 以上），而且單一事件不該跳太多。
-   * deltaY is normalised into notches and clamped: devices and browsers disagree on
-   * the unit (the spec says pixels, but 3x and 100+ are common in practice), and one
-   * event must not jump too far.
-   */
-  const factorFor = (event: WheelEvent) => {
-    const notches = Math.max(-3, Math.min(3, event.deltaY / 100));
-    return CONFIG.TERRITORY_ZOOM_RATE ** notches;
-  };
-
+  // 拖曳與縮放**完全交給 sigma**。
+  //
+  // Drag and zoom belong to sigma, full stop.
+  //
+  // 這裡曾經自己實作一套拖曳：把 viewport 像素位移乘上 `graphToViewport` 算出來的
+  // 比例，再寫進 camera。那是錯的 —— camera 的 x / y 活在 sigma 的**框化（framed）**
+  // 空間，而 `graphToViewport` 的比例是從圖座標推出來的，兩者相差一個 normalization
+  // 比例，所以每次移動的量都不對。
+  //
+  // The hand-rolled version scaled the viewport pixel delta by a ratio derived from
+  // `graphToViewport` and wrote the camera itself. That was wrong: the camera's x / y
+  // live in sigma's **framed** space, while that ratio is derived in graph space, and
+  // the two differ by the normalization ratio — so every pan moved the wrong distance.
+  //
+  // 真正的問題是**有兩個寫入者**。sigma 的 MouseCaptor 把 mousedown 掛在 container、
+  // mousemove 掛在 `document`，會自己算增量並寫 camera；而 `draw()` 又把 container 的
+  // `pointer-events` 關掉、讓位給下面那層 canvas，於是本層接手拖曳 —— 兩套邏輯互相
+  // 覆蓋。這就是為什麼 shake **只在 territory 模式出現**：非 territory 模式走 sigma
+  // 的路徑，完全正常。
+  //
+  // The real defect was **two writers**. Sigma's MouseCaptor binds mousedown to the
+  // container and mousemove to `document`, computes the delta and writes the camera;
+  // `draw()` then switched the container's `pointer-events` off to let the canvas
+  // underneath take over, and this layer panned as well. Two implementations
+  // overwriting each other is why the shake appeared **only** in territory view — the
+  // non-territory path went through sigma and was fine.
+  //
+  // 現在只留「有沒有在拖曳」，給 hover 與 click-after-drag 用。鏡頭一次都不碰。
+  // All that remains is whether a drag is in progress, which hover and
+  // click-after-drag need. The camera is never written from this component.
   let dragging = false;
   let draggedFar = false;
-  let dragStart: { px: number; py: number; cx: number; cy: number } | null = null;
+  /** 一次影格只重畫一次覆蓋層 / one overlay repaint per animation frame */
+  let overlayFrame = 0;
+  const gestureStart = { px: 0, py: 0 };
 
-  const onDown = (event: MouseEvent) => {
+  const onSurfaceDown = (event: MouseEvent) => {
     if (event.button !== 0) return;
-    const camera = sigma.getCamera();
     dragging = true;
     draggedFar = false;
-    dragStart = { px: event.clientX, py: event.clientY, cx: camera.x, cy: camera.y };
-    canvas.style.cursor = 'grabbing';
+    gestureStart.px = event.clientX;
+    gestureStart.py = event.clientY;
   };
 
-  const onDrag = (event: MouseEvent) => {
-    if (!dragging || !dragStart) return;
-    const dxPx = event.clientX - dragStart.px;
-    const dyPx = event.clientY - dragStart.py;
-    if (Math.abs(dxPx) > 3 || Math.abs(dyPx) > 3) draggedFar = true;
-    // 把 viewport 的像素位移換算成圖座標位移。拖曳期間 ratio 不變，所以這個
-    // 換算比例是固定的；仍然每次重算，因為它便宜而且不會在 resize 後失準。
-    // Convert the viewport pixel delta into a graph delta. The ratio does not
-    // change mid-drag, so the scale is constant; it is still recomputed per move
-    // because that is cheap and cannot go stale after a resize.
-    const p0 = sigma.graphToViewport({ x: 0, y: 0 });
-    const p1 = sigma.graphToViewport({ x: 1, y: 1 });
-    const unitsPerPxX = 1 / (p1.x - p0.x);
-    const unitsPerPxY = 1 / (p1.y - p0.y);
-    sigma.getCamera().setState({
-      x: dragStart.cx - dxPx * unitsPerPxX,
-      y: dragStart.cy + dyPx * unitsPerPxY,
-    });
-    sigma.refresh();
+  const onSurfaceMove = (event: MouseEvent) => {
+    if (dragging) {
+      // 拖曳中不做 hover：`onMove` 每一次 mousemove 都會掃過全部據點，並且
+      // `setTooltip` 會觸發一次 React render。拖曳時游標每秒能送幾十次
+      // mousemove，那份成本只會讓低倍率下的地圖看起來在抖。
+      //
+      // No hover while dragging: `onMove` scans every place and `setTooltip` forces a
+      // React render, on every mousemove. A drag delivers dozens per second, and that
+      // cost only shows up as the map appearing to judder.
+      if (
+        Math.abs(event.clientX - gestureStart.px) > 3 ||
+        Math.abs(event.clientY - gestureStart.py) > 3
+      ) {
+        draggedFar = true;
+      }
+      return;
+    }
+    onMove(event);
   };
 
-  const onUp = () => {
+  const onSurfaceUp = () => {
     dragging = false;
-    dragStart = null;
-    canvas.style.cursor = '';
   };
 
   const onClick = () => {
@@ -1315,35 +1299,58 @@ useEffect(() => {
     if (hoveredPlaceId) focusPlaceRef.current?.(hoveredPlaceId);
   };
 
-  canvas.addEventListener('mousemove', onMove);
-  canvas.addEventListener('mouseleave', onLeave);
-  canvas.addEventListener('click', onClick);
-  canvas.addEventListener('wheel', onWheel, { passive: false });
-  canvas.addEventListener('mousedown', onDown);
-  canvas.addEventListener('mousemove', onDrag);
-  window.addEventListener('mouseup', onUp);
+  // hover / 點選掛在**外層 wrapper**，不是領地 canvas：sigma 的 container 在 DOM 上位於
+  // 領地 canvas，而且必須保持 `pointer-events`，所以事件只能靠冒泡到這一層。
+  //
+  // Hover and selection bind to the wrapper, not the territory canvas: the sigma
+  // container sits above the canvas in the DOM and must keep its pointer events, so
+  // events only reach the wrapper by bubbling.
+  surface.addEventListener('mousemove', onSurfaceMove);
+  surface.addEventListener('mouseleave', onLeave);
+  surface.addEventListener('click', onClick);
+  surface.addEventListener('mousedown', onSurfaceDown);
+  window.addEventListener('mouseup', onSurfaceUp);
   sigma.on('afterRender', draw);
+  // 領地層的投影完全取決於鏡頭，所以**任何**改到鏡頭的來源都必須重畫它。綁在
+  // afterRender 上不可靠 —— 實測拖曳時 afterRender 不一定叫得到這裡，領地層就變成
+  // 凍住的半透明底圖，被正在移動的圖層從下面拖走。
+  //
+  // The territory projection comes entirely from the camera, so *any* source that
+  // moves it must repaint it. `afterRender` is not reliable here: measured, it does not
+  // always reach this handler during a drag.
+  const scheduleOverlay = () => {
+    if (overlayFrame) return;
+    overlayFrame = window.requestAnimationFrame(() => {
+      overlayFrame = 0;
+      draw();
+    });
+  };
+  sigma.getCamera().on('updated', scheduleOverlay);
   sigma.on('resize', resize);
   const resizeObserver = new ResizeObserver(resize);
-  resizeObserver.observe(canvas);
+  resizeObserver.observe(surface);
 
   resize();
 
   return () => {
-    canvas.removeEventListener('mousemove', onMove);
-    canvas.removeEventListener('mouseleave', onLeave);
-    canvas.removeEventListener('click', onClick);
-    canvas.removeEventListener('wheel', onWheel);
-    canvas.removeEventListener('mousedown', onDown);
-    canvas.removeEventListener('mousemove', onDrag);
-    window.removeEventListener('mouseup', onUp);
+    surface.removeEventListener('mousemove', onSurfaceMove);
+    surface.removeEventListener('mouseleave', onLeave);
+    surface.removeEventListener('click', onClick);
+    surface.removeEventListener('mousedown', onSurfaceDown);
+    window.removeEventListener('mouseup', onSurfaceUp);
     sigma.off('afterRender', draw);
+    // 重畫掛在鏡頭上，所以監聽也必須一起拆掉；沒排队的影格也要取消，否則
+    // effect 重跑時會畫到已經被卸載的畫布上。
+    // The repaint rides on the camera, so its listener must come off too, and any
+    // queued frame must be cancelled or an effect re-run paints a detached canvas.
+    sigma.getCamera().removeListener('updated', scheduleOverlay);
+    if (overlayFrame) window.cancelAnimationFrame(overlayFrame);
+    overlayFrame = 0;
     sigma.off('resize', resize);
     resizeObserver.disconnect();
     // 離開時一定要還原，否則 sigma 會永久失去指標事件 /
     // Restore on the way out, or sigma loses pointer events for good
     container.style.opacity = '';
-    container.style.pointerEvents = '';
     glow.style.opacity = '';
     canvas.style.opacity = '';
   };
@@ -1747,7 +1754,7 @@ useEffect(() => {
     // 四內陰影讓世界聚焦在中央（token 在 globals.css 的 @theme static）/
     // The inner vignette frames the world and focuses the centre (token lives in
     // globals.css @theme static)
-    <div className="w-full h-full relative shadow-ds-map-vignette">
+    <div ref={surfaceRef} className="w-full h-full relative shadow-ds-map-vignette">
       {/* 領地圖的勢力名字（DOM 而非 canvas：字體與 i18n 直接沿用現有設定，
           每幀只改 transform）/ Faction names on the territory map. Rendered as DOM
           rather than on the canvas so they inherit the app's fonts and i18n, and

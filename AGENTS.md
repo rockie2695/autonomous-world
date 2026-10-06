@@ -418,13 +418,32 @@ read territory and topography at the same time.
   over a node does it fall through to the faction tooltip. Measuring in screen pixels rather than
   graph units is deliberate: a graph-space threshold becomes so large when zoomed out that the whole
   region counts as "a place" and the faction readout could never appear.
-- **Sigma bounds the camera ratio but gives `camera.x` / `y` no bound at all**, so the world can be
+- **The ratio is bounded, but panning is deliberately not.** Sigma bounds `camera.ratio`; it puts no
+  bound at all on `camera.x` / `y`, and that is intentional.
   dragged out of frame — measured: a short drag left the map as a scrap in one corner, which reads
-  as the map vanishing. `clampCameraToWorld()` clamps the camera centre to `[0, 1]` on the camera's
-  `updated` event. The camera works in **framed** space, where sigma's normalization fits the graph
-  into a unit square centred on `(0.5, 0.5)`, so `[0, 1]` means "the camera is always above the
-  world" while still allowing a full pan even at `MAP_ZOOM_MIN_RATIO`. It must no-op when the camera
-  is already inside the range, or every frame would recurse through `setState`.
+  as the map vanishing. `clampCameraToWorld()` clamped the camera centre to `[0, 1]` on the camera's
+  `updated` event. **That clamp was worse than the bug it fixed, and must not come back.** The camera
+  works in **framed** space, where sigma's normalization fits the graph into a unit square centred on
+  `(0.5, 0.5)`, so zooming out past ~75% leaves the world as a small patch in the middle of the
+  viewport, and dragging that patch across the screen *requires* `camera.x` / `y` to leave `[0, 1]`.
+  Clamped, every `mousemove` hit the limit, so the map stopped tracking the cursor (reading as "it
+  won't drag" plus a jitter) and the travel no longer matched the cursor travel at all. The ratio
+  stays bounded so the world cannot be zoomed to a speck; panning is deliberately infinite, and the
+  reset (↺) button is how you get your bearings back.
+- **The territory layer's own drag/wheel must use the *framed* helpers, and should copy sigma.**
+  `viewportToGraph()` returns **raw** pre-normalisation coordinates, but the camera's x/y live in
+  **framed** space — sigma's `matrixFromCamera()` consumes the camera state directly, so the two
+  differ by the normalization ratio. Feeding a raw delta to the camera scales the pan and the
+  zoom-centre wrongly, and the drift compounds until the map stops tracking the cursor. Use the
+  framed pair (`viewportToFramedGraph` / `framedGraphToViewport`) or, better, sigma's own:
+  - **wheel** → `sigma.getViewportZoomedState(viewportPoint, newRatio)`. That *is* "zoom to
+    `newRatio` while keeping the point under the cursor fixed"; sigma's built-in captor calls it
+    too. Hand-rolling the before/after difference misses the case where the point ends up outside
+    the viewport, and any miss makes the zoom centre drift.
+  - **drag** → convert both pixel positions with `viewportToFramedGraph` and add
+    `(previous - current)` to the camera, which is exactly sigma's `mouse.captor` `handleMove`.
+    Note it negates **both** axes identically; a `+ dy` on one axis runs the map away from the
+    cursor vertically.
 - **`minCameraRatio` / `maxCameraRatio` must be passed to the `Sigma` constructor.** Sigma defaults
   both to `null`, and `getBoundedRatio` does *no* clamping while they are null — so any custom wheel
   handler can push the ratio arbitrarily far. `MAP_ZOOM_MIN_RATIO` / `MAP_ZOOM_MAX_RATIO` used to be
@@ -445,17 +464,56 @@ read territory and topography at the same time.
 - **The claim radius is relative**, `TERRITORY_BLOB_RADIUS × meanNeighbourDistance()`. A fixed
   world-coordinate radius smears everything into one blob when places are dense and vanishes when
   they are sparse.
-- **The rim is drawn per side.** `neighbourMask()` returns a bitmask and only that side's row of
-  pixels is lightened, so the border is a hairline. Lighting whole boundary cells instead produces a
-  thick white band, and painting a shared seam leaves a two-pixel double line.
+- **The rim is drawn on the cell's _own_ pixel**, not per side. The first version wrote rim
+  bytes into the *neighbour's* pixel (`at ± 4`), but the paint loop then visited that neighbour
+  and overwrote it with the body colour — so most of the rim was erased and only broken fragments
+  survived, which read as "the edge isn't clear". A second pass cannot fix it either:
+  `putImageData` replaces pixels rather than compositing, so it would wipe the fill. Because each
+  cell writes only itself, two neighbouring factions each light their own side and the boundary
+  reads as one continuous line. `neighbourMask()` still decides *whether* a cell is a border cell;
+  `TERRITORY_RIM_LIGHT` sets contrast, and since the rim costs one cell of thickness, raising it
+  changes brightness, not width.
 - The bitmap is painted **once per data change** into an offscreen canvas and repainted only when
   the hovered *faction* changes — never per frame. `imageSmoothing` stays **on**: the field already
   computes the border as a curve, so smoothing only removes the last of the cell stepping.
-- **The territory canvas sits *under* sigma**, so `draw()` sets `container.style.pointerEvents =
-  'none'` while the layer is active. That also deafens Sigma's own wheel/drag handlers, so the layer
-  drives the camera itself (`onWheel` zooms about the cursor, `onDrag` pans) — otherwise the
-  zoomed-out view could not be zoomed at all. Cleanup must restore `pointerEvents` or sigma loses
-  pointer events for good.
+- **Sigma owns the camera. Do not hand-roll pan or zoom in this component.** The territory layer
+  used to switch the container's `pointer-events` off so the canvas underneath could receive hover
+  and click, and then implement its own `onWheel` / `onDrag` — which is what produced a shake that
+  appeared **only** in territory view. Two writers fought over every gesture: `MouseCaptor` binds
+  `mousedown` / `wheel` to the **container** but `mousemove` / `mouseup` to **`document`**, and
+  document events ignore hit-testing, so switching the container to `none` never actually deafened
+  it. Sigma's write is **incremental** (`lastMouse − mouse`); the hand-rolled one scaled pixels by a
+  `graphToViewport` ratio and wrote **absolute** — and that ratio is derived in graph space while the
+  camera lives in sigma's **framed** space, so every pan also moved the wrong distance.
+  - The container now keeps `pointer-events: auto` unconditionally. Hover and selection bind to the
+    wrapper element (`surfaceRef`) that contains both the container and the territory canvas, because
+    events only reach it by bubbling — the canvas is *below* the container and can never get one.
+  - `pointer-events: none` is **not** a way to disable a sigma captor. `getMouseCaptor().enabled` is,
+    but the answer is not to disable it: there should only ever be one writer.
+  - The territory repaint rides on the **camera's** `updated` event, coalesced into one
+    `requestAnimationFrame` per frame, because the layer's projection comes entirely from the
+    camera. `sigma.on('afterRender')` alone is not reliable — measured, it does not always reach the
+    handler during a drag, leaving a frozen translucent underlay with the map sliding beneath it.
+  - **`sigma.refresh()` is required after any camera write.** `camera.setState` only updates state and
+    emits `updated`; it does **not** schedule a render. Without it the map freezes solid, silently.
+  - **Do not measure camera movement by the territory bitmap's centroid.** It clips at the canvas
+    edge, so it under-reports. Measure two layers: equal shifts mean they are in sync.
+- **The territory layer must repaint itself, once per animation frame.** `draw()` is bound to
+  `sigma.on('afterRender', draw)`, but measured, that event does **not** fire on every mousemove
+  during a drag: the glow and spotlight layers repaint and the territory canvas stays
+  byte-identical, so it becomes a frozen translucent underlay with the map sliding beneath it —
+  which reads as the map jumping from one place to another. Calling `draw()` on each mousemove is
+  wrong for the opposite reason (several mousemoves can land in one frame). The fix is
+  `scheduleOverlay()`: coalesce into one `requestAnimationFrame` that repaints with the **final**
+  camera state, so territory, glow, spotlight and graph all land in the same frame. Cleanup must
+  `cancelAnimationFrame` the pending frame, or an effect re-run paints a detached canvas.
+- **Do not measure camera movement by the territory bitmap's centroid.** It biases hard: the blob is
+  small and clips at the canvas edge, so a 300px drag reported 150px — and the *glow* layer reported
+  the identical 150px, which is the tell. Two layers agreeing exactly means the layers are in sync
+  and the instrument is wrong. Measure a layer, and compare two: equal ratios mean sync.
+- **`sigma.refresh()` is required after a camera write.** `camera.setState` only updates state and
+  emits `updated`; it does **not** schedule a render. Removing the `refresh()` from the drag path
+  freezes the map solid with no error.
 - Faction names are **DOM**, not canvas: they inherit the app's fonts and i18n for free, and are
   positioned per frame by writing a `transform` (never React state). Regions smaller than
   `TERRITORY_MIN_LABEL_CELLS`, and unowned land, are left unlabelled.

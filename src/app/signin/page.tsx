@@ -17,12 +17,31 @@
 // ============================================================================
 
 import { auth } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
 import { t } from '@/lib/i18n';
 import { EYEBROW, HAIRLINE, PANEL } from '@/components/home/tokens';
 import { SignInForm } from './SignInForm';
 
 export default async function SignInPage() {
   const session = await auth();
+
+  // 「已登入」不足以決定要不要顯示設定密碼：Google 帳號也可能**已經**有密碼了。
+  // 只看 session 的話，已經設定過的使用者回來仍然會看到「設定密碼」表單，然後被
+  // set-password 的 409 擋下 —— 看起來像功能壞掉。
+  // Knowing only that someone is signed in is not enough to decide whether to show the
+  // set-password form: a Google account may *already* have a password. Checking the
+  // session alone leaves a user who already set one staring at the form again, only to
+  // be refused by set-password's 409 — which reads as a broken feature.
+  //
+  // 只取「有沒有密碼」而不取密碼本身 —— 雜湊絕不送到 client。
+  // Select only whether a password exists, never the hash itself — it must not reach
+  // the client.
+  const hasPassword = session?.user?.email
+    ? (await prisma.user.findUnique({
+        where: { email: session.user.email },
+        select: { passwordHash: true },
+      }))?.passwordHash != null
+    : false;
 
   return (
     <main className="relative flex min-h-dvh items-center justify-center overflow-hidden px-4 py-16">
@@ -37,7 +56,10 @@ export default async function SignInPage() {
         <div className={`${HAIRLINE} mt-3`} />
 
         <div className={`${PANEL} mt-8 w-full max-w-md px-7 py-9`}>
-          <SignInForm isSignedIn={Boolean(session?.user)} />
+          <SignInForm
+            isSignedIn={Boolean(session?.user)}
+            hasPassword={hasPassword}
+          />
         </div>
       </div>
     </main>
