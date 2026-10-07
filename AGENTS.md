@@ -191,6 +191,11 @@ src/components/
                            #   ratio 1. Duration is CONFIG.MAP_CAMERA_ANIM_MS, or 0 when
                            #   prefers-reduced-motion is set.
 ├── LeaderAvatar.tsx        # Procedural leader head bust, seeded from character.id; pure trait logic in deriveAvatarTraits()
+├── BattleFleet.tsx         # Ships trading fire along contested roads (Canvas 2D, game page). Pure derivation in lib/battleFleet.ts
+├── SpaceFlow.tsx           # Flow-field space dust behind the map. Pure field logic in lib/spaceFlow.ts; every colour in gameConfig
+└── home/                   # Homepage sections (three.js scenes, live poller, hooks)
+                            #   FleetScene.tsx renders the same fleet over the 3D graph
+                            #   (the event log and charts live in src/app/game/)
 
 src/app/game/ is split into focused modules — page.tsx is the orchestrator, and
 everything it delegates to lives in a sibling file:
@@ -457,7 +462,9 @@ read territory and topography at the same time.
   query is one scan, and scanning 2000 places is cheaper than maintaining a grid);
   `factionAt()` answers hover from the field; `factionRegions()` returns per-faction centroids for
   the labels; `neighbourMask()` reports which of a cell's four sides border a different owner.
-  No DOM, so `territory.test.ts` runs under `node`.
+  No DOM, so `territory.test.ts` runs under `node`. The same split is used by the two newer
+  ambient layers: `battleFleet.ts` and `spaceFlow.ts` are pure and tested under `node`, with
+  their renderers (`BattleFleet.tsx` / `SpaceFlow.tsx`) doing nothing but drawing.
 - **The field is built during render**, in a `useMemo` over `places`, not inside the effect and
   pushed into state — `Place` already carries `layoutX`/`layoutY`, and setting state synchronously
   in an effect trips the cascading-render lint rule.
@@ -517,6 +524,67 @@ read territory and topography at the same time.
 - Faction names are **DOM**, not canvas: they inherit the app's fonts and i18n for free, and are
   positioned per frame by writing a `transform` (never React state). Regions smaller than
   `TERRITORY_MIN_LABEL_CELLS`, and unowned land, are left unlabelled.
+  - **Never reset `territoryLabelEls.current` inside the territory effect.** The `<span>` refs are
+    attached by React *during commit*, while that effect runs *after* commit — so resetting the
+    array to `null`s wipes the elements that were just bound, `draw()`'s label loop hits
+    `continue` on every frame, and the names stay at `opacity-0` with no transform. The symptom is
+    deceptive: the element is in the DOM with the correct text and colour, just pinned at
+    `left: 0 / top: 0`. Let the array grow and skip the surplus slots instead.
+  - The loop guards with `if (!el || !region) continue`, and `showLabels` needs `alpha > 0.6`. With
+    `TERRITORY_ZOOM_RATIO` 1.02 and `TERRITORY_FADE_RATIO` 0.74 that is ratio ≤ 0.91, so labels are
+    visible across most of the zoomed-out range but **not** at the far end (ratio 3 is "fully
+    zoomed out" on the slider).
+
+### Battle Fleet (`src/lib/battleFleet.ts` + two renderers)
+
+Ships are **derived from ownership, not pushed as events.** A road whose two ends belong to rival
+factions *is* a front line. The two pages have very different data — the game page has
+`CHARACTER_MOVED`, the home page only recent events from `/api/public/world` — so an event pipeline
+would be needed to make them agree. This rule is derivable from both, and it is world state itself:
+a faction dies or loses land, the front lines move that instant, with no need to wait for the next
+round.
+
+- `battleFleet.ts` is **pure, no DOM**, so it runs under `node`. Same-faction roads and roads with an
+  unowned end are internal or non-combatant. Coincident endpoints are skipped, since a zero-length
+  segment has no defined normal. Cap the simultaneous fronts by the smaller garrison of the two ends.
+- Two renderers over the same fronts: `BattleFleet.tsx` (Canvas 2D, game page) and
+  `home/FleetScene.tsx` (three.js orthographic, home page — depth affects **size and brightness
+  only**, never position, or the engagement looks scrambled).
+- **Initial phases are hashed from the front's `key`, never `Math.random()`.** Random phases reshuffle
+  on every React remount and the whole fleet visibly jumps — the exact class of bug the map drag fix
+  just eliminated. Both files have a test for determinism.
+
+### Space Dust (`src/lib/spaceFlow.ts` + `src/components/SpaceFlow.tsx`)
+
+A flow field: particles move along a **3D Simplex noise field**, so ribbons, vortices and voids emerge
+— random but structured. What makes it work is the field's **continuity**: nearby positions return
+similar angles, so particles flow along one shared field instead of scattering.
+
+- **The noise comes from `three`, not a new dependency.** `three/examples/jsm/math/SimplexNoise` is
+  the same algorithm and is already installed.
+- **The seed must be a real PRNG, never a constant.** `createNoise3D(rand)` calls `rand` a couple of
+  hundred times to build its permutation table; `() => 0.5` makes every gradient index identical and
+  collapses the field into a smooth ramp, losing the one thing the technique is for. Use the project's
+  `createRng()`.
+- **Hue follows the field, read from the noise at the particle's position.** Per-particle hues put
+  every colour inside one ribbon and no structure shows. The hue samples at a *finer* spatial scale
+  than the flow (so bands layer inside a ribbon) and drifts *slower* (so colour does not churn with
+  the motion). A respawn carries the old `size` but deliberately **not** the old hue — carrying it
+  would decouple colour from position.
+- **No translucent trail fill.** The sample's per-frame `fillRect('rgba(...)')` needs an *opaque*
+  backdrop to fade against; this page's base is a gradient plus two nebula washes, so accumulating
+  translucent fills smears it and never fully clears. Particles fade individually.
+- **`lighter` blending is not used.** Additive overlap makes crossings glow, but the map underneath is
+  already light and that eats the roads' contrast.
+- **Every colour is in `gameConfig.ts`** (`SPACE_FLOW_HUE_MIN/MAX`, `SATURATION`, `LIGHTNESS`,
+  `MAX_ALPHA`, `HUE_STEPS`, and an optional `SPACE_FLOW_COLORS` list of `r,g,b` or `#rrggbb` for
+  exact colours). The component hard-codes none. To go brighter, raise `LIGHTNESS` or `MAX_ALPHA`
+  before `SATURATION` — the map already carries faction colour.
+- Hue is **quantised**, so the layer needs only `HUE_STEPS` pre-built fill strings and a frame
+  allocates nothing.
+- The dust must paint **before** sigma: DOM order is paint order, and sigma's container carries an
+  opaque backdrop, which would hide the dust entirely. `SigmaMap`'s own wrapper therefore has **no**
+  background — `bg-ds-space` (two `@theme static` tokens, not a bespoke `.space-bg` class) provides it.
 - Opacities are written straight to the DOM rather than through React state — a per-frame
   `setState` would re-render the whole map.
 - The graph→viewport mapping assumes **camera angle 0** (both camera animations pass `angle: 0`).
@@ -677,6 +745,16 @@ column, no new dependency.
   not the `<svg>`: both call sites centre with `mx-auto`, which would measure against the
   shrink-wrapped wrapper if it stayed on the SVG. The tooltip is `pointer-events-none` so moving the
   cursor onto it cannot dismiss it before it is read
+- **Idle breathing (`breathe` prop, off by default)** — chest rise plus a slight head tilt, driven by
+  `requestAnimationFrame` writing `transform` onto two `<g>` nodes directly. **Never React state**: a
+  per-frame `setState` re-renders the avatar and every call site when only two nodes move. The curve
+  `breathAmount()` is a pure exported function, so it is testable without a DOM.
+  - The peak sits at **0.45** of the cycle, not 0.5: a shorter inhale is what reads as breathing
+    rather than pulsing. A symmetric half-sine reads as a heartbeat. The first implementation got this
+    wrong and the test caught it.
+  - `breathe` is enabled **only** on the detail modal's 168px avatar. The list rows and the hover
+    preview leave it off: at 40–56px the motion is invisible but the repaints are real, and those
+    call sites render dozens at a time.
 - The hover preview panel is itself `pointer-events-none` (it must be, or entering it fires the row's
   `mouseleave` and the panel flickers itself away), so the tooltip is reachable in the **detail
   modal** but not in the transient table preview

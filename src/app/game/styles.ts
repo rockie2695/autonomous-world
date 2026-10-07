@@ -114,7 +114,7 @@ export const GM_HUD_CONTROLS_CLOSED = `${GM_HUD_PANEL} right-4`;
  * The legend sits bottom-left and the camera controls bottom-right, so the top-left
  * corner is the only free space; `left-12 top-12` clears the 26px corner brackets.
  */
-export const GM_TIMELINE = 'absolute left-12 top-12 z-[7] hidden w-60 md:block';
+export const GM_TIMELINE = 'absolute left-4 top-12 z-[7] hidden w-60 md:block';
 export const GM_CORNER_BASE = 'absolute size-[26px] border-[rgba(34,211,238,0.55)] border-solid';
 export const GM_CORNER_TL = `${GM_CORNER_BASE} top-0 left-0 border-w-[1px_0_0_1px]`;
 export const GM_CORNER_TR = `${GM_CORNER_BASE} top-0 right-0 border-w-[1px_1px_0_0]`;

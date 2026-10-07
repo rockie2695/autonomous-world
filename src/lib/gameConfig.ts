@@ -308,6 +308,113 @@ export const CONFIG = {
   SPACE_PARTICLE_TWINKLE: 0.01,     // 閃爍速度 / twinkle rate
   SPACE_PARTICLE_RGB: '180, 220, 255', // 基礎色（不透明度另外乘）/ base colour, opacity applied separately
   SPACE_DPR_CAP: 2,                 // DPR 上限，4K 螢幕不要用原值 / DPR cap; do not use the native value on 4K
+  // 顏色一律放在 config，元件裡不得硬編碼任何顏色 /
+  // Every colour lives in config; no component may hard-code one.
+
+  // ── 流場塵埃 / Flow-field dust ────────────────────────────────────────────
+  // 取代線性漂移的塵埃：粒子沿著 Simplex noise 場移動，所以會自然聚成絲帶、渦流與
+  // 空洞——「隨機但有結構」。鄰近位置的 noise 值相近，所以粒子不會互相撞開。
+  //
+  // Replaces the linear drift: particles move along a Simplex noise field, so they
+  // gather into ribbons, vortices and voids — random but structured. Neighbouring
+  // positions have similar noise, so particles do not scatter randomly.
+  //
+  // ── 流場塵埃的顏色 / Flow-field dust colours ───────────────────────────────
+  // **所有顏色都在這裡**，方便開發者直接調整：色相範圍、飽和度、亮度、不透明度上
+  // 限，以及每個色階的 RGB。元件裡沒有任何硬編碼的顏色。
+  //
+  // **Every colour lives here**, so a developer can retune the whole layer without
+  // touching a component: the hue range, saturation, lightness, the alpha ceiling,
+  // and the RGB of every step. No colour is hard-coded in the component.
+  //
+  // 色相範圍可以拉大到 0–360 拿到彩虹，但要先想清楚：地圖本身已經有勢力色（金色
+  // 君王、青色強調色、綠色領地），飽和度越高，道路的對比越容易被吃掉。要更亮，
+  // 優先調 `SPACE_FLOW_LIGHTNESS` 與 `SPACE_FLOW_MAX_ALPHA`，而不是飽和度。
+  //
+  // Widening the hue range to 0–360 gives a rainbow, but weigh it first: the map
+  // already carries faction colour (gold kings, cyan accents, green territory), and
+  // the higher the saturation the more road contrast it eats. To go brighter,
+  // raise `SPACE_FLOW_LIGHTNESS` or `SPACE_FLOW_MAX_ALPHA` before saturation.
+  /**
+   * 色相範圍。**預設 0–320**，所以紅、橘、黃、綠、藍、靛、紫都在內。
+   *
+   * 只看到紫、粉、藍是因為舊值是 `195 → 320`：那正好切掉 0–195 那一半，而 195–320
+   * 裡面只有藍、青、紫與一點洋紅。綠（~120）、黃（~55）、橘（~30）、紅（~0）全被切掉
+   * 了。
+   *
+   * **Defaults to 0–320** so red, orange, yellow, green, blue, indigo and violet are
+   * all present.
+   *
+   * Only purple, pink and blue appeared because the old range was `195 → 320`, which
+   * cuts off everything below 195 — and 195–320 contains only blue, cyan, violet and a
+   * little magenta. Green (~120), yellow (~55), orange (~30) and red (~0) were all
+   * excluded by the range itself.
+   *
+   * 想回到窄版冷色調就設成 `195` → `320`。/
+   * Set `195` → `320` to go back to the narrow cool palette.
+   */
+  SPACE_FLOW_HUE_MIN: 0,
+  SPACE_FLOW_HUE_MAX: 320,
+  SPACE_FLOW_SATURATION: 78,        // 飽和度（%）/ saturation %
+  SPACE_FLOW_LIGHTNESS: 66,         // 亮度（%）/ lightness %
+  SPACE_FLOW_MAX_ALPHA: 0.72,       // 不透明度上限 / alpha ceiling
+  /**
+   * 每個色階的 RGB（不用 HSL，讓開發者能直接指定想要的顏色）。
+   * 逗號分隔的 `r,g,b`，依 `SPACE_FLOW_HUE_STEPS` 平分色階；不給就自動由
+   * 色相範圍生成。
+   *
+   * The RGB of each step, so a developer can name exact colours instead of
+   * describing them as a hue range. Comma-separated `r,g,b`, spread across
+   * `SPACE_FLOW_HUE_STEPS`; leave empty to derive them from the hue range.
+   */
+  SPACE_FLOW_COLORS: [] as string[],
+
+  SPACE_FLOW_NOISE_SCALE: 0.0018,   // 越小絲帶越長 / smaller = longer ribbons
+  SPACE_FLOW_TIME_SCALE: 0.00015,   // 場演化速度 / field evolution rate
+  // 刻意比原本的 0.9 慢很多。使用者要求「慢」：塵埃是背景，動得太快會跟地圖爭
+  // 注意力，而且拖曳地圖時會看起來像整片都在抖。
+  //
+  // Deliberately far slower than the original 0.9. The dust is background: too fast and
+  // it competes with the map for attention, and a drag reads as the whole layer shaking.
+  SPACE_FLOW_SPEED: 0.22,
+  /**
+   * 拖曳 / 縮放時的**視差**：粒子跟著鏡頭移動的比例。
+   * 1 = 完全跟著地圖走（像貼在地圖上）；0 = 完全不動（像遠處的星）。
+   * 0.35 讓它有「浮在地圖上方一點點」的深度感——完全跟著走會失去空間感，完全不動
+   * 又會讓拖曳時地圖在滑而塵埃沒反應。
+   *
+   * **Parallax**: how much the dust follows the camera. 1 = locked to the map, 0 = fixed
+   * like distant stars. 0.35 reads as floating just above the map: fully locked loses
+   * the sense of depth, fully fixed makes the map slide under inert dust.
+   */
+  SPACE_FLOW_PARALLAX: 0.35,
+  /**
+   * 群聚的「揉圓」程度，0..1。單純的 noise 流場只會形成**細長的線**；加上一個以噪聲
+   * 值為中心的徑向拉力，粒子就會聚成團塊與渦流，而不是只有絲帶。值越大越團。
+   *
+   * How much the flow is "rounded", 0..1. A plain noise field only ever makes *thin
+   * lines*. Adding a gentle pull toward high-noise centres makes the particles gather
+   * into blobs and vortices too, rather than ribbons alone. Higher clumps harder.
+   */
+  SPACE_FLOW_CLUMP: 0.55,
+  SPACE_FLOW_PARTICLE_COUNT: 520,   // 粒子數（硬上限 1000）/ count (hard cap 1000)
+  // 色相「跟著場走」/ Hue follows the field.
+  // 色相不再由粒子自己抽，而是取它**所在位置**的噪聲值。於是同一條絲帶上的粒子共享
+  // 色相——分組一改變，顏色分組也跟著改。這才是「顏色跟隨流動」的真正意思。
+  //
+  // The hue is no longer the particle's own draw: it is read from the noise at the
+  // particle's **position**. Every particle on one ribbon then shares a hue, so as
+  // the grouping changes the colour grouping changes with it. That is what "colour
+  // follows the flow" actually has to mean.
+  SPACE_FLOW_HUE_SCALE: 0.0011,     // 色相取樣的空間尺度，比流動更細 / hue sample scale, finer than the flow
+  SPACE_FLOW_HUE_TIME_SCALE: 0.00008, // 色相隨場漂移，比流動慢 / hue drift, slower than the flow
+  SPACE_FLOW_HUE_STEPS: 24,         // 量化階數，每幀零配置 / quantisation steps, so a frame allocates nothing
+  SPACE_FLOW_MIN_SIZE: 0.6,         // 最小半徑 / min radius
+  SPACE_FLOW_MAX_SIZE: 1.9,         // 最大半徑（刻意小於 2.2）/ max radius (deliberately under 2.2)
+  SPACE_FLOW_MIN_LIFE: 200,         // 最短生命（幀）/ shortest life, frames
+  SPACE_FLOW_MAX_LIFE: 600,         // 最長生命（幀）/ longest life, frames
+  SPACE_FLOW_FADE_FRACTION: 0.15,   // 淡入與淡出各佔生命的比例 / fade in and out share
+  SPACE_FLOW_SEED: 'space-flow',    // 噪聲種子，讓場可重現 / noise seed, so the field is reproducible
   /** 艦隊的前後深度展開（世界單位），給 3D 場景分層用 / Depth spread for layering the fleet in 3D */
   BATTLE_FLEET_DEPTH: 40,
 
@@ -483,6 +590,46 @@ export const CONFIG = {
   // scale with zoom, so a graph-space threshold would become so large when zoomed out
   // that the whole region counts as "a place" and the faction readout could never appear.
   TERRITORY_PLACE_HOVER_PX: 14,
+
+  // ─── 地圖顏色 / Map colours ────────────────────────────────────────────────
+  // SigmaMap 裡所有硬編碼的顏色都搬到這裡。改這些值就能重新配色整張地圖，不必動
+  // 元件。勢力色本身是**執行期資料**（資料庫的 hsl），不在此列。
+  //
+  // Every colour that was hard-coded in SigmaMap lives here. Retune the whole map by
+  // editing these values, not the component. Faction colour itself is **runtime data**
+  // (an hsl string from the database) and is deliberately not listed here.
+  /** 道路 / roads */
+  MAP_ROAD_COLOR: '#1e3a5f',
+  /** 無主據點 / unclaimed settlements */
+  MAP_UNOWNED_COLOR: '#374151',
+  /** 據點的預設色（無勢力）/ the default node colour when unaffiliated */
+  MAP_UNOWNED_NODE_COLOR: '#4a5568',
+  /** 勢力標籤與地名的螢光青 / the neon cyan used for place labels */
+  MAP_LABEL_COLOR: '#1EBDD6',
+  /** 沒有勢力名稱時的預設文字色 / default text colour when a faction has no name */
+  MAP_LABEL_FALLBACK_COLOR: '#e2e8f0',
+  /** 地名缺少勢力色時的預設色 / fallback colour for a label with no faction colour */
+  MAP_LABEL_FALLBACK_FACTION: '#94a3b8',
+  /** territory tooltip 在無主土地上的高亮色 / the highlight used over unowned land */
+  MAP_TERRITORY_FALLBACK: '#38bdf8',
+  /** 聚光燈：地點「新建」的環 / spotlight ring for a newly created place */
+  MAP_SPOTLIGHT_CREATED: '#22d3ee',
+  /** 聚光燈：地點「被攻擊」的環 / spotlight ring for an attacked place */
+  MAP_SPOTLIGHT_ATTACKED: '#f87171',
+  /** 移動動畫：隊伍圓點的預設色 / the travel dot's colour when unaffiliated */
+  MAP_MOVE_DOT_FALLBACK: '#5eead4',
+  /**
+   * 覆蓋層文字陰影與發光陰影的備援色。
+   * 正常情況下應該讀取 `@theme static` 的 token（`--color-ds-void`）；只有在 token
+   * 還沒被讀到（例如 canvas 初始化得太早）才會用到這個後備值，所以它必須與該
+   * token 同色，否則會出現一瞬間閃爍的不同色陰影。
+   *
+   * Fallback for the overlay text shadow and the glow's drop shadow. The token in
+   * `@theme static` (`--color-ds-void`) is the real source; this only applies if it
+   * cannot be read yet (the canvas can initialise very early), so it must match that
+   * token or a differently-coloured shadow will flash for a frame.
+   */
+  MAP_SHADOW_FALLBACK: '#020617',
 } as const;
 
 // ─── 動態佈局函數 / Dynamic Layout Functions ─────────────────────────────

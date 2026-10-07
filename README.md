@@ -109,6 +109,9 @@ autonomous-world/
 │       ├── gameConfig.ts          # All tunable game values
 │       ├── rng.ts                 # Seeded RNG (mulberry32)
 │       ├── snapshot.ts            # Snapshot compression/decompression (gzip)
+│       ├── territory.ts           # Territory force field (pure logic, no DOM)
+│       ├── battleFleet.ts         # Contested-road front lines (pure logic, no DOM)
+│       ├── spaceFlow.ts           # Flow-field dust: noise field + colour ramp (pure logic)
 │       ├── i18n/                  # Internationalization (zh/en)
 │       │   ├── index.ts           # Locale management
 │       │   ├── zh.ts              # Traditional Chinese translations
@@ -121,8 +124,11 @@ autonomous-world/
 ├── src/components/
 │   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
 │   ├── LeaderAvatar.tsx           # Procedural leader head bust (seeded from character.id)
-│   └── home/                      # Homepage sections (three.js scenes, live poller, hooks)
-│                                  # (the event log and charts live in src/app/game/)
+│   ├── BattleFleet.tsx         # Ships trading fire along contested roads (Canvas 2D)
+│   ├── SpaceFlow.tsx           # Flow-field space dust (Simplex noise, Canvas 2D)
+│   └── home/                   # Homepage sections (three.js scenes, live poller, hooks)
+│                                #   FleetScene.tsx renders the same fleet over the 3D graph
+│                                #   (the event log and charts live in src/app/game/)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
 │   ├── adminAssign.ts             # grantAdmin/revokeAdmin — shared admin assignment rules (ambition + cooldown)
@@ -200,7 +206,18 @@ The game features an interactive force-directed graph map using Sigma.js:
   decides it. It is a translucent tint **over** the map, not a repaint of it — the graph, roads and
   glow stay visible underneath — and unowned land is never coloured, because CK3 leaves unclaimed
   land untouched. Hovering a *place* still shows that place's tooltip; hovering open territory shows
-  the faction's, and lifting a region dims the rest
+  the faction's, and lifting a region dims the rest. Each faction's **name** is DOM over its region
+- **Space dust** — the map sits on a slowly drifting flow field: particles follow a 3D Simplex noise
+  field, so they gather into ribbons, vortices and voids rather than scattering at random, and each
+  particle's colour is read from the noise **at its position**, so one ribbon is one colour band.
+  Every colour and rate is a `SPACE_FLOW_*` value in `lib/gameConfig.ts`; widen `SPACE_FLOW_HUE_MAX`
+  toward 360 for a rainbow, but raise `SPACE_FLOW_LIGHTNESS` or `SPACE_FLOW_MAX_ALPHA` before
+  `SPACE_FLOW_SATURATION` — the map already carries faction colour, and vivid ribbons cost the roads
+  their contrast
+- **Battle fleet** — a road whose two ends belong to rival factions *is* a front line, and ships from
+  both sides cruise it trading fire. The front lines are derived from ownership rather than pushed as
+  events, so they need no pipeline to appear on both the home page and the game page, and they follow
+  the simulation the instant a faction dies or loses land
 - The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
 - **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
 - **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader
@@ -234,7 +251,10 @@ view of faction power rather than another rendering of one metric.
 - **Leader hover preview** — hovering a row of the leader table floats the leader's radar on the
   right and their procedurally generated head on the left
 - **Leader avatars** are generated from the character id, so a leader always has the same face
-  without storing anything; kings get a crown, age greys the hair, and the faction colors the robe
+  without storing anything; kings get a crown, age greys the hair, and the faction colors the robe.
+  The 168px avatar in the leader detail modal **breathes** gently (chest rise plus a slight head tilt,
+  peaking at 0.45 of a 4s cycle so it reads as breathing rather than a heartbeat); list rows and the
+  hover preview stay still, because the motion is invisible at their size but the repaints are real
 - Each of 武力 / 統領 / 經濟 is banded **three** ways, so *every* leader carries a readable cue
   instead of only the strongest few, and each cue owns its own body region so they never overlap:
 

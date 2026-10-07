@@ -42,12 +42,12 @@ const BattleFleet = dynamic(
   () => import('@/components/BattleFleet').then((mod) => mod.BattleFleet),
   { ssr: false }
 );
-// 太空塵埃層。跟艦隊分開動態載入，因為它是第一個出現的層，早到可以獨立載入，
+// 流場塵埃層。跟艦隊分開動態載入，因為它是第一個出現的層，早到可以獨立載入，
 // 晚載也不會擋住地圖。/
-// The dust layer. Loaded separately from the fleet because it paints first, so it
-// can arrive on its own without holding the map back.
-const SpaceDust = dynamic(
-  () => import('@/components/SpaceDust').then((mod) => mod.SpaceDust),
+// The flow-field dust layer. Loaded separately from the fleet because it paints
+// first, so it can arrive on its own without holding the map back.
+const SpaceFlow = dynamic(
+  () => import('@/components/SpaceFlow').then((mod) => mod.SpaceFlow),
   { ssr: false }
 );
 
@@ -257,6 +257,16 @@ export default function GamePage() {
    *  changes during render, and a ref must never drive rendering */
   const [mapControls, setMapControls] = useState<MapCameraControls | null>(null);
 
+  /**
+   * 鏡頭位置只存 ref：太空塵埃每一幀都要讀它做視差，所以**不能**進 state，否則
+   * 拖曳地圖會讓整棵樹���幀重新渲染。塵埃自己直接讀這個 ref。
+   *
+   * The camera position lives in a ref only: the dust reads it every frame for the
+   * parallax, so it must not become state — a drag would re-render the whole tree every
+   * frame. The dust reads this ref directly.
+   */
+  const cameraPosRef = useRef({ x: 0.5, y: 0.5 });
+
   const locale = useSyncExternalStore(
     subscribeLocale,
     getLocale,
@@ -358,8 +368,11 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
   const isNarrow = useSyncExternalStore(subscribeNarrow, getIsNarrow, getIsNarrowServer);
   const rightPanelOpen = panelOverride ?? !isNarrow;
   const setRightPanelOpen = (next: boolean) => setPanelOverride(next);
-  const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats'>('characters');
-  
+  // 預設**不開**任何分頁：首次進入地圖就是主角，一個預設開著的側欄會把它蓋掉。
+  //
+  // No panel open by default: the map is the subject on arrival, and a panel that is
+  // already open would cover it.
+  const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats' | null>(null);
 
   /**
    * 事件只存 charName（沒有 charId），所以這裡接受 id 或名字：先當 id 查，
@@ -739,6 +752,10 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
                 mapControlsRef.current = controls;
                 setMapControls(controls);
               }}
+              onCameraMove={(x, y) => {
+                cameraPosRef.current.x = x;
+                cameraPosRef.current.y = y;
+              }}
             />
           </div>
 
@@ -1009,7 +1026,8 @@ function MapSidePanel({
   loading,
   children,
 }: {
-  activeTab: SideTab;
+  /** null = 沒有任何分頁開著 / null means no panel is open */
+  activeTab: SideTab | null;
   onTabChange: (tab: SideTab) => void;
   open: boolean;
   onClose: () => void;
@@ -1023,7 +1041,9 @@ function MapSidePanel({
       <AnimatePresence mode="wait" initial={false}>
         {open && (
         <motion.div
-          key={activeTab}
+          // open 已經保證有值，但 TS 從 `activeTab` 推不出來，所以收斂一次 /
+          // `open` already guarantees a value, but TS cannot infer that
+          key={activeTab ?? 'none'}
           initial={{ opacity: 0, x: 28 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 28 }}
@@ -1966,6 +1986,7 @@ function GameGraph({
   onPlaceClick,
   selectedPlaceId,
   onControlsReady,
+  onCameraMove,
 }: {
   places: WorldState['places'];
   factions: WorldState['factions'];
@@ -1976,9 +1997,26 @@ function GameGraph({
   onPlaceClick?: (place: WorldState['places'][0]) => void;
   selectedPlaceId?: string | null;
   onControlsReady?: (controls: MapCameraControls | null) => void;
+  /** 鏡頭每次移動時通知（框化座標），轉給塵埃層做視差 / Notified on every camera move (framed coords), forwarded to the dust layer for parallax */
+  onCameraMove?: (x: number, y: number) => void;
 }) {
   // 艦隊用的世界座標與勢力色票。座標直接沿用 ForceAtlas2 的 layoutX / layoutY，
   // 所以艦隊與地圖上的據點一定落在同一個位置。/
+  // 塵埃層需要的鏡頭位置。這裡在本地包一層：外面傳進來的是**回呼**，而塵埃每幀都要
+  // **讀取**位置，所以不能只靠回呼——必須有一個穩定的 ref 可以逐幀查詢。ref 不進
+  // state，否則拖曳地圖會讓整棵樹每幀重新渲染。
+  //
+  // The camera position the dust layer needs. Wrapped locally: the incoming prop is a
+  // *callback*, but the dust must *read* the position every frame, so it needs a
+  // stable ref rather than only a callback. A ref, not state — otherwise dragging the
+  // map re-renders the whole tree every frame.
+  const cameraPosRef = useRef({ x: 0.5, y: 0.5 });
+  const handleCameraMove = useCallback((x: number, y: number) => {
+    cameraPosRef.current.x = x;
+    cameraPosRef.current.y = y;
+    onCameraMove?.(x, y);
+  }, [onCameraMove]);
+
   // World coordinates and faction colours for the fleet. The coordinates reuse
   // ForceAtlas2's layoutX / layoutY, so the ships and the map's settlements are
   // always in the same place.
@@ -2024,14 +2062,14 @@ function GameGraph({
     // layered together
     <div className="w-full h-full bg-ds-space relative">
       <div className="absolute inset-0 bg-ds-space-nebula" aria-hidden="true" />
-      {/* 塵埃必須在 SigmaMap **之前**：DOM 順序就是繪製順序，而 sigma 的容器
+      {/* 流場塵埃必須在 SigmaMap **之前**：DOM 順序就是繪製順序，而 sigma 的容器
           本身帶一層不透明底色，放在後面會被完全蓋掉。SigmaMap 的外層底色也已經
           拿掉，改由上層的 bg-ds-space 提供。/
-          The dust must come BEFORE SigmaMap: DOM order is paint order, and sigma's
-          container carries its own opaque background, which would hide the dust
-          completely. SigmaMap's own backdrop was removed too — bg-ds-space above
-          now provides it. */}
-      <SpaceDust />
+          The flow-field dust must come BEFORE SigmaMap: DOM order is paint order,
+          and sigma's container carries its own opaque background, which would hide
+          the dust completely. SigmaMap's own backdrop was removed too — bg-ds-space
+          above now provides it. */}
+      <SpaceFlow cameraRef={cameraPosRef} />
       <SigmaMap
         places={places}
         factions={factions}
@@ -2042,6 +2080,7 @@ function GameGraph({
         onPlaceClick={onPlaceClick}
         selectedPlaceId={selectedPlaceId}
         onControlsReady={onControlsReady}
+        onCameraMove={handleCameraMove}
       />
       {/* 艦隊壓在 sigma 之上、覆蓋層之下：它只是氣氛，不該擋住地圖互動，也不該蓋掉
           地名。pointer-events 已在元件裡關掉。/

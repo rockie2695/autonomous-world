@@ -1,18 +1,25 @@
 // ============================================================================
-// Sigma 地圖元件 — 使用 Sigma.js + graphology 渲染互動式地圖
-// Sigma Map Component — Interactive map using Sigma.js + graphology
-// ============================================================================
-// 功能 / Features:
-// - 節點 = 勢力色、大小 = 兵力 / Nodes = faction color, size = troops
-// - 道路 = 細線、半透明、hover 高亮 / Roads = thin lines, semi-transparent, hover highlight
-// - 節點發光 + 陰影（靜態裝飾層）/ Node glow + drop shadow (static decoration layer)
-// - hover 顯示：名字 + 勢力 + 兵力 + 建築 / Hover: name + faction + troops + buildings
-// - 可拖曳 / 縮放 / Draggable + zoomable（鏡頭動畫：聚焦地點、全覽）/ animated camera: focus + fit
-// - 點擊顯示地方詳情 / Click shows place detail
+// Sigma 地圖元件 / Sigma Map component
+// ----------------------------------------------------------------------------
+// 純邏輯（顏色換算、sprite 快取、資料型別、`MapCameraControls`）都在
+// `./mapShared`，這個檔案只留元件本身。
+//
+// The pure logic (colour conversion, the sprite cache, the data shapes and
+// `MapCameraControls`) lives in `./mapShared`; this file keeps only
+// the component.
 // ============================================================================
 
-'use client';
-
+import {
+  hexToRgb,
+  getGlowSprite,
+  hslToHex,
+  readDesignToken,
+  type Faction,
+  type MapCameraControls,
+  type Place,
+  type Tooltip,
+  type SigmaMapProps,
+} from './mapShared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
@@ -32,268 +39,9 @@ import {
   type TerritorySite,
 } from '@/lib/territory';
 
-/**
- * 將 HSL 字串轉換為 hex 格式 / Convert HSL string to hex format
- * Sigma.js/WebGL 需要 hex 或 rgb 格式 / Sigma.js/WebGL requires hex or rgb format
- */
-function hslToHex(hsl: string): string {
-  // 解析 "hsl(120, 70%, 50%)" 格式 / Parse "hsl(120, 70%, 50%)" format
-  const match = hsl.match(/hsl\((\d+),\s*(\d+)%,\s*(\d+)%\)/);
-  if (!match) return '#4a5568'; // 預設灰色 / Default gray
-
-  const h = parseInt(match[1]) / 360;
-  const s = parseInt(match[2]) / 100;
-  const l = parseInt(match[3]) / 100;
-
-  let r: number, g: number, b: number;
-
-  if (s === 0) {
-    r = g = b = l;
-  } else {
-    const hue2rgb = (p: number, q: number, t: number) => {
-      if (t < 0) t += 1;
-      if (t > 1) t -= 1;
-      if (t < 1 / 6) return p + (q - p) * 6 * t;
-      if (t < 1 / 2) return q;
-      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-      return p;
-    };
-
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hue2rgb(p, q, h + 1 / 3);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1 / 3);
-  }
-
-  const toHex = (x: number) => {
-    const hex = Math.round(x * 255).toString(16);
-    return hex.length === 1 ? '0' + hex : hex;
-  };
-
-  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-/**
- * 讀取 globals.css 的設計 token（設計值不 hardcode 在 TSX）。
- * Read a design token from globals.css (design values never hardcoded in TSX).
- *
- * @param name - CSS 自訂屬性名稱（不含 --）/ CSS custom property name (without --)
- * @param fallback - 讀不到時的後備值 / Fallback when the token is missing
- * @returns token 值（已 trim）/ The trimmed token value
- */
-function readDesignToken(name: string, fallback: string): string {
-  if (typeof window === 'undefined') return fallback;
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-  return value.length > 0 ? value : fallback;
-}
-
-/** 發光／陰影 sprite 的像素尺寸 / Pixel size of the glow/shadow sprites */
-const SPRITE_SIZE = 64;
-
-/**
- * 把 `#rgb` / `#rrggbb` 轉成三個 0–255 的通道值。
- * Turn `#rgb` / `#rrggbb` into three 0–255 channels.
- *
- * 領地層要自己寫 ImageData，所以自己解色碼。圖節點的顏色一律是 hex（有主之地
- * 已經過 hslToHex，無主之地固定 '#374151'），因此不必支援其他色彩格式。
- * The territory layer writes its own ImageData, so it parses colours itself.
- * Graph node colours are always hex, so no other format needs supporting.
- */
-function hexToRgb(hex: string): [number, number, number] {
-  const raw = hex.replace('#', '');
-  const full =
-    raw.length === 3
-      ? raw
-          .split('')
-          .map((c) => c + c)
-          .join('')
-      : raw;
-  const value = Number.parseInt(full, 16);
-  if (Number.isNaN(value)) return [0, 0, 0];
-  return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
-}
-
-/**
- * 建立一張中心向外淡出的徑向漸層 sprite，並依色票快取。
- * 對同一種顏色只建立一次，之後每次重繪都只是 drawImage ——
- * 遠比每幀 createRadialGradient 便宜（地圖最多 2000 個節點）。
- * Build a radial-gradient sprite that fades from the centre outwards, cached
- * per colour. Each redraw is then just a drawImage, far cheaper than calling
- * createRadialGradient per node per frame (the map can hold 2000 nodes).
- *
- * @param cache - 以顏色為鍵的 sprite 快取 / Sprite cache keyed by colour
- * @param color - 中心色（CSS 色碼）/ Centre colour (any CSS colour string)
- * @param alpha - 中心不透明度 / Opacity at the centre
- * @returns 快取的 sprite 畫布 / The cached sprite canvas
- */
-function getGlowSprite(
-  cache: Map<string, HTMLCanvasElement>,
-  color: string,
-  alpha: number
-): HTMLCanvasElement {
-  const key = `${color}|${alpha}`;
-  const cached = cache.get(key);
-  if (cached) return cached;
-
-  const sprite = document.createElement('canvas');
-  sprite.width = SPRITE_SIZE;
-  sprite.height = SPRITE_SIZE;
-  const sctx = sprite.getContext('2d');
-  if (sctx) {
-    const half = SPRITE_SIZE / 2;
-    const gradient = sctx.createRadialGradient(half, half, 0, half, half, half);
-    gradient.addColorStop(0, withAlpha(color, alpha));
-    gradient.addColorStop(0.45, withAlpha(color, alpha * 0.32));
-    gradient.addColorStop(1, withAlpha(color, 0));
-    sctx.fillStyle = gradient;
-    sctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
-  }
-
-  cache.set(key, sprite);
-  return sprite;
-}
-
-/**
- * 把 CSS 色碼轉成帶透明度的 rgba()。
- * Sigma 的節點色是 hex，所以這裡只需處理 #rgb / #rrggbb。
- * Convert a CSS colour to rgba() with the given alpha. Node colours arrive as
- * hex from hslToHex, so only #rgb / #rrggbb need handling.
- *
- * @param color - hex 色碼 / A hex colour
- * @param alpha - 0-1 的不透明度 / Opacity between 0 and 1
- * @returns rgba() 色字串 / An rgba() colour string
- */
-function withAlpha(color: string, alpha: number): string {
-  let hex = color.trim();
-  if (hex.startsWith('#')) hex = hex.slice(1);
-  if (hex.length === 3) {
-    hex = hex
-      .split('')
-      .map((c) => c + c)
-      .join('');
-  }
-  if (hex.length !== 6) return color;
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return color;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-interface Place {
-  id: string;
-  name: string;
-  factionId: string | null;
-  administratorId: string | null;
-  garrison: number;
-  fortress: number;
-  market: number;
-  barracks: number;
-  layoutX: number;
-  layoutY: number;
-}
-
-interface Faction {
-  id: string;
-  name: string;
-  color: string;
-  alive: boolean;
-  collapsing: boolean;
-}
-
-interface Road {
-  id: string;
-  aId: string;
-  bId: string;
-}
-
-interface Character {
-  id: string;
-  name: string;
-  placeId: string;
-  troops: number;
-  gold: number;
-  isKing: boolean;
-  alive: boolean;
-}
-
-/**
- * 地圖視角控制 — 由 SigmaMap 透過 onControlsReady 提供。
- * Map camera controls — provided by SigmaMap via onControlsReady.
- * 父層將其存入 ref，供浮動縮放/重設按鈕呼叫。
- * Parents store it in a ref for the floating zoom/reset buttons.
- */
-export interface MapCameraControls {
-  /** 放大 / Zoom in */
-  zoomIn: () => void;
-  /** 縮小 / Zoom out */
-  zoomOut: () => void;
-  /** 重設拖曳位置與縮放層級（動畫回到預設視角）/ Reset pan position and zoom level (animated back to default view) */
-  resetView: () => void;
-  /** 聚焦到某個地點（供事件日誌點擊後呼叫）/ Focus the camera on a place (called when the event log targets one) */
-  focusPlace: (placeId: string) => void;
-  /** 目前縮放程度：0 = 最近、1 = 最遠（反向包裝，用於滑桿）/
-   *  Current zoom as 0 = closest, 1 = furthest (inverted for the slider) */
-  getZoom: () => number;
-  /** 設定縮放程度（0..1，同 getZoom 的反向刻度）/ Set zoom (0..1, same inverted scale) */
-  setZoom: (t: number) => void;
-  /** 每次縮放變動時通知（滑桿要跟著動）/ Called whenever the zoom changes so the slider can track it */
-  onZoomChange?: (cb: (zoom: number) => void) => () => void;
-}
-
-interface SigmaMapProps {
-  places: Place[];
-  factions: Faction[];
-  roads: Road[];
-  characters: Character[];
-  /** 地圖聚光燈：近 K 回合內新生成 / 被攻擊的地點 / Map spotlight: places created/attacked within the last K rounds */
-  spotlights?: Array<{ placeId: string; kind: 'created' | 'attacked' }>;
-  /** 本回合移動（from → to），供動畫播放 / This round's moves (from → to) for the travel animation */
-  moves?: Array<{ fromPlaceId: string; toPlaceId: string; factionId: string | null }>;
-  onPlaceClick?: (place: Place) => void;
-  selectedPlaceId?: string | null;
-  /** 視角控制回呼；Sigma 實例建立後呼叫，卸載時呼叫 null / Camera controls callback; invoked after the Sigma instance is created, null on unmount */
-  onControlsReady?: (controls: MapCameraControls | null) => void;
-}
-
-/** 拉近時的提示：指向一個**地方** / Zoomed-in tooltip: a single *place* */
-interface PlaceTooltip {
-  kind: 'place';
-  x: number;
-  y: number;
-  place: Place;
-  faction: Faction | null;
-  characterCount: number;
-  linkedPlaces: string[];
-}
-
-/**
- * 拉遠時的提示：指向一整塊**勢力領地** / Zoomed-out tooltip: a whole faction region
- *
- * 領地視圖畫的是面積而不是節點，所以提示也必須是面積的。這一層原本重用地方提示，
- * 但它用「最近的地方」回答游標 —— 在這個視圖裡那幾乎永遠是某個跟游標無關的小地點，
- * 於是 hover 一塊勢力領地卻顯示另一個地方的名字。
- * The zoomed-out view draws areas rather than nodes, so its tooltip has to describe
- * an area too. This layer used to reuse the place tooltip, which answered the cursor
- * with "the nearest place" — in this view that is almost always some unrelated little
- * place, so hovering a faction's territory named somewhere else entirely.
- */
-interface FactionTooltip {
-  kind: 'faction';
-  x: number;
-  y: number;
-  /** 勢力名稱 / Faction name */
-  name: string;
-  /** 勢力色（hsl 字串）/ Faction colour, stored as hsl */
-  color: string;
-  /** 該勢力控制的**地方**數（不是格子數）/ Places this faction owns (not cell count) */
-  placeCount: number;
-}
-
-type Tooltip = PlaceTooltip | FactionTooltip;
+// MapCameraControls lives in the shared module now, but callers already import it
+// from here, so re-export it to keep that import working.
+export type { MapCameraControls } from './mapShared';
 
 /**
  * Sigma 地圖元件。 / Sigma Map Component.
@@ -309,6 +57,7 @@ export function SigmaMap({
   onPlaceClick,
   selectedPlaceId,
   onControlsReady,
+  onCameraMove,
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -340,6 +89,7 @@ export function SigmaMap({
   const labelsVisibleRef = useRef(false);
   const onPlaceClickRef = useRef(onPlaceClick);
   const onControlsReadyRef = useRef(onControlsReady);
+  const onCameraMoveRef = useRef(onCameraMove);
   // 尊重「減少動態效果」偏好：鏡頭直接跳轉，不做過場動畫
   // Respect prefers-reduced-motion: the camera jumps instead of animating
   const reducedMotion = useReducedMotion();
@@ -401,8 +151,8 @@ export function SigmaMap({
       // resize fixes it, so take the library's own escape hatch.
       allowInvalidContainer: true,
       renderEdgeLabels: false,
-      defaultEdgeColor: '#1e3a5f', // 深藍色道路 / Deep blue roads
-      defaultNodeColor: '#4a5568',
+      defaultEdgeColor: CONFIG.MAP_ROAD_COLOR, // 深藍色道路 / Deep blue roads
+      defaultNodeColor: CONFIG.MAP_UNOWNED_NODE_COLOR,
       labelFont: 'monospace',
       labelSize: 14,
       labelColor: { attribute: 'labelColor' },
@@ -458,7 +208,7 @@ export function SigmaMap({
 
         // hover / 選中 時標籤變青色，連接節點也高亮 / Label turns cyan on hover/select, connected nodes also highlighted
         if (hoveredNodeRef.current === node) {
-          res.labelColor = '#1EBDD6'; // 霓虹青綠 / Neon cyan
+          res.labelColor = CONFIG.MAP_LABEL_COLOR; // 霓虹青綠 / Neon cyan
           res.zIndex = 1;
           res.highlighted = true;
           // forceLabel 會跳過縮放門檻，讓「正在看的地方」一定看得到名字 /
@@ -466,18 +216,18 @@ export function SigmaMap({
           // is always named
           res.forceLabel = true;
         } else if (selectedPlaceIdRef.current === node) {
-          res.labelColor = '#1EBDD6';
+          res.labelColor = CONFIG.MAP_LABEL_COLOR;
           res.highlighted = true;
           res.forceLabel = true;
         } else if (hoveredNeighborsRef.current.has(node)) {
-          res.labelColor = '#1EBDD6';
+          res.labelColor = CONFIG.MAP_LABEL_COLOR;
           res.highlighted = true;
           // 相連地點也強制顯示名字：拉遠時地圖只有線，hover 就能看清連到哪 /
           // Connected places are named too — zoomed out the map is just lines,
           // so hovering reveals what this place links to
           res.forceLabel = true;
         } else {
-          res.labelColor = '#e2e8f0'; // 預設淺灰 / Default light gray
+          res.labelColor = CONFIG.MAP_LABEL_FALLBACK_COLOR; // 預設淺灰 / Default light gray
         }
 
         return res;
@@ -669,6 +419,19 @@ export function SigmaMap({
     };
     camera.on('updated', emitZoom);
 
+    // 鏡頭位置也訂閱出去，讓疊層做視差。分開一個訂閱而不是併進 emitZoom，因為滑桿
+    // 只需要比例、每幀都會收到；而塵埃要的是位置，而且可以用 ref 直接寫、不必進
+    // React state。
+    //
+    // The camera position is subscribed out too, so overlays can do parallax. It is a
+    // separate subscription rather than part of emitZoom: the slider only needs the
+    // ratio and gets it every frame, while the dust needs the position and can write
+    // straight to a ref without React state.
+    const emitCamera = () => {
+      onCameraMoveRef.current?.(camera.x, camera.y);
+    };
+    camera.on('updated', emitCamera);
+
     sigmaRef.current = sigma;
 
     // 將視角控制交給父層（浮動縮放 / 重設按鈕使用）
@@ -763,7 +526,7 @@ export function SigmaMap({
 
       // 有勢力的地方用勢力色（轉換為 hex），無主之地用深灰色
       // Owned places use faction color (converted to hex), unowned use dark gray
-      const color = faction ? hslToHex(faction.color) : '#374151';
+      const color = faction ? hslToHex(faction.color) : CONFIG.MAP_UNOWNED_COLOR;
 
       graph.addNode(place.id, {
         x: place.layoutX,
@@ -785,7 +548,7 @@ export function SigmaMap({
         if (!graph.hasEdge(road.aId, road.bId)) {
           graph.addEdge(road.aId, road.bId, {
             size: 1,
-            color: '#1e3a5f',
+            color: CONFIG.MAP_ROAD_COLOR,
           });
         }
       }
@@ -850,7 +613,7 @@ field: buildTerritoryField(
         return {
           id: region.key,
           name: faction?.name ?? '',
-          color: faction?.color ?? '#94a3b8',
+          color: faction?.color ?? CONFIG.MAP_LABEL_FALLBACK_FACTION,
         };
       }),
     [territoryRegions, factions]
@@ -885,7 +648,23 @@ useEffect(() => {
   // this effect only draws
   const { sites, field } = territory;
   if (!field) return;
-  territoryLabelEls.current = territoryRegions.map(() => null);
+  // **不要**在這裡把 `territoryLabelEls.current` 重設成 null。這個 effect 跑在
+  // render/commit 之後，而 `<span>` 的 ref 回呼是由 React 在 commit 階段填的；重設
+  // 會把剛綁好的元素清掉，於是 draw() 的 label 迴圈每次都 `continue`，名字就永遠
+  // 停在 opacity 0 且沒有 transform（實測：元素在 DOM 裡、文字與顏色都正確，但
+  // 停在 left:0/top:0）。
+  //
+  // **Never** reset `territoryLabelEls.current` here. This effect runs after
+  // render/commit, while the `<span>` refs are attached by React during commit;
+  // resetting wipes the elements that were just bound, so draw()'s label loop hits
+  // `continue` every time and the names stay at opacity 0 with no transform.
+  // Measured symptom: the element is in the DOM with the right text and colour, but
+  // pinned at left:0/top:0.
+  //
+  // 元素數只增不減：多出來的槽位是 `undefined`，同樣會被 `continue` 跳過，所以不需要
+  // 在這裡對齊長度。
+  // The array only ever grows; surplus slots are `undefined` and are skipped by the
+  // same guard, so there is no length bookkeeping to do here.
 
   // 每個勢力索引的 RGB；索引順序對應 field.factions。顏色一律經過 hslToHex，
   // 因為勢力色在資料庫裡是 hsl，WebGL 與 canvas 都要 hex。
@@ -980,10 +759,26 @@ useEffect(() => {
   };
 
   const draw = () => {
+    // 領地**永遠**可見，不隨縮放淡出。這是 Stellaris 的做法：星系地圖就是那張地圖，
+    // 拉近只是看同一片的細節，而不是換成另一張「節點＋道路」的圖。舊版會在拉近時把
+    // alpha 降到 0，於是那層半透明色塊整片消失，看起來像一層霧被吹散 —— 使用者指出
+    // 的正是這個。
+    //
+    // The territory is **always** visible and never fades with zoom. This is the
+    // Stellaris behaviour: the galaxy map *is* the map, and zooming in reveals detail
+    // on the same surface rather than swapping in a different "nodes and roads" map.
+    // The earlier version dropped alpha to 0 when zooming in, so the whole translucent
+    // wash blew away and read as fog clearing — which is exactly what was reported.
+    //
+    // 因此 `territoryAlpha` 不再參與；`TERRITORY_ZOOM_RATIO` 仍留著，因為它決定什麼
+    // 時候開始**顯示**領地（而不是淡出）。
+    //
+    // `territoryAlpha` is therefore out of the path; `TERRITORY_ZOOM_RATIO` stays,
+    // because it still decides when the territory starts being *shown*.
     const alpha = territoryAlpha(
       sigma.getCamera().ratio,
       CONFIG.TERRITORY_ZOOM_RATIO,
-      CONFIG.TERRITORY_FADE_RATIO
+      CONFIG.TERRITORY_ZOOM_RATIO
     );
 
     // 這些不透明度由鏡頭即時決定，屬於執行期資料，所以直接寫在 DOM 上而不走
@@ -1184,7 +979,7 @@ useEffect(() => {
       x: vx,
       y: vy,
       name: owner?.name ?? key,
-      color: owner?.color ?? '#38bdf8',
+      color: owner?.color ?? CONFIG.MAP_TERRITORY_FALLBACK,
       placeCount: owner?.placeCount ?? 0,
     });
     canvas.style.cursor = 'default';
@@ -1416,7 +1211,7 @@ useEffect(() => {
 
       // 陰影色取自設計 token，而非 hardcode 在 TSX
       // The shadow colour comes from a design token, never hardcoded here
-      const shadowColor = readDesignToken('--color-ds-void', '#020617');
+      const shadowColor = readDesignToken('--color-ds-void', CONFIG.MAP_SHADOW_FALLBACK);
 
       // 只畫視窗內的節點：2000 個節點時這是明顯的省流 /
       // Only nodes inside the viewport — a real saving at 2000 nodes
@@ -1596,7 +1391,7 @@ useEffect(() => {
           nodeRadius +
           CONFIG.SPOTLIGHT_RING_OFFSET +
           CONFIG.SPOTLIGHT_RING_PULSE_AMP * pulse;
-        const color = sp.kind === 'created' ? '#22d3ee' : '#f87171';
+        const color = sp.kind === 'created' ? CONFIG.MAP_SPOTLIGHT_CREATED : CONFIG.MAP_SPOTLIGHT_ATTACKED;
         ctx.beginPath();
         ctx.arc(vp.x, vp.y, radius, 0, Math.PI * 2);
         ctx.strokeStyle = color;
@@ -1625,7 +1420,7 @@ useEffect(() => {
           const y = va.y + (vb.y - va.y) * eased;
           const color =
             (m.factionId ? factionColors.get(m.factionId) : undefined) ??
-            '#5eead4';
+            CONFIG.MAP_MOVE_DOT_FALLBACK;
 
           // 尾跡 / Trail
           const tailT = Math.max(0, eased - 0.12);
@@ -1779,7 +1574,7 @@ useEffect(() => {
                 // 勢力色是執行期資料；文字陰影讓名字在深色與淺色領地上都讀得到 /
                 // Faction colour is runtime data. The shadow keeps the name legible
                 // on both dark and light territory
-                textShadow: '0 0 6px #020617, 0 1px 2px #020617',
+                textShadow: `0 0 6px ${CONFIG.MAP_SHADOW_FALLBACK}, 0 1px 2px ${CONFIG.MAP_SHADOW_FALLBACK}`,
               }}
             >
               {label.name}
