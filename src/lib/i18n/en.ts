@@ -204,6 +204,7 @@ export const en = {
     zoomOut: 'Zoom Out',
     resetView: 'Reset View',
     zoomLevel: 'Zoom level',
+    territory: 'Territory',
     place: 'Place',
     faction: 'Faction',
     troops: 'Troops',

@@ -202,6 +202,7 @@ export const zh = {
     zoomOut: '縮小',
     resetView: '重置視圖',
     zoomLevel: '縮放程度',
+    territory: '顯示領地',
     place: '地方',
     faction: '勢力',
     troops: '兵力',

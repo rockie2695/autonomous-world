@@ -365,6 +365,23 @@ describe('factionRegions', () => {
     }
   });
 
+  it('should report bounds that actually contain the centroid', () => {
+    // 標籤會被夾進這組邊界，所以重心必須落在裡面，否則夾完會偏移 /
+    // The label is clamped into these bounds, so the centroid must lie inside them
+    // or the clamp would move the name somewhere unrelated
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const region of factionRegions(field)) {
+      expect(region.minX).toBeLessThanOrEqual(region.cx);
+      expect(region.maxX).toBeGreaterThanOrEqual(region.cx);
+      expect(region.minY).toBeLessThanOrEqual(region.cy);
+      expect(region.maxY).toBeGreaterThanOrEqual(region.cy);
+      // And the bounds must be a real box, not a point
+      expect(region.maxX).toBeGreaterThan(region.minX);
+      expect(region.maxY).toBeGreaterThan(region.minY);
+    }
+  });
+
   it('should keep a same-faction pair as one region, not two', () => {
     // 同勢力相鄰必須融合成一塊，否則地圖上會出現同一勢力兩塊不相連的領地 /
     // Adjacent same-faction places must fuse, or one faction shows as two

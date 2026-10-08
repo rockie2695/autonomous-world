@@ -389,6 +389,23 @@ export const CONFIG = {
    */
   SPACE_FLOW_PARALLAX: 0.35,
   /**
+   * 「基準」鏡頭比例，也就是粒子看起來**沒有被縮放**的那個比例。
+   *
+   * 這是 sigma「剛好裝滿整個世界」的比例（見 `resetView`：scale 1 就是全覽）。粒子以
+   * 它為 1 倍，於是拉近時放大、拉遠時縮小，而不是永遠不動——那正是「縮放時位置與
+   * 大小不對」的原因：粒子原本完全不理會鏡頭比例。
+   *
+   * The "reference" camera ratio, i.e. the ratio at which the particles appear
+   * **unscaled**.
+   *
+   * It is sigma's "fit the whole world" ratio (see `resetView`: scale 1 is the full
+   * view). Particles are 1× at this ratio, so they grow when you zoom in and shrink
+   * when you zoom out instead of staying fixed — which was exactly the "wrong position
+   * and scale when zooming" complaint: the dust previously ignored the camera ratio
+   * entirely.
+   */
+  SPACE_FLOW_REF_RATIO: 1.18,
+  /**
    * 群聚的「揉圓」程度，0..1。單純的 noise 流場只會形成**細長的線**；加上一個以噪聲
    * 值為中心的徑向拉力，粒子就會聚成團塊與渦流，而不是只有絲帶。值越大越團。
    *
@@ -556,6 +573,18 @@ export const CONFIG = {
   // 邊界往白色混合。畫在格子**自己**的像素上，所以厚度只有一格 —— 這個值調的是
   // 對比，不是粗細。
   TERRITORY_RIM_LIGHT: 0.78,
+  // ── 領地邊界 / Territory border ───────────────────────────────────────────
+  // 邊界是一條**半透明的線**，不是把勢力色提亮。提亮只是在同一塊色裡加白，看起來像
+  // 漸層；一條獨立顏色的線才讀得出「這裡是邊界」。顏色與透明度都在這裡調。
+  //
+  // The border is a **semi-transparent line**, not a lightened faction colour.
+  // Lightening adds white to the same hue and reads as a gradient; a line of its own
+  // colour is what actually reads as a boundary. Both are tunable here.
+  TERRITORY_BORDER_RGB: '226, 240, 255',
+  TERRITORY_BORDER_ALPHA: 0.5,
+  /** 邊界線寬（**螢幕像素**，與縮放無關）/ border stroke width in **screen pixels**, independent of zoom */
+  TERRITORY_BORDER_PX: 1.4,
+  TERRITORY_BORDER_HOVER_ALPHA: 0.85,
   // Extra rim brightness for the hovered faction, so the region you are pointing at
   // has a clearly brighter outline than its neighbours
   // 被 hover 勢力的邊界額外加亮，讓指到的區域輪廓比鄰居明顯

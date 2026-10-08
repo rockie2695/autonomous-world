@@ -108,6 +108,22 @@ export interface FactionRegion {
   /** 重心（圖座標）/ Centroid in graph space */
   cx: number;
   cy: number;
+  /**
+   * 勢力範圍的邊界（圖座標）/ The region's bounds in graph space.
+   *
+   * 標籤需要它才能**留在領地裡面**：只靠重心的話，一塊長條形或彎曲的領地會把名字放到
+   * 範圍外的空白上。所以要能把標籤夾回邊界內，並且在領地在螢幕上太小以致於放不下時
+   * 直接不畫。
+   *
+   * The label needs this to **stay inside the territory**: with only a centroid, an
+   * elongated or bent region puts its name on blank ground outside the claim. Bounds
+   * let the label be clamped back inside, and let it be skipped entirely when the
+   * region is too small on screen to hold it.
+   */
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
 }
 
 /** 鄰居方向遮罩 / Neighbour side mask */
@@ -523,7 +539,10 @@ export function neighbourMask(field: TerritoryField, px: number, py: number): nu
 export function factionRegions(field: TerritoryField): FactionRegion[] {
   const spanX = field.maxX - field.minX;
   const spanY = field.maxY - field.minY;
-  const totals = new Map<string, { cells: number; sumX: number; sumY: number }>();
+  const totals = new Map<
+    string,
+    { cells: number; sumX: number; sumY: number; minX: number; minY: number; maxX: number; maxY: number }
+  >();
 
   for (let py = 0; py < field.height; py++) {
     const gy = field.minY + ((py + 0.5) / field.height) * spanY;
@@ -538,8 +557,20 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
         entry.cells += 1;
         entry.sumX += gx;
         entry.sumY += gy;
+        if (gx < entry.minX) entry.minX = gx;
+        if (gx > entry.maxX) entry.maxX = gx;
+        if (gy < entry.minY) entry.minY = gy;
+        if (gy > entry.maxY) entry.maxY = gy;
       } else {
-        totals.set(key, { cells: 1, sumX: gx, sumY: gy });
+        totals.set(key, {
+          cells: 1,
+          sumX: gx,
+          sumY: gy,
+          minX: gx,
+          minY: gy,
+          maxX: gx,
+          maxY: gy,
+        });
       }
     }
   }
@@ -550,6 +581,10 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
       cellCount: entry.cells,
       cx: entry.sumX / entry.cells,
       cy: entry.sumY / entry.cells,
+      minX: entry.minX,
+      minY: entry.minY,
+      maxX: entry.maxX,
+      maxY: entry.maxY,
     }))
     .sort((a, b) => b.cellCount - a.cellCount);
 }

@@ -61,7 +61,7 @@ export interface SpaceFlowProps {
    * numeric props would re-render this component every frame when all it needs is to
    * read the position inside the animation loop.
    */
-  cameraRef?: React.RefObject<{ x: number; y: number }>;
+  cameraRef?: React.RefObject<{ x: number; y: number; ratio: number }>;
 }
 
 export function SpaceFlow({ className, cameraRef }: SpaceFlowProps) {
@@ -70,7 +70,11 @@ export function SpaceFlow({ className, cameraRef }: SpaceFlowProps) {
   // 但畫面仍然正確。
   // With no ref from the parent (component used on its own), fall back to a local one,
   // which means zero parallax: no camera following, but still correct.
-  const fallbackRef = useRef({ x: 0.5, y: 0.5 });
+  const fallbackRef = useRef<{ x: number; y: number; ratio: number }>({
+    x: 0.5,
+    y: 0.5,
+    ratio: CONFIG.SPACE_FLOW_REF_RATIO,
+  });
   const camera = cameraRef ?? fallbackRef;
 
   useEffect(() => {
@@ -176,9 +180,25 @@ export function SpaceFlow({ className, cameraRef }: SpaceFlowProps) {
       ctx.clearRect(0, 0, width, height);
       if (dt > 0) fieldTime += dt;
 
-      const parallaxX = (camera.current.x - 0.5) * CONFIG.SPACE_FLOW_PARALLAX;
-      const parallaxY = (camera.current.y - 0.5) * CONFIG.SPACE_FLOW_PARALLAX;
+      // ── 視差：平移 + 縮放，兩者都照 parallax 比例減弱 ──
+      // 粒子以 `SPACE_FLOW_REF_RATIO` 為 1 倍：鏡頭拉近時放大、拉遠時縮小。先前
+      // 只有平移、完全不理會 ratio，所以縮放時位置與大小都不對。
+      //
+      // Parallax: pan AND scale, both damped by `parallax`. Particles are 1x at
+      // `SPACE_FLOW_REF_RATIO`, so they grow on zoom-in and shrink on zoom-out.
+      // Previously only pan was applied and the ratio was ignored entirely, which is
+      // why the position and scale were wrong while zooming.
+      const zoomRel = CONFIG.SPACE_FLOW_REF_RATIO / Math.max(camera.current.ratio, 1e-6);
+      const parallax = CONFIG.SPACE_FLOW_PARALLAX;
+      const dustScale = Math.pow(zoomRel, parallax);
+      // 平移量隨縮放一起放大，否則拉近時鏡頭移動很遠、塵埃幾乎不動 /
+      // The pan scales with the zoom too, or a zoomed-in pan moves the camera a long way
+      // while the dust barely shifts
+      const parallaxX = (camera.current.x - 0.5) * parallax * zoomRel;
+      const parallaxY = (camera.current.y - 0.5) * parallax * zoomRel;
 
+      const cx = width / 2;
+      const cy = height / 2;
       for (let i = 0; i < particles.length; i += 1) {
         const p = particles[i];
         const px = p.x * width;
@@ -238,13 +258,11 @@ export function SpaceFlow({ className, cameraRef }: SpaceFlowProps) {
         ctx.globalAlpha = CONFIG.SPACE_FLOW_MAX_ALPHA * fade;
         ctx.fillStyle = styles[step] ?? styles[0] ?? '';
         ctx.beginPath();
-        ctx.arc(
-          p.x * width - parallaxX * width,
-          p.y * height - parallaxY * height,
-          p.size,
-          0,
-          Math.PI * 2,
-        );
+        // Scale about the canvas centre, then apply the damped pan. The radius scales
+        // too, or a zoomed-in particle stays a 1px speck.
+        const sx = cx + (px - cx) * dustScale - parallaxX * width;
+        const sy = cy + (py - cy) * dustScale - parallaxY * height;
+        ctx.arc(sx, sy, p.size * dustScale, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;

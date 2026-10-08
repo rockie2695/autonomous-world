@@ -257,15 +257,7 @@ export default function GamePage() {
    *  changes during render, and a ref must never drive rendering */
   const [mapControls, setMapControls] = useState<MapCameraControls | null>(null);
 
-  /**
-   * 鏡頭位置只存 ref：太空塵埃每一幀都要讀它做視差，所以**不能**進 state，否則
-   * 拖曳地圖會讓整棵樹���幀重新渲染。塵埃自己直接讀這個 ref。
-   *
-   * The camera position lives in a ref only: the dust reads it every frame for the
-   * parallax, so it must not become state — a drag would re-render the whole tree every
-   * frame. The dust reads this ref directly.
-   */
-  const cameraPosRef = useRef({ x: 0.5, y: 0.5 });
+
 
   const locale = useSyncExternalStore(
     subscribeLocale,
@@ -373,6 +365,29 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
   // No panel open by default: the map is the subject on arrival, and a panel that is
   // already open would cover it.
   const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats' | null>(null);
+
+  /**
+   * 面板只有在**已經選了分頁**時才算開啟。
+   *
+   * 這是修掉「一進遊戲頁右上角就有一個空的彈窗」的關鍵：`rightPanelOpen` 在桌面版
+   * 預設是 true（`!isNarrow`），但 `rightTab` 預設是 null，於是外框畫出來了、裡面
+   * 卻是空的，只剩一個 ✕。把「有沒有內容」一起判斷，空的外框就不會出現。
+   *
+   * The panel only counts as open once a **tab has been selected**.
+   *
+   * This is what removes the empty popup on arrival: `rightPanelOpen` defaults to true
+   * on desktop (`!isNarrow`) while `rightTab` defaults to null, so the frame rendered
+   * with nothing inside but a close button. Folding "has content" into the check keeps
+   * the empty frame from appearing.
+   */
+  const panelHasContent = rightPanelOpen && rightTab !== null;
+  // 領地圖層的開關。由使用者控制而不是跟著縮放淡入淡出：地圖拉到很遠時，領地是唯一
+  // 還說得出「這裡是誰的」的東西，所以預設開著，但要能關掉看清楚節點與道路。
+  //
+  // The territory-layer toggle, user-controlled rather than faded by zoom: when the map
+  // is far out, the territory is the only thing that says who owns what, so it defaults
+  // on — but it has to be switchable to see the nodes and roads plainly.
+  const [showTerritory, setShowTerritory] = useState(true);
 
   /**
    * 事件只存 charName（沒有 charId），所以這裡接受 id 或名字：先當 id 查，
@@ -666,7 +681,12 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
 
           {/* 右側地圖面板切換（手機版）/ Map side panel toggle (mobile) */}
           <button
-            onClick={() => setRightPanelOpen(!rightPanelOpen)}
+            onClick={() => {
+              // 沒有分頁時先選一個，否則只是把空外框叫回來 /
+              // Pick a tab first, or this just brings the empty frame back
+              if (rightTab === null) setRightTab('characters');
+              setRightPanelOpen(!panelHasContent);
+            }}
             className={`${GM_BTN} lg:hidden w-8 h-8`}
             title="將領 & 事件"
             aria-label="將領 & 事件"
@@ -752,10 +772,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
                 mapControlsRef.current = controls;
                 setMapControls(controls);
               }}
-              onCameraMove={(x, y) => {
-                cameraPosRef.current.x = x;
-                cameraPosRef.current.y = y;
-              }}
+              showTerritory={showTerritory}
             />
           </div>
 
@@ -798,10 +815,24 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
                 <span className="w-3 h-3 rounded-full bg-gray-500 shrink-0" />
                 <span className="text-sm text-gray-400 whitespace-nowrap">{t('place.unowned')}</span>
               </span>
+              {/* 領地開關。放在圖例下方而不是控制列：它控制的是「地圖畫什麼」，
+                  跟圖例是同一類東西，而控制列已經有四個按鈕。 /
+                  The territory toggle sits under the legend rather than in the control
+                  row: it changes *what the map draws*, which is what a legend is for,
+                  and the control row already carries four buttons. */}
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showTerritory}
+                  onChange={(e) => setShowTerritory(e.target.checked)}
+                  className="w-3.5 h-3.5 accent-cyan-400 cursor-pointer"
+                />
+                <span className="text-sm text-gray-300 whitespace-nowrap">{t('map.territory')}</span>
+              </label>
             </div>
           </div>
 
-          <div className={rightPanelOpen ? GM_HUD_CONTROLS_OPEN : GM_HUD_CONTROLS_CLOSED}>
+          <div className={panelHasContent ? GM_HUD_CONTROLS_OPEN : GM_HUD_CONTROLS_CLOSED}>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => mapControlsRef.current?.resetView()}
@@ -846,7 +877,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
             setRightTab(tab);
             setRightPanelOpen(true);
           }}
-          open={rightPanelOpen}
+          open={panelHasContent}
           onClose={() => setRightPanelOpen(false)}
           loading={isLoading && !worldState}
         >
@@ -1987,6 +2018,7 @@ function GameGraph({
   selectedPlaceId,
   onControlsReady,
   onCameraMove,
+  showTerritory = true,
 }: {
   places: WorldState['places'];
   factions: WorldState['factions'];
@@ -1998,7 +2030,9 @@ function GameGraph({
   selectedPlaceId?: string | null;
   onControlsReady?: (controls: MapCameraControls | null) => void;
   /** 鏡頭每次移動時通知（框化座標），轉給塵埃層做視差 / Notified on every camera move (framed coords), forwarded to the dust layer for parallax */
-  onCameraMove?: (x: number, y: number) => void;
+  onCameraMove?: (x: number, y: number, ratio: number) => void;
+  /** 是否顯示領地層 / whether the territory layer is shown */
+  showTerritory?: boolean;
 }) {
   // 艦隊用的世界座標與勢力色票。座標直接沿用 ForceAtlas2 的 layoutX / layoutY，
   // 所以艦隊與地圖上的據點一定落在同一個位置。/
@@ -2010,11 +2044,16 @@ function GameGraph({
   // *callback*, but the dust must *read* the position every frame, so it needs a
   // stable ref rather than only a callback. A ref, not state — otherwise dragging the
   // map re-renders the whole tree every frame.
-  const cameraPosRef = useRef({ x: 0.5, y: 0.5 });
-  const handleCameraMove = useCallback((x: number, y: number) => {
+  const cameraPosRef = useRef<{ x: number; y: number; ratio: number }>({
+    x: 0.5,
+    y: 0.5,
+    ratio: CONFIG.MAP_ZOOM_MAX_RATIO,
+  });
+  const handleCameraMove = useCallback((x: number, y: number, ratio: number) => {
     cameraPosRef.current.x = x;
     cameraPosRef.current.y = y;
-    onCameraMove?.(x, y);
+    cameraPosRef.current.ratio = ratio;
+    onCameraMove?.(x, y, ratio);
   }, [onCameraMove]);
 
   // World coordinates and faction colours for the fleet. The coordinates reuse
@@ -2081,6 +2120,7 @@ function GameGraph({
         selectedPlaceId={selectedPlaceId}
         onControlsReady={onControlsReady}
         onCameraMove={handleCameraMove}
+        showTerritory={showTerritory}
       />
       {/* 艦隊壓在 sigma 之上、覆蓋層之下：它只是氣氛，不該擋住地圖互動，也不該蓋掉
           地名。pointer-events 已在元件裡關掉。/

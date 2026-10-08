@@ -30,12 +30,6 @@ import {
   buildTerritoryField,
   factionAt,
   factionRegions,
-  neighbourMask,
-  territoryAlpha,
-  NEIGHBOUR_BOTTOM,
-  NEIGHBOUR_LEFT,
-  NEIGHBOUR_RIGHT,
-  NEIGHBOUR_TOP,
   type TerritorySite,
 } from '@/lib/territory';
 
@@ -58,6 +52,7 @@ export function SigmaMap({
   selectedPlaceId,
   onControlsReady,
   onCameraMove,
+  showTerritory = true,
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -428,7 +423,7 @@ export function SigmaMap({
     // ratio and gets it every frame, while the dust needs the position and can write
     // straight to a ref without React state.
     const emitCamera = () => {
-      onCameraMoveRef.current?.(camera.x, camera.y);
+      onCameraMoveRef.current?.(camera.x, camera.y, camera.ratio);
     };
     camera.on('updated', emitCamera);
 
@@ -681,11 +676,74 @@ useEffect(() => {
   // 領地畫成離屏點陣圖並快取，只有 hover 的勢力改變時才重畫 /
   // The territory is cached as an offscreen bitmap, repainted only when the
   // hovered faction changes
+  // 兩張點陣圖：**填色**與**邊界**分開。
+  // 舊版把邊界寫成「勢力色提亮」（同一色加白），再用平滑貼上，結果邊界糊成一圈漸層，
+  // 讀不出是一條線。分成兩張之後，填色維持平滑（有機的形狀），邊界用 nearest 貼上，
+  // 就是一條乾淨的半透明線。
+  //
+  // Two bitmaps: **fill** and **border**, kept apart. The old version drew the border as
+  // a lightened faction colour (white mixed into the same hue) and blitted everything
+  // smoothed, so the edge blurred into a gradient and never read as a line. Split in two,
+  // the fill stays smooth (organic shape) while the border is blitted with smoothing OFF,
+  // giving a clean semi-transparent line.
   const bitmap = document.createElement('canvas');
   bitmap.width = field.width;
   bitmap.height = field.height;
   const bctx = bitmap.getContext('2d');
   if (!bctx) return;
+
+  // 邊界用**向量線段**，不再用點陣圖。
+  //
+  // 點陣圖的解析度就是格子的解析度（這裡是 field.width × field.height，實測 171×169）。
+  // 拉近時一格被放大成幾十個螢幕像素，邊界再怎麼貼都不可能是銳利的線：開平滑會糊成
+  // 漸層，關平滑會變成一格一格的方塊。真正的解法是把邊界取成線段，交給 canvas 用
+  // stroke 在**螢幕解析度**畫，任何縮放都銳利，線寬也能固定在螢幕像素。
+  //
+  // The border is a set of **vector segments**, not a bitmap.
+  //
+  // A bitmap's resolution is the grid's resolution (here 171×169). Zoomed in, one cell
+  // becomes tens of screen pixels, so no blit setting can make the edge sharp: smoothing
+  // blurs it into a gradient, no smoothing turns it into blocks. Extracting the boundary
+  // as segments and letting canvas stroke them at **screen resolution** stays crisp at
+  // any zoom, and the line width can be pinned to screen pixels.
+  interface BorderSegment {
+    /** 屬主，用來在 hover 時把那一塊的邊界畫亮 / owner, so hovering can brighten just that claim */
+    faction: number;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  }
+  const borderSegments: BorderSegment[] = [];
+  {
+    const cellW = (field.maxX - field.minX) / field.width;
+    const cellH = (field.maxY - field.minY) / field.height;
+    const ownerAt = (px: number, py: number): number => {
+      // 界外視為「別的屬主」，所以地圖邊緣也有邊界線 /
+      // Outside counts as a different owner, so the map edge is bordered too
+      if (px < 0 || py < 0 || px >= field.width || py >= field.height) return -2;
+      return field.owner[py * field.width + px] ?? -2;
+    };
+    for (let py = 0; py < field.height; py++) {
+      const gy0 = field.minY + py * cellH;
+      const gy1 = gy0 + cellH;
+      for (let px = 0; px < field.width; px++) {
+        const owner = field.owner[py * field.width + px] ?? -1;
+        if (owner < 0) continue;
+        const gx0 = field.minX + px * cellW;
+        const gx1 = gx0 + cellW;
+        // 只畫「自己這一側」有鄰居不同的那幾邊 / only the sides facing a different owner
+        if (ownerAt(px - 1, py) !== owner) borderSegments.push({ faction: owner, x1: gx0, y1: gy0, x2: gx0, y2: gy1 });
+        if (ownerAt(px + 1, py) !== owner) borderSegments.push({ faction: owner, x1: gx1, y1: gy0, x2: gx1, y2: gy1 });
+        if (ownerAt(px, py - 1) !== owner) borderSegments.push({ faction: owner, x1: gx0, y1: gy0, x2: gx1, y2: gy0 });
+        if (ownerAt(px, py + 1) !== owner) borderSegments.push({ faction: owner, x1: gx0, y1: gy1, x2: gx1, y2: gy1 });
+      }
+    }
+  }
+
+
+  /** 邊界色 / the border colour */
+  const borderRgb = CONFIG.TERRITORY_BORDER_RGB.split(',').map((v) => Number.parseInt(v.trim(), 10));
 
   const paint = (lit: string | null) => {
     const litIndex = lit === null ? -1 : field.factions.indexOf(lit);
@@ -699,44 +757,20 @@ useEffect(() => {
         continue;
       }
       const px = cell % field.width;
-      const py = (cell - px) / field.width;
       const colour = palette[faction] ?? [55, 65, 81];
       // 被 hover 的勢力整片打亮、其餘壓暗，一眼看出「這塊是誰的」/
-      // Lighten the hovered faction's whole region and dim the rest, so it
-      // reads at a glance whose land this is
+      // Lighten the hovered faction's whole region and dim the rest /
       const alpha =
         litIndex < 0
           ? CONFIG.TERRITORY_FILL_ALPHA
           : faction === litIndex
             ? Math.min(1, CONFIG.TERRITORY_FILL_ALPHA + CONFIG.TERRITORY_HOVER_ALPHA)
             : CONFIG.TERRITORY_FILL_ALPHA * 0.45;
-      // 無主之地是「地圖的一部分」，所以比節點用的深灰再亮一點，否則會和背景
-      // 融在一起、連邊界都看不出來 /
-      // Unowned land is still part of the map, so it is lifted above the node
-      // grey — otherwise it melts into the background and its border is lost
-      const body = 0;
-      const edge = body + (1 - body) * CONFIG.TERRITORY_RIM_LIGHT;
+      data[at] = colour[0];
+      data[at + 1] = colour[1];
+      data[at + 2] = colour[2];
+      data[at + 3] = Math.round(alpha * 255);
 
-      const shade = (offset: number, mix: number) => {
-        data[offset] = Math.round(colour[0] + (255 - colour[0]) * mix);
-        data[offset + 1] = Math.round(colour[1] + (255 - colour[1]) * mix);
-        data[offset + 2] = Math.round(colour[2] + (255 - colour[2]) * mix);
-        data[offset + 3] = Math.round(alpha * 255);
-      };
-
-      shade(at, body);
-      // 邊界逐邊畫：只把該方向那一排像素往白色混，border 才是細線而不是厚白塊。
-      // 每格畫自己那一側，兩鄰格才會剛好接成一條線。
-      // Rim per side: only that side's row of pixels mixes toward white, so the
-      // border is a hairline rather than a thick band. Each cell paints its own
-      // side so two neighbours meet edge-to-edge.
-      const mask = neighbourMask(field, px, py);
-      if ((mask & NEIGHBOUR_LEFT) !== 0) shade(at - 4, edge);
-      if ((mask & NEIGHBOUR_RIGHT) !== 0 && px < field.width - 1) shade(at + 4, edge);
-      if ((mask & NEIGHBOUR_TOP) !== 0) shade(at - field.width * 4, edge);
-      if ((mask & NEIGHBOUR_BOTTOM) !== 0 && py < field.height - 1) {
-        shade(at + field.width * 4, edge);
-      }
     }
     bctx.putImageData(image, 0, 0);
   };
@@ -775,11 +809,20 @@ useEffect(() => {
     //
     // `territoryAlpha` is therefore out of the path; `TERRITORY_ZOOM_RATIO` stays,
     // because it still decides when the territory starts being *shown*.
-    const alpha = territoryAlpha(
-      sigma.getCamera().ratio,
-      CONFIG.TERRITORY_ZOOM_RATIO,
-      CONFIG.TERRITORY_ZOOM_RATIO
-    );
+    // 領地**永遠**可見（開關打開時），完全不看縮放比例。
+    //
+    // 先前的寫法是 `territoryAlpha(ratio, X, X)`，看起來像「把淡出區間收成一點」，
+    // 但 `territoryAlpha` 是 `if (ratio >= fullAt) return 1; if (ratio <= goneAt) return 0;`
+    // —— 兩個界限相等時，只有 `ratio >= X` 會回 1，`ratio < X`（也就是**拉近**）反而
+    // 回到 0。所以那不是修好，只是把霧反過來：拉遠看得到、拉近看不到。
+    //
+    // The territory is **always** visible when the toggle is on, with no dependence on
+    // zoom. The previous form, `territoryAlpha(ratio, X, X)`, looked like "collapse the
+    // fade band to a point", but `territoryAlpha` reads
+    // `if (ratio >= fullAt) return 1; if (ratio <= goneAt) return 0;` — with both bounds
+    // equal, only `ratio >= X` returns 1, and `ratio < X` (zoom *in*) returns 0. So that
+    // did not fix the fog, it merely inverted it: visible far out, gone up close.
+    const alpha = showTerritory ? 1 : 0;
 
     // 這些不透明度由鏡頭即時決定，屬於執行期資料，所以直接寫在 DOM 上而不走
     // React state —— 每幀 setState 會讓整張地圖重新渲染 /
@@ -811,13 +854,26 @@ useEffect(() => {
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, viewWidth, viewHeight);
-    if (alpha <= 0) return;
+    if (alpha <= 0) {
+      // 領地關掉時要在這裡就把標籤收掉。否則會踩到這個 early return：下面的標籤迴圈
+      // 根本不會執行，於是名字停在**上一次**的 opacity（實測是 1），領地沒了但名字
+      // 還掛在畫面上。
+      //
+      // The labels must be hidden *here*, before the early return. Otherwise the label
+      // loop below never runs and the names keep whatever opacity they last had
+      // (measured: 1) — the territory is gone but its names stay on screen.
+      for (const el of territoryLabelEls.current) {
+        if (el) el.style.opacity = '0';
+      }
+      return;
+    }
 
     // 把格子範圍對應到 viewport。這裡假設 camera angle 為 0（本專案兩處鏡頭
     // 動畫都明確傳了 angle: 0），因此圖→viewport 只是縮放加平移。
     // Map the grid extent onto the viewport. This assumes camera angle 0 — both
     // camera animations here pass angle: 0 explicitly — so graph→viewport is a
     // scale plus a translation.
+    const litIndexForBorder = lit === null ? -1 : field.factions.indexOf(lit);
     const topLeft = sigma.graphToViewport({ x: field.minX, y: field.minY });
     const bottomRight = sigma.graphToViewport({ x: field.maxX, y: field.maxY });
     const sx = (bottomRight.x - topLeft.x) / (field.maxX - field.minX);
@@ -834,10 +890,46 @@ useEffect(() => {
     // Smoothing stays ON here, the opposite of the Voronoi version: the density
     // field already computes the border as a curve, so smoothing only removes the
     // last of the cell stepping and gives the organic nebula-like shape.
+    // 填色用平滑貼上：密度場本身就把邊界算成曲線，平滑只去掉最後的格子階梯 / 
+    // The fill is blitted smoothed: the density field already computes the border as a
+    // curve, so smoothing only removes the last of the cell stepping.
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
     ctx.drawImage(bitmap, field.minX, field.minY, field.maxX - field.minX, field.maxY - field.minY);
+
+    // 邊界：向量線段，在**同一個 transform** 下用 stroke 畫，所以線寬與解析度都跟
+    // 螢幕一致，拉近也不會糊。線寬是螢幕像素，所以要除掉這個 transform 的平均縮放。
+    //
+    // The border is stroked as vector segments under the **same transform**, so both its
+    // width and its resolution are tied to the screen rather than to the grid — crisp at
+    // any zoom. The width is specified in screen pixels, so divide out the transform's
+    // average scale.
+    const borderScale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
+    ctx.lineWidth = CONFIG.TERRITORY_BORDER_PX / borderScale;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgba(${borderRgb[0] ?? 226}, ${borderRgb[1] ?? 240}, ${borderRgb[2] ?? 255}, ${CONFIG.TERRITORY_BORDER_ALPHA})`;
+    ctx.beginPath();
+    for (const seg of borderSegments) {
+      // hover 時，被 hover 的勢力稍後會再畫一次更亮的覆蓋線，所以這裡只跳過它 → 不必，
+      // 直接全部畫一次最省；覆蓋那次只補上更亮的同位置線段。/
+      // On hover the lit faction is drawn again on top, brighter; drawing every segment
+      // once here is the cheapest base pass.
+      ctx.moveTo(seg.x1, seg.y1);
+      ctx.lineTo(seg.x2, seg.y2);
+    }
+    ctx.stroke();
+    // 被 hover 的那一塊，邊界加亮 / the hovered claim gets a brighter border
+    if (litIndexForBorder >= 0) {
+      ctx.strokeStyle = `rgba(${borderRgb[0] ?? 226}, ${borderRgb[1] ?? 240}, ${borderRgb[2] ?? 255}, ${CONFIG.TERRITORY_BORDER_HOVER_ALPHA})`;
+      ctx.beginPath();
+      for (const seg of borderSegments) {
+        if (seg.faction !== litIndexForBorder) continue;
+        ctx.moveTo(seg.x1, seg.y1);
+        ctx.lineTo(seg.x2, seg.y2);
+      }
+      ctx.stroke();
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // 勢力名字：位置由重心算，但每幀只寫 transform，不進 React state /
@@ -852,9 +944,70 @@ useEffect(() => {
         el.style.opacity = '0';
         continue;
       }
-      const vp = sigma.graphToViewport({ x: region.cx, y: region.cy });
+
+      // 把標籤夾在領地的**邊界內**，而不是只放在重心上。
+      // 重心對長條形或彎曲的領地會落在形狀外面（例如一塊 L 形的領地，重心在缺口
+      // 的空地上），於是名字會印在別人的地盤或無主之地上。做法是：先算出領地邊界在
+      // 螢幕上的矩形，再用標籤自己的尺寸把它往內縮，最後把重心夾進去。
+      //
+      // Clamp the label **inside** the region's bounds rather than only centring it on
+      // the centroid. For an elongated or bent region the centroid lands outside the
+      // shape — an L-shaped claim has its centroid in the empty notch — so the name
+      // prints on someone else's land or on unowned ground. The fix: project the
+      // region's bounds to screen space, inset that box by the label's own size, and
+      // clamp the centroid into it.
+      const topLeft = sigma.graphToViewport({ x: region.minX, y: region.minY });
+      const bottomRight = sigma.graphToViewport({ x: region.maxX, y: region.maxY });
+      const boxW = Math.abs(bottomRight.x - topLeft.x);
+      const boxH = Math.abs(bottomRight.y - topLeft.y);
+      const labelW = el.offsetWidth || 0;
+      const labelH = el.offsetHeight || 0;
+
+      // 標籤可以**轉向**去配合領地的長軸。一塊高瘦的領地放橫的名字一定塞不下，硬塞就
+      // 溢出；轉 90° 之後文字的長邊對上領地的長邊，能塞的字數最多。判定用「高比寬多
+      // 至少三成」，避免正方形領地在那裡反覆翻轉。
+      //
+      // The label may **rotate** to match the region's long axis. A tall, narrow claim
+      // can never hold a horizontal name — it overflows — but turned 90° the text's long
+      // side lines up with the region's long side and fits the most characters. The test
+      // is "at least 30% taller than wide", so a squarish region cannot flip back and
+      // forth.
+      const rotate = boxH > boxW * 1.3;
+      // 轉向之後佔用的螢幕框也跟著交換 / after rotating, the screen box swaps
+      const effW = rotate ? labelH : labelW;
+      const effH = rotate ? labelW : labelH;
+
+      // 領地在畫面上比標籤還小就別畫了：硬塞只會讓文字壓到領地外面 /
+      // If the region is smaller on screen than its own name, skip it — forcing the
+      // text in would just spill it outside the claim
+      if (boxW < effW + 4 || boxH < effH + 2) {
+        el.style.opacity = '0';
+        continue;
+      }
+
+      const minScreenX = Math.min(topLeft.x, bottomRight.x);
+      const maxScreenX = Math.max(topLeft.x, bottomRight.x);
+      const minScreenY = Math.min(topLeft.y, bottomRight.y);
+      const maxScreenY = Math.max(topLeft.y, bottomRight.y);
+      const centre = sigma.graphToViewport({ x: region.cx, y: region.cy });
+      const x = Math.max(
+        minScreenX + effW / 2,
+        Math.min(maxScreenX - effW / 2, centre.x),
+      );
+      const y = Math.max(
+        minScreenY + effH / 2,
+        Math.min(maxScreenY - effH / 2, centre.y),
+      );
+
       el.style.opacity = '1';
-      el.style.transform = `translate(-50%, -50%) translate(${vp.x}px, ${vp.y}px)`;
+      // 由右而左套用：先把元素中心移到原點、再原地旋轉、最後移到 (x, y)。
+      // 這樣無論轉幾度，中心都精準落在那個點上；若把 -50% 留到最後，旋轉會用**未旋轉**
+      // 的尺寸去偏移，90° 時就會偏掉半個字寬。
+      //
+      // Applied right to left: centre the element on the origin, rotate in place, then
+      // move the centre to (x, y). Any other order leaves the -50% offsets computed from
+      // the *unrotated* size, which misses by half a character at 90°.
+      el.style.transform = `translate(${x}px, ${y}px) rotate(${rotate ? -90 : 0}deg) translate(-50%, -50%)`;
     }
   };
 
@@ -957,6 +1110,24 @@ useEffect(() => {
     // Over a faction's area → the faction tooltip. The *density field* answers "whose
     // ground is this". Asking for the nearest place instead names some unrelated node,
     // so hovering a whole region would report somewhere else entirely.
+    // 領地圖層關掉時，這裡就不該再回答「這塊地是誰的」：那一層根本沒畫，提示會憑空
+    // 冒出一個看不到的領地。地點提示（上面那段）不受影響，因為節點與道路還在。
+    //
+    // With the territory layer off, this must stop answering "whose ground is this":
+    // the layer is not drawn, so the tooltip would describe a claim that is not on
+    // screen. The place tooltip above is unaffected — nodes and roads remain.
+    if (!showTerritory) {
+      canvas.style.cursor = '';
+      hoveredPlaceId = null;
+      if (lit !== null) {
+        lit = null;
+        paint(null);
+        draw();
+      }
+      setTooltip(null);
+      return;
+    }
+
     const key = factionAt(field, graphPoint.x, graphPoint.y);
     if (key === null) {
       // 無主之地或空白：完全沒有提示，而不是錯顯示鄰居的勢力 /
@@ -1149,7 +1320,7 @@ useEffect(() => {
     glow.style.opacity = '';
     canvas.style.opacity = '';
   };
-}, [places, factions]);
+  }, [places, factions, showTerritory]);
 
   useEffect(() => {
     // 清除 hover refs 並重繪。sigma 內部的 hoveredNode / highlightedNodes

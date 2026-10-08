@@ -232,15 +232,6 @@ export interface MapCameraControls {
   setZoom: (t: number) => void;
   /** 每次縮放變動時通知（滑桿要跟著動）/ Called whenever the zoom changes so the slider can track it */
   onZoomChange?: (cb: (zoom: number) => void) => () => void;
-  /**
-   * 鏡頭每次移動時通知（x, y 以框化空間為單位）。給需要**視差**的疊層用——太空塵埃
-   * 會跟著鏡頭移動一部分，看起來才像浮在地圖上方，而不是貼在上面或完全不動。
-   *
-   * Notified on every camera move (x, y in framed space). For overlay layers that need
-   * **parallax**: the space dust moves with the camera in part, so it reads as floating
-   * above the map rather than painted onto it or standing completely still.
-   */
-  onCameraMove?: (x: number, y: number) => void;
 }
 
 export interface SigmaMapProps {
@@ -255,8 +246,10 @@ export interface SigmaMapProps {
   onPlaceClick?: (place: Place) => void;
   selectedPlaceId?: string | null;
   /** 鏡頭每次移動時通知（框化座標），供疊層做視差 / Notified on every camera move (framed coords), so overlays can do parallax */
-  onCameraMove?: (x: number, y: number) => void;
+  onCameraMove?: (x: number, y: number, ratio: number) => void;
   /** 視角控制回呼；Sigma 實例建立後呼叫，卸載時呼叫 null / Camera controls callback; invoked after the Sigma instance is created, null on unmount */
+  /** 是否顯示領地圖層 / Whether the territory layer is shown */
+  showTerritory?: boolean;
   onControlsReady?: (controls: MapCameraControls | null) => void;
 }
 
