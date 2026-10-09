@@ -124,6 +124,19 @@ export interface FactionRegion {
   minY: number;
   maxX: number;
   maxY: number;
+  /**
+   * 標籤的錨點：區塊內離邊界最遠的那一格（最大內切圓的圓心），圖座標。
+   * The label anchor: the cell farthest from any boundary — the centre of the largest
+   * inscribed circle — in graph coordinates.
+   */
+  labelX: number;
+  labelY: number;
+  /** 錨點到邊界的距離（圖座標），決定這裡塞得下多大的字 / distance from the anchor to the nearest edge */
+  labelRadius: number;
+  /** 主軸角度（弧度）/ the principal axis, in radians */
+  angle: number;
+  /** 主軸／次軸的長度比；越大越細長 / axial ratio; larger means more elongated */
+  elongation: number;
 }
 
 /** 鄰居方向遮罩 / Neighbour side mask */
@@ -539,19 +552,95 @@ export function neighbourMask(field: TerritoryField, px: number, py: number): nu
 export function factionRegions(field: TerritoryField): FactionRegion[] {
   const spanX = field.maxX - field.minX;
   const spanY = field.maxY - field.minY;
-  const totals = new Map<
-    string,
-    { cells: number; sumX: number; sumY: number; minX: number; minY: number; maxX: number; maxY: number }
-  >();
+  const W = field.width;
+  const H = field.height;
+  const cellW = spanX / W;
+  const cellH = spanY / H;
+  const graphX = (px: number) => field.minX + ((px + 0.5) / W) * spanX;
+  const graphY = (py: number) => field.minY + ((py + 0.5) / H) * spanY;
 
-  for (let py = 0; py < field.height; py++) {
-    const gy = field.minY + ((py + 0.5) / field.height) * spanY;
-    for (let px = 0; px < field.width; px++) {
-      const faction = field.owner[py * field.width + px];
+  /**
+   * 距離場：每一格到「不同屬主」的最短距離（單位：格）。
+   * A distance field: each cell's distance to the nearest cell of a *different* owner,
+   * in cells.
+   *
+   * 這是標籤位置的依據。用重心會出事：一塊 L 形或彎曲的領地，重心可能落在缺口（不是
+   * 自己領地的地方），名字就印到別人的地盤上。改成「離邊界最遠的那一格」——也就是最大
+   * 內切圓的圓心——就一定是領地裡面最寬闊的位置。
+   *
+   * This is what positions the label. A centroid fails: an L-shaped or bent claim can have
+   * its centroid in the notch, which is *not* its own land, so the name prints on someone
+   * else's ground. "The cell farthest from any boundary" — the centre of the largest
+   * inscribed circle — is guaranteed to be the roomiest point inside the claim.
+   */
+  const dist = new Float32Array(W * H);
+  const INF = 1e9;
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      const i = py * W + px;
+      const owner = field.owner[i] ?? -1;
+      if (owner < 0) { dist[i] = 0; continue; }
+      // 邊界格：四鄰有一個不同（含界外）→ 距離 0 / a boundary cell: some 4-neighbour differs
+      const n =
+        (px === 0 ? -2 : (field.owner[i - 1] ?? -2)) !== owner ||
+        (px === W - 1 ? -2 : (field.owner[i + 1] ?? -2)) !== owner ||
+        (py === 0 ? -2 : (field.owner[i - W] ?? -2)) !== owner ||
+        (py === H - 1 ? -2 : (field.owner[i + W] ?? -2)) !== owner;
+      dist[i] = n ? 0 : INF;
+    }
+  }
+  // 兩遍 chamfer：正交 1、對角 √2 的近似歐氏距離 / two-pass chamfer distance
+  const D1 = 1;
+  const D2 = Math.SQRT2;
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      const i = py * W + px;
+      if (dist[i] === 0) continue;
+      if (px > 0) dist[i] = Math.min(dist[i], dist[i - 1] + D1);
+      if (py > 0) dist[i] = Math.min(dist[i], dist[i - W] + D1);
+      if (px > 0 && py > 0) dist[i] = Math.min(dist[i], dist[i - W - 1] + D2);
+      if (px < W - 1 && py > 0) dist[i] = Math.min(dist[i], dist[i - W + 1] + D2);
+    }
+  }
+  for (let py = H - 1; py >= 0; py--) {
+    for (let px = W - 1; px >= 0; px--) {
+      const i = py * W + px;
+      if (dist[i] === 0) continue;
+      if (px < W - 1) dist[i] = Math.min(dist[i], dist[i + 1] + D1);
+      if (py < H - 1) dist[i] = Math.min(dist[i], dist[i + W] + D1);
+      if (px < W - 1 && py < H - 1) dist[i] = Math.min(dist[i], dist[i + W + 1] + D2);
+      if (px > 0 && py < H - 1) dist[i] = Math.min(dist[i], dist[i + W - 1] + D2);
+    }
+  }
+
+  interface Acc {
+    cells: number;
+    sumX: number;
+    sumY: number;
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+    /** 目前為止最深的格子 / the deepest cell so far */
+    best: number;
+    bestPx: number;
+    bestPy: number;
+    /** 二階動差，用來求主軸 / second moments, for the principal axis */
+    sxx: number;
+    syy: number;
+    sxy: number;
+  }
+  const totals = new Map<string, Acc>();
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      const i = py * W + px;
+      const faction = field.owner[i] ?? -1;
       if (faction < 0) continue;
       const key = field.factions[faction];
       if (key === undefined) continue;
-      const gx = field.minX + ((px + 0.5) / field.width) * spanX;
+      const gx = graphX(px);
+      const gy = graphY(py);
+      const d = dist[i] ?? 0;
       const entry = totals.get(key);
       if (entry) {
         entry.cells += 1;
@@ -561,6 +650,10 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
         if (gx > entry.maxX) entry.maxX = gx;
         if (gy < entry.minY) entry.minY = gy;
         if (gy > entry.maxY) entry.maxY = gy;
+        if (d > entry.best) { entry.best = d; entry.bestPx = px; entry.bestPy = py; }
+        entry.sxx += gx * gx;
+        entry.syy += gy * gy;
+        entry.sxy += gx * gy;
       } else {
         totals.set(key, {
           cells: 1,
@@ -570,22 +663,51 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
           minY: gy,
           maxX: gx,
           maxY: gy,
+          best: d,
+          bestPx: px,
+          bestPy: py,
+          sxx: gx * gx,
+          syy: gy * gy,
+          sxy: gx * gy,
         });
       }
     }
   }
 
+  const cellAvg = (cellW + cellH) / 2;
   return Array.from(totals.entries())
-    .map(([key, entry]) => ({
-      key,
-      cellCount: entry.cells,
-      cx: entry.sumX / entry.cells,
-      cy: entry.sumY / entry.cells,
-      minX: entry.minX,
-      minY: entry.minY,
-      maxX: entry.maxX,
-      maxY: entry.maxY,
-    }))
+    .map(([key, e]) => {
+      const cx = e.sumX / e.cells;
+      const cy = e.sumY / e.cells;
+      // 共變異數 → 主軸方向 / covariance to principal axis
+      const cxx = e.sxx / e.cells - cx * cx;
+      const cyy = e.syy / e.cells - cy * cy;
+      const cxy = e.sxy / e.cells - cx * cy;
+      const angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+      // 主軸與次軸的比：太接近就是接近圓形，方向不穩定，不值得旋轉文字
+      // Axial ratio: too close means near-circular, where the direction is unstable and
+      // rotating the text is not worth it
+      const trace = cxx + cyy;
+      const diff = Math.sqrt(Math.max(0, (cxx - cyy) * (cxx - cyy) + 4 * cxy * cxy));
+      const l1 = (trace + diff) / 2;
+      const l2 = (trace - diff) / 2;
+      const elongation = l2 > 1e-9 ? Math.sqrt(l1 / l2) : 99;
+      return {
+        key,
+        cellCount: e.cells,
+        cx,
+        cy,
+        minX: e.minX,
+        minY: e.minY,
+        maxX: e.maxX,
+        maxY: e.maxY,
+        labelX: graphX(e.bestPx),
+        labelY: graphY(e.bestPy),
+        labelRadius: e.best * cellAvg,
+        angle,
+        elongation,
+      };
+    })
     .sort((a, b) => b.cellCount - a.cellCount);
 }
 

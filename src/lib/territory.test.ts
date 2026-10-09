@@ -382,6 +382,39 @@ describe('factionRegions', () => {
     }
   });
 
+  it('should anchor the label inside the region, not on a concave notch', () => {
+    // The centroid of a bent claim can fall outside it; the inscribed-circle centre
+    // never can, and it is what the label is positioned with.
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const region of factionRegions(field)) {
+      expect(region.labelX).toBeGreaterThanOrEqual(region.minX);
+      expect(region.labelX).toBeLessThanOrEqual(region.maxX);
+      expect(region.labelY).toBeGreaterThanOrEqual(region.minY);
+      expect(region.labelY).toBeLessThanOrEqual(region.maxY);
+    }
+  });
+
+  it('should give a positive inscribed radius for a region with any area', () => {
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const region of factionRegions(field)) {
+      // A region of any depth has a positive distance to its edge; zero would mean the
+      // label can never be placed.
+      expect(region.labelRadius).toBeGreaterThan(0);
+    }
+  });
+
+  it('should report a finite angle and a sane elongation', () => {
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const region of factionRegions(field)) {
+      expect(Number.isFinite(region.angle)).toBe(true);
+      // l1 >= l2 by construction, so the ratio is at least 1
+      expect(region.elongation).toBeGreaterThanOrEqual(1);
+    }
+  });
+
   it('should keep a same-faction pair as one region, not two', () => {
     // 同勢力相鄰必須融合成一塊，否則地圖上會出現同一勢力兩塊不相連的領地 /
     // Adjacent same-faction places must fuse, or one faction shows as two

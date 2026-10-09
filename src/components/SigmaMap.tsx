@@ -15,7 +15,6 @@ import {
   hslToHex,
   readDesignToken,
   type Faction,
-  type MapCameraControls,
   type Place,
   type Tooltip,
   type SigmaMapProps,
@@ -893,8 +892,16 @@ useEffect(() => {
     // 填色用平滑貼上：密度場本身就把邊界算成曲線，平滑只去掉最後的格子階梯 / 
     // The fill is blitted smoothed: the density field already computes the border as a
     // curve, so smoothing only removes the last of the cell stepping.
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
+    // 填色**關閉**平滑：整塊領地要是同一個顏色，開平滑會把邊緣糊成漸層（就是那個
+    // 「霧」）。每個格子用同一個顏色與同一個 alpha 填滿，所以區塊內部完全一致；邊緣的
+    // 階梯由上面那條向量邊界線蓋掉，所以關平滑不會變成馬賽克。
+    //
+    // The fill is drawn with smoothing **off**: an area must be one flat colour, and
+    // smoothing blurs its edge into a gradient — the fog. Every cell of a faction uses
+    // the same colour and the same alpha, so the interior is uniform, and the staircase
+    // at the rim is covered by the vector border stroked on top, so it does not turn
+    // into a mosaic.
+    ctx.imageSmoothingEnabled = false;
     ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
     ctx.drawImage(bitmap, field.minX, field.minY, field.maxX - field.minX, field.maxY - field.minY);
 
@@ -950,64 +957,51 @@ useEffect(() => {
       // 的空地上），於是名字會印在別人的地盤或無主之地上。做法是：先算出領地邊界在
       // 螢幕上的矩形，再用標籤自己的尺寸把它往內縮，最後把重心夾進去。
       //
-      // Clamp the label **inside** the region's bounds rather than only centring it on
-      // the centroid. For an elongated or bent region the centroid lands outside the
-      // shape — an L-shaped claim has its centroid in the empty notch — so the name
-      // prints on someone else's land or on unowned ground. The fix: project the
-      // region's bounds to screen space, inset that box by the label's own size, and
-      // clamp the centroid into it.
-      const topLeft = sigma.graphToViewport({ x: region.minX, y: region.minY });
-      const bottomRight = sigma.graphToViewport({ x: region.maxX, y: region.maxY });
-      const boxW = Math.abs(bottomRight.x - topLeft.x);
-      const boxH = Math.abs(bottomRight.y - topLeft.y);
+      // ── 標籤放在**最大內切圓的圓心**，不是重心，並且沿著領地的主軸轉向 ──
+      // 重心對 L 形或彎曲的領地會落在缺口（不是自己的地）上；圓心則保證是領地裡最寬的
+      // 位置，也就是塞得下最多字的地方。`labelRadius` 是那個位置到邊界的距離，用來判斷
+      // 字放不放得下；`angle` / `elongation` 決定要不要轉向。
+      //
+      // The label sits at the centre of the **largest inscribed circle**, not the centroid,
+      // and turns along the claim's principal axis. A centroid lands in the notch of an
+      // L-shaped claim; this point is guaranteed to be the roomiest spot, i.e. where the
+      // most text fits. `labelRadius` is its distance to the edge; `angle` and
+      // `elongation` decide the rotation.
+      const anchor = sigma.graphToViewport({ x: region.labelX, y: region.labelY });
       const labelW = el.offsetWidth || 0;
       const labelH = el.offsetHeight || 0;
 
-      // 標籤可以**轉向**去配合領地的長軸。一塊高瘦的領地放橫的名字一定塞不下，硬塞就
-      // 溢出；轉 90° 之後文字的長邊對上領地的長邊，能塞的字數最多。判定用「高比寬多
-      // 至少三成」，避免正方形領地在那裡反覆翻轉。
-      //
-      // The label may **rotate** to match the region's long axis. A tall, narrow claim
-      // can never hold a horizontal name — it overflows — but turned 90° the text's long
-      // side lines up with the region's long side and fits the most characters. The test
-      // is "at least 30% taller than wide", so a squarish region cannot flip back and
-      // forth.
-      const rotate = boxH > boxW * 1.3;
-      // 轉向之後佔用的螢幕框也跟著交換 / after rotating, the screen box swaps
-      const effW = rotate ? labelH : labelW;
-      const effH = rotate ? labelW : labelH;
+      // 領地夠細長才轉：接近圓形時主軸方向不穩定，轉了只會亂晃 /
+      // Only rotate when the claim is clearly elongated: a near-circular region has an
+      // unstable axis, and rotating would just jitter
+      const rotate = region.elongation > 1.5;
+      // 圖的 y 軸在螢幕上是翻轉的，所以螢幕角度取負；再正規化到 ±90°，字永遠不會顛倒 /
+      // Screen y is flipped relative to graph y, so negate; then normalise to ±90° so the
+      // text is never upside-down
+      let deg = rotate ? (-region.angle * 180) / Math.PI : 0;
+      while (deg > 90) deg -= 180;
+      while (deg < -90) deg += 180;
+      const rad = (deg * Math.PI) / 180;
+      // 轉向之後佔用的螢幕框 / the screen box the rotated text occupies
+      const effW = Math.abs(labelW * Math.cos(rad)) + Math.abs(labelH * Math.sin(rad));
+      const effH = Math.abs(labelW * Math.sin(rad)) + Math.abs(labelH * Math.cos(rad));
 
-      // 領地在畫面上比標籤還小就別畫了：硬塞只會讓文字壓到領地外面 /
-      // If the region is smaller on screen than its own name, skip it — forcing the
-      // text in would just spill it outside the claim
-      if (boxW < effW + 4 || boxH < effH + 2) {
+      // 這個 transform 的平均縮放：把圖座標的半徑換成螢幕像素 /
+      // the transform's average scale, to turn a graph-space radius into screen pixels
+      const scale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
+      const radiusPx = region.labelRadius * scale;
+      // 內切圓塞不下就別畫：硬塞只會溢出到別的領地上 /
+      // If the inscribed circle cannot hold it, skip: forcing it in spills onto other land
+      if (radiusPx * 2 < effW || radiusPx * 2 < effH) {
         el.style.opacity = '0';
         continue;
       }
 
-      const minScreenX = Math.min(topLeft.x, bottomRight.x);
-      const maxScreenX = Math.max(topLeft.x, bottomRight.x);
-      const minScreenY = Math.min(topLeft.y, bottomRight.y);
-      const maxScreenY = Math.max(topLeft.y, bottomRight.y);
-      const centre = sigma.graphToViewport({ x: region.cx, y: region.cy });
-      const x = Math.max(
-        minScreenX + effW / 2,
-        Math.min(maxScreenX - effW / 2, centre.x),
-      );
-      const y = Math.max(
-        minScreenY + effH / 2,
-        Math.min(maxScreenY - effH / 2, centre.y),
-      );
+      const x = anchor.x;
+      const y = anchor.y;
 
       el.style.opacity = '1';
-      // 由右而左套用：先把元素中心移到原點、再原地旋轉、最後移到 (x, y)。
-      // 這樣無論轉幾度，中心都精準落在那個點上；若把 -50% 留到最後，旋轉會用**未旋轉**
-      // 的尺寸去偏移，90° 時就會偏掉半個字寬。
-      //
-      // Applied right to left: centre the element on the origin, rotate in place, then
-      // move the centre to (x, y). Any other order leaves the -50% offsets computed from
-      // the *unrotated* size, which misses by half a character at 90°.
-      el.style.transform = `translate(${x}px, ${y}px) rotate(${rotate ? -90 : 0}deg) translate(-50%, -50%)`;
+      el.style.transform = `translate(${x}px, ${y}px) rotate(${deg}deg) translate(-50%, -50%)`;
     }
   };
 
