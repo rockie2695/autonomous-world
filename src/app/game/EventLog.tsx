@@ -17,6 +17,7 @@
 import { useState, useMemo, Fragment, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { t } from '@/lib/i18n';
+import { BattleReport, type BattleReportData } from './BattleReport';
 import { CONFIG } from '@/lib/gameConfig';
 import { apiFetch } from '@/lib/api';
 import { EventGlyph } from './icons';
@@ -81,6 +82,7 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   DEATH: 'character',
   DEFECTION: 'character',
   BUILDING_UPGRADE: 'economy',
+  INCOME: 'economy',
   FACTION_COLLAPSE: 'faction',
   FACTION_ELIMINATED: 'faction',
   ADMIN_ASSIGNED: 'admin',
@@ -155,6 +157,12 @@ export function EventLog({
 
   // ── 篩選狀態 ──/ Filter state
   const [factionFilter, setFactionFilter] = useState<string>('all');
+  // 目前打開的戰報；null = 沒開 / the report currently open; null means none
+  const [openReport, setOpenReport] = useState<{
+    charName: string;
+    placeName: string;
+    report: BattleReportData | null;
+  } | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<Set<EventCategory>>(
     () => new Set(EVENT_CATEGORIES)
   );
@@ -341,6 +349,72 @@ export function EventLog({
           character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
+      case 'INCOME': {
+        // 一個地方一筆：收益、徵兵，以及錢進了誰的口袋。
+        //
+        // **增加量與總量都要**（「得 3 金」不夠，要能看出「現在有多少」），而且當君王
+        // 與行政官是**同一個人**時必須合併成一行 —— 他一開始會拿到兩份（40% + 30%），
+        // 分成兩行就會出現「黎志 得 3 金 · 黎志 得 2 金」這種像是重複的紀錄。
+        //
+        // One row per place: income, recruitment, and who was paid.
+        //
+        // **Both the increase and the total** ("got 3 gold" is not enough — you need to see the
+        // new balance), and when the king *is* the administrator the two shares must merge into
+        // one row: he legitimately receives both (40% + 30%), but split across two lines it reads
+        // as a duplicate — "黎志 得 3 金 · 黎志 得 2 金".
+        const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
+        const gold = num(p.income);
+        const recruits = num(p.recruits);
+        const garrisonAfter = num(p.garrisonAfter);
+        const kingId = typeof p.kingId === 'string' ? p.kingId : null;
+        const adminId = typeof p.adminId === 'string' ? p.adminId : null;
+        const kingGold = num(p.kingGold);
+        const adminGold = num(p.adminGold);
+        // 同一個人坐兩個位子 / one person holding both seats
+        const sameLeader = kingId !== null && kingId === adminId;
+        const leadId = sameLeader ? kingId : null;
+
+        return (
+          <>
+            {fillTemplate(t('events.incomeDesc'), {
+              place: placeNode(p.placeId, p.placeName),
+              gold: String(gold),
+              recruits: String(recruits),
+              total: String(garrisonAfter),
+            })}
+            {sameLeader && kingGold + adminGold > 0 && (
+              <>
+                {' · '}
+                {fillTemplate(t('events.incomeLeader'), {
+                  leader: leaderNode(leadId, p.kingName),
+                  gold: String(kingGold + adminGold),
+                  total: String(num(p.adminGoldAfter)),
+                })}
+              </>
+            )}
+            {!sameLeader && kingGold > 0 && (
+              <>
+                {' · '}
+                {fillTemplate(t('events.incomeLeader'), {
+                  leader: leaderNode(kingId, p.kingName),
+                  gold: String(kingGold),
+                  total: String(num(p.kingGoldAfter)),
+                })}
+              </>
+            )}
+            {!sameLeader && adminGold > 0 && (
+              <>
+                {' · '}
+                {fillTemplate(t('events.incomeLeader'), {
+                  leader: leaderNode(adminId, p.adminName),
+                  gold: String(adminGold),
+                  total: String(num(p.adminGoldAfter)),
+                })}
+              </>
+            )}
+          </>
+        );
+      }
       default:
         return event.type;
     }
@@ -475,6 +549,28 @@ export function EventLog({
               {String(event.round).padStart(4, '0')}
             </span>
             <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
+            {event.type === 'PLACE_CAPTURED' && (
+              // 佔領有兩種經過：打了守軍，或走進空城。日誌一行看不出差別，所以給一個
+              // 入口打開算式；沒有守軍時戰報會明講。
+              //
+              // A capture has two histories — fought a garrison, or walked into an empty
+              // place — and a row cannot show the difference, so this opens the
+              // arithmetic. The report states the no-defender case explicitly.
+              <button
+                type="button"
+                onClick={() => {
+                  const data = (event.data ?? {}) as Record<string, unknown>;
+                  setOpenReport({
+                    charName: typeof data.charName === 'string' ? data.charName : '?',
+                    placeName: typeof data.placeName === 'string' ? data.placeName : '?',
+                    report: (data.report ?? null) as BattleReportData | null,
+                  });
+                }}
+                className="shrink-0 mt-0.5 rounded-full border border-cyan-400/30 px-1.5 py-0.5 text-[10px] font-orbitron tracking-wider text-cyan-300 hover:bg-cyan-500/10"
+              >
+                {t('events.reportOpen')}
+              </button>
+            )}
           </div>
         ))}
         {filtered.length > visibleCount && (
@@ -489,6 +585,14 @@ export function EventLog({
           </button>
         )}
       </div>
+      {openReport && (
+        <BattleReport
+          charName={openReport.charName}
+          placeName={openReport.placeName}
+          report={openReport.report}
+          onClose={() => setOpenReport(null)}
+        />
+      )}
     </div>
   );
 }

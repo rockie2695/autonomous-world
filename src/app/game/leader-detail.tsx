@@ -127,6 +127,34 @@ export function DetailModal({
   );
 }
 
+/** 勢力排行可排序的欄位 / the sortable columns of the faction ranking */
+type FactionSortKey = 'name' | 'king' | 'territories' | 'members' | 'troops' | 'gold';
+
+/** 排行表的一列 / one row of the ranking */
+interface FactionRow {
+  faction: WorldState['factions'][0];
+  members: number;
+  territories: number;
+  troops: number;
+  gold: number;
+  kingName: string | null;
+}
+
+/**
+ * 依欄位比較兩列。只回方向無關的順序，升降由呼叫端乘上 ±1。
+ * Compare two rows by column; direction-agnostic, the caller applies ±1.
+ */
+function compareFactionRows(a: FactionRow, b: FactionRow, key: FactionSortKey): number {
+  switch (key) {
+    case 'name':
+      return a.faction.name.localeCompare(b.faction.name);
+    case 'king':
+      return (a.kingName ?? '').localeCompare(b.kingName ?? '');
+    default:
+      return a[key] - b[key];
+  }
+}
+
 export function FactionRanking({
   factions,
   characters,
@@ -137,6 +165,23 @@ export function FactionRanking({
   places: WorldState['places'];
 }) {
   const [showDetail, setShowDetail] = useState(false);
+  /**
+   * 表格排序。與將領表同一套規則：表頭即按鈕、點同欄切換升降、換欄位時採用該欄位自己的
+   * 預設方向（數字大的先、名字 A→Z），而不是沿用上一欄。
+   *
+   * Table sorting, same rules as the leader table: the header is the control, clicking the
+   * same column toggles, and switching columns picks that column's own default direction
+   * rather than inheriting the previous one.
+   */
+  const [sortKey, setSortKey] = useState<FactionSortKey>('territories');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const toggleSort = (key: FactionSortKey) => {
+    if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else {
+      setSortKey(key);
+      setSortDir(key === 'name' || key === 'king' ? 'asc' : 'desc');
+    }
+  };
 
   // 彈窗用完整資料：含全部勢力（不只前 10 名）/
   // Full data for the modal: all factions (not just top 10)
@@ -156,11 +201,13 @@ export function FactionRanking({
         kingName: king?.name ?? null,
       };
     })
-    .sort(
-      (a, b) =>
-        Number(b.faction.alive) - Number(a.faction.alive) ||
-        b.territories - a.territories
-    );
+    .sort((a, b) => {
+      const dir = sortDir === 'asc' ? 1 : -1;
+      // 先看生死（死掉的永遠沉底），再照選定的欄位排 /
+      // Alive first, then by the chosen column: a dead faction always sinks
+      const alive = Number(b.faction.alive) - Number(a.faction.alive);
+      return (alive !== 0 ? alive : compareFactionRows(a, b, sortKey)) * (alive !== 0 ? 1 : dir);
+    });
 
   return (
     <div className={`${GM_PANEL} p-3`}>
@@ -221,21 +268,48 @@ export function FactionRanking({
         <table className="w-full text-xs border-collapse">
           <thead>
             <tr className="text-gray-400 text-left border-b border-white/10">
+              {/* 名次不是可排序欄位，它就是排序的結果 / rank is not sortable: it *is* the result */}
               <th className="py-2 pr-3 font-medium">{t('ranking.rank')}</th>
-              <th className="py-2 pr-3 font-medium">{t('faction.name')}</th>
-              <th className="py-2 pr-3 font-medium">{t('general.status')}</th>
-              <th className="py-2 pr-3 font-medium">{t('faction.king')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('faction.territories')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('faction.characters')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('ranking.troops')}</th>
-              <th className="py-2 font-medium text-right">{t('ranking.gold')}</th>
+              {(
+                [
+                  ['name', 'faction.name', 'left'],
+                  ['king', 'faction.king', 'left'],
+                  ['territories', 'faction.territories', 'right'],
+                  ['members', 'faction.characters', 'right'],
+                  ['troops', 'ranking.troops', 'right'],
+                  ['gold', 'ranking.gold', 'right'],
+                ] as const
+              ).map(([key, labelKey, align]) => {
+                const active = sortKey === key;
+                return (
+                  <th
+                    key={key}
+                    className={`py-2 pr-3 font-medium ${align === 'right' ? 'text-right' : ''}`}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(key)}
+                      className={`inline-flex items-center gap-0.5 hover:text-gray-200 transition-colors duration-150 ${
+                        active ? 'text-cyan-300' : ''
+                      }`}
+                    >
+                      {t(labelKey)}
+                      {active && <span aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>}
+                    </button>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {detailRows.map((row, idx) => (
               <tr
                 key={row.faction.id}
-                className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150"
+                // 與將領表同一個做法：畫面外的列跳過排版與繪製，捲到才算 /
+                // Same idiom as the leader table: rows outside the viewport skip layout and
+                // paint until they scroll in
+                className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:auto_37px]"
               >
                 <td className="py-2 pr-3 text-gray-400 font-orbitron">{idx + 1}</td>
                 <td className="py-2 pr-3">

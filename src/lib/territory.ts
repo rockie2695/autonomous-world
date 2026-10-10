@@ -137,6 +137,179 @@ export interface FactionRegion {
   angle: number;
   /** 主軸／次軸的長度比；越大越細長 / axial ratio; larger means more elongated */
   elongation: number;
+  /**
+   * 領地沿著主軸的半長，以及垂直方向的半寬（圖座標）。
+   *
+   * 這是「字要撐滿整個領地」的關鍵：內切圓的半徑對細長的領地會很小（一條長長的領地
+   * 內切圓只有幾格寬），用半徑去算字級會讓名字小得可笑。沿著主軸的半長才代表那塊地
+   * 有多長，字才有辦法變大。
+   *
+   * 由共變異數的特徵值推得：均勻填滿的橢圓，沿軸的變異數是 a²/4，所以 a = 2√λ。
+   *
+   * The half-length along the principal axis and the half-width across it, in graph
+   * coordinates.
+   *
+   * This is what lets the text fill the whole claim: the inscribed radius is tiny for a
+   * long thin claim (a strip only a few cells wide), so sizing from it makes the name
+   * absurdly small. The half-length along the axis is how long the claim actually is,
+   * which is what lets the text grow.
+   *
+   * Derived from the covariance eigenvalues: for a uniformly filled ellipse the variance
+   * along an axis is a²/4, so a = 2√λ.
+   */
+  halfLength: number;
+  halfWidth: number;
+}
+
+/** 一條封閉邊界上的一個點（圖座標）/ one point on a closed outline, in graph coordinates */
+export interface OutlinePoint {
+  x: number;
+  y: number;
+}
+
+/** 一個勢力的封閉邊界 / one faction's closed outlines */
+export interface FactionOutline {
+  faction: number;
+  /** 每個元素是一條封閉曲線（首尾相連）/ each entry is one closed loop */
+  loops: OutlinePoint[][];
+}
+
+/**
+ * Chaikin 切角：把折線的每個角切掉，逼近一條平滑曲線。
+ * Chaikin corner cutting: clip every corner of a polyline to approach a smooth curve.
+ *
+ * 這是「邊界是格子階梯」的解法。原始邊界一定沿著格線走，所以是直角；切角兩次之後
+ * 就變成曲線，而且**不動到填色**——填色仍然是平塗的，只有線是彎的，所以不會有霧。
+ *
+ * This is the fix for a grid-staircase boundary. The raw boundary follows cell edges and is
+ * all right angles; two passes of corner cutting turn it into a curve, and it does **not**
+ * touch the fill — the fill stays flat, only the line curves, so there is no fog.
+ *
+ * @param loop - 封閉折線 / the closed polyline
+ * @param iterations - 切角次數 / how many passes
+ * @returns 平滑後的封閉折線 / the smoothed closed polyline
+ */
+export function smoothLoop(loop: OutlinePoint[], iterations: number): OutlinePoint[] {
+  let points = loop;
+  for (let pass = 0; pass < iterations; pass++) {
+    if (points.length < 3) return points;
+    const next: OutlinePoint[] = [];
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i]!;
+      const b = points[(i + 1) % points.length]!;
+      next.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 });
+      next.push({ x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
+    }
+    points = next;
+  }
+  return points;
+}
+
+/**
+ * 把每個勢力的邊界取成封閉曲線 / Extract each faction's boundary as closed curves.
+ *
+ * 做法：先收集邊界「單位線段」（格子座標），把線段接成一圈一圈，再轉成圖座標並切角。
+ * 一個勢力可能有好幾圈（領地中間挖空、或分離的兩塊），所以回傳的是陣列的陣列。
+ *
+ * Method: collect the boundary unit segments in cell coordinates, chain them into loops,
+ * then convert to graph coordinates and smooth. A faction can have several loops (a hole,
+ * or two disconnected holdings), hence an array of arrays.
+ *
+ * @param field - 密度場 / the density field
+ * @param iterations - 每個角的切角次數 / corner-cutting passes
+ * @returns 每個勢力一組封閉曲線 / one set of closed loops per faction
+ */
+export function factionOutlines(field: TerritoryField, iterations = 2): FactionOutline[] {
+  const W = field.width;
+  const H = field.height;
+  const stride = W + 1;
+  const spanX = field.maxX - field.minX;
+  const spanY = field.maxY - field.minY;
+  const cellW = spanX / W;
+  const cellH = spanY / H;
+
+  // 每個勢力各收一組邊 / one set of edges per faction
+  const edgesByFaction = new Map<number, Array<[number, number]>>();
+  const pushEdge = (f: number, a: number, b: number) => {
+    const list = edgesByFaction.get(f);
+    if (list) list.push([a, b]);
+    else edgesByFaction.set(f, [[a, b]]);
+  };
+
+  const ownerAt = (px: number, py: number): number => {
+    if (px < 0 || py < 0 || px >= W || py >= H) return -2;
+    return field.owner[py * W + px] ?? -2;
+  };
+
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      const owner = field.owner[py * W + px] ?? -1;
+      // 沒有屬主的格子不畫邊界。這裡要跟 factionRegions 用同一個判斷（key 不存在就
+      // 跳過），否則全員無主的世界也會生出一圈不存在的邊界。
+      //
+      // Cells with no owner are skipped. This must use the same test as `factionRegions`
+      // (skip when the key is missing), or a world where nobody owns anything would still
+      // produce a boundary that does not exist.
+      if (owner < 0 || field.factions[owner] === undefined) continue;
+      // 頂點以「格線」編號：格 (px,py) 的四角是 (px,py)…(px+1,py+1) /
+      // vertices are numbered on the grid lines
+      const tl = py * stride + px;
+      const tr = tl + 1;
+      const bl = tl + stride;
+      const br = bl + 1;
+      if (ownerAt(px - 1, py) !== owner) pushEdge(owner, bl, tl);
+      if (ownerAt(px + 1, py) !== owner) pushEdge(owner, tr, br);
+      if (ownerAt(px, py - 1) !== owner) pushEdge(owner, tl, tr);
+      if (ownerAt(px, py + 1) !== owner) pushEdge(owner, bl, br);
+    }
+  }
+
+  const out: FactionOutline[] = [];
+  for (const [faction, edges] of edgesByFaction) {
+    // 鄰接表 + 走訪一圈 / adjacency, then walk loops
+    const adj = new Map<number, number[]>();
+    for (const [a, b] of edges) {
+      const la = adj.get(a);
+      if (la) la.push(b);
+      else adj.set(a, [b]);
+      const lb = adj.get(b);
+      if (lb) lb.push(a);
+      else adj.set(b, [a]);
+    }
+    const used = new Set<string>();
+    const edgeKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+    const loops: OutlinePoint[][] = [];
+
+    for (const startKey of adj.keys()) {
+      // 從這點出發還有沒走過的邊嗎 / any unused edge left at this vertex?
+      const hasUnused = (v: number) =>
+        (adj.get(v) ?? []).some((n) => !used.has(edgeKey(v, n)));
+      if (!hasUnused(startKey)) continue;
+
+      let cur = startKey;
+      const loop: number[] = [];
+      // 有界迴圈：步數上限避免壞資料造成無限迴圈 /
+      // bounded walk, so malformed data cannot spin forever
+      for (let guard = 0; guard < edges.length + 2; guard++) {
+        loop.push(cur);
+        const next = (adj.get(cur) ?? []).find((n) => !used.has(edgeKey(cur, n)));
+        if (next === undefined) break;
+        used.add(edgeKey(cur, next));
+        cur = next;
+        if (cur === startKey) break;
+      }
+      if (loop.length < 4) continue;
+
+      const raw: OutlinePoint[] = loop.map((v) => {
+        const gpx = v % stride;
+        const gpy = (v - gpx) / stride;
+        return { x: field.minX + gpx * cellW, y: field.minY + gpy * cellH };
+      });
+      loops.push(smoothLoop(raw, iterations));
+    }
+    if (loops.length > 0) out.push({ faction, loops });
+  }
+  return out;
 }
 
 /** 鄰居方向遮罩 / Neighbour side mask */
@@ -692,6 +865,9 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
       const l1 = (trace + diff) / 2;
       const l2 = (trace - diff) / 2;
       const elongation = l2 > 1e-9 ? Math.sqrt(l1 / l2) : 99;
+      // 沿主軸／次軸的半長度（見介面上的說明）/ half extents along each axis
+      const halfLength = 2 * Math.sqrt(Math.max(l1, 0));
+      const halfWidth = 2 * Math.sqrt(Math.max(l2, 0));
       return {
         key,
         cellCount: e.cells,
@@ -706,6 +882,8 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
         labelRadius: e.best * cellAvg,
         angle,
         elongation,
+        halfLength,
+        halfWidth,
       };
     })
     .sort((a, b) => b.cellCount - a.cellCount);

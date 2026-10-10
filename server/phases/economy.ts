@@ -43,7 +43,7 @@ export async function economy(
     include: {
       characters: {
         where: { alive: true },
-        select: { id: true, gold: true, troops: true },
+        select: { id: true, name: true, gold: true, troops: true },
       },
       faction: {
         select: { kingId: true },
@@ -60,25 +60,43 @@ export async function economy(
     if (place.administratorId) leaderIds.add(place.administratorId);
   }
   const leaderJing = new Map<string, number>();
+  const leaderName = new Map<string, string>();
   if (leaderIds.size > 0) {
     const leaders = await prisma.character.findMany({
       where: { id: { in: Array.from(leaderIds) } },
-      select: { id: true, jing: true },
+      select: { id: true, name: true, jing: true },
     });
     for (const leader of leaders) {
       leaderJing.set(leader.id, leader.jing);
+      leaderName.set(leader.id, leader.name);
     }
   }
 
   for (const place of places) {
     // 計算地點收入 / Calculate place income
+    // ── 無主之地：完全不進入經濟循環 ──
+    // 不產出、不徵兵、也不寫事件。無主之地沒有勢力在其上收稅或養兵，讓它出現在事件日誌
+    // 只會被讀成「這裡有人在收錢」，而事實上沒有。
+    //
+    // Unowned places skip the economy entirely — no income, no recruits, and no event. Nothing
+    // collects tax or raises troops there, so a log row would read as "someone was paid here"
+    // when nobody was.
+    if (!place.factionId) continue;
+
     const income =
       CONFIG.PLACE_BASE_INCOME +
       place.market * CONFIG.PLACE_MARKET_INCOME_PER_LV;
 
     // 取得君王與總督 / Get king and admin
-    const kingId = place.faction?.kingId ?? null;
-    const adminId = place.administratorId;
+    // ── 沒人在這裡，就沒有控制者，錢也不發放 ──
+    // 一個地方要有住在這裡的角色才算被掌握。沒有人的話，連國王的份也不發 —— 否則一個
+    // 空城照樣把收益送給遠方的國王。
+    //
+    // A place counts as held only if a character actually lives there. With nobody present even
+    // the king's share is withheld, or an empty place would keep paying a distant king.
+    const held = place.characters.length > 0;
+    const kingId = held ? (place.faction?.kingId ?? null) : null;
+    const adminId = held ? place.administratorId : null;
 
     // jing = 經濟：決定領導者能 pockets 多少。查不到就當 0（中性），
     // 只有「位置不存在」才傳 null / jing = economy: how much the leader pockets.
@@ -88,18 +106,31 @@ export async function economy(
     const split = splitIncome(income, kingJing, adminJing);
 
     // 分配收入 / Distribute income
+    // ── 分配收益，同時記下「發了多少」與「發完剩多少」──
+    // 日誌要同時顯示增加量與總量，所以 update 的**回傳值**（更新後的那一列）要留下來。
+    //
+    // Distribute while capturing both the amount paid and the resulting total: the log shows
+    // the increase *and* the new balance, so the update's returned row is kept.
+    let kingGold = 0;
+    let kingGoldAfter = 0;
+    let adminGold = 0;
+    let adminGoldAfter = 0;
+    let othersGold = 0;
+
     if (kingId && adminId) {
-      // 君王與總督皆存在 / Both king and admin exist
-      await prisma.character.update({
+      const king = await prisma.character.update({
         where: { id: kingId },
         data: { gold: { increment: split.king } },
       });
-      await prisma.character.update({
+      kingGold = split.king;
+      kingGoldAfter = king.gold;
+      const admin = await prisma.character.update({
         where: { id: adminId },
         data: { gold: { increment: split.admin } },
       });
+      adminGold = split.admin;
+      adminGoldAfter = admin.gold;
 
-      // 將剩餘平均分給其他角色 / Distribute remaining to other characters equally
       const otherChars = place.characters.filter(
         (c: { id: string }) => c.id !== kingId && c.id !== adminId
       );
@@ -111,35 +142,76 @@ export async function economy(
             data: { gold: { increment: perChar } },
           });
         }
+        othersGold = perChar * otherChars.length;
       }
     } else if (kingId) {
-      // 僅君王存在，獨得全部 / Only king exists, takes everything
-      await prisma.character.update({
+      // 只有君王：他獨得（splitIncome 已經把整筆算給他）/ only the king, who takes it all
+      const king = await prisma.character.update({
         where: { id: kingId },
         data: { gold: { increment: split.king } },
       });
+      kingGold = split.king;
+      kingGoldAfter = king.gold;
     } else if (adminId) {
-      // 僅總督存在，獨得全部 / Only admin exists, takes everything
-      await prisma.character.update({
+      // 只有行政官：他獨得 / only the administrator, who takes it all
+      const admin = await prisma.character.update({
         where: { id: adminId },
         data: { gold: { increment: split.admin } },
       });
+      adminGold = split.admin;
+      adminGoldAfter = admin.gold;
     }
 
-    // 為駐軍招募士兵（無主之地不增兵）/
-    // Recruit troops for the garrison (unowned places get no soldier increase)
-    if (place.factionId) {
-      const recruits =
-        CONFIG.PLACE_BASE_RECRUIT +
-        place.barracks * CONFIG.PLACE_BARRACKS_RECRUIT_PER_LV;
-
-      await prisma.place.update({
-        where: { id: place.id },
-        data: { garrison: { increment: recruits } },
-      });
-    }
+    // ── 徵兵，同樣記下增加量與總量 ──
+    // Recruit for the garrison, keeping both the increment and the new total.
+    const recruits =
+      CONFIG.PLACE_BASE_RECRUIT + place.barracks * CONFIG.PLACE_BARRACKS_RECRUIT_PER_LV;
+    const updatedPlace = await prisma.place.update({
+      where: { id: place.id },
+      data: { garrison: { increment: recruits } },
+    });
 
     // 角色以個人金幣購兵 / Characters buy troops with personal gold
+    // 記一筆 INCOME 事件：哪個地方、這個回合發了多少錢給誰、徵了多少兵。
+    // 一個地方一筆，而不是一人一筆：世界有上百個地方，每人一筆每回合就是數百筆事件，
+    // 對事件表與事件日誌都是負擔，而一筆就已經回答「錢從哪裡來、給了多少」。
+    //
+    // One INCOME event per place rather than per leader: a world holds hundreds of places
+    // and per-leader rows would be hundreds of events a round for no extra information.
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'INCOME',
+        data: {
+          placeId: place.id,
+          placeName: place.name,
+          income,
+          recruits,
+          kingId,
+          kingName: kingId ? (leaderName.get(kingId) ?? null) : null,
+          // 只記錄**真的發出**的金額。沒有控制者時 split 仍然算得出一個數字，但那些錢
+          // 根本沒發出去 —— 照抄 split 會讓日誌顯示「收益 10 金」卻沒有收款人。
+          //
+          // Record only what was **actually paid**. With no controller the split still
+          // produces a number, but none of it was handed out — copying the split would make
+          // the log read "earned 10 gold" with no recipient.
+          // 增加量與**發完後的總額**：日誌要說得出「現在有多少」/
+          // Both the increase and the resulting total, so the log can state the new balance
+          kingGold,
+          kingGoldAfter,
+          adminId,
+          adminName: adminId ? (leaderName.get(adminId) ?? null) : null,
+          adminGold,
+          adminGoldAfter,
+          // 「其他人」只有在君王與行政官都存在時才會分到 / others are paid only when both seats are filled
+          othersGold,
+          // 徵兵後的駐軍總數 / the garrison total after recruiting
+          garrisonAfter: updatedPlace.garrison,
+        },
+      },
+    });
+
     for (const char of place.characters) {
       const maxBuyable = Math.floor(char.gold / CONFIG.CHAR_BUY_TROOP_PRICE);
       if (maxBuyable >= CONFIG.CHAR_BUY_TROOP_MIN) {

@@ -584,6 +584,60 @@ export const CONFIG = {
   TERRITORY_BORDER_ALPHA: 0.5,
   /** 邊界線寬（**螢幕像素**，與縮放無關）/ border stroke width in **screen pixels**, independent of zoom */
   TERRITORY_BORDER_PX: 1.4,
+  // ── 領地名稱 / Territory label ────────────────────────────────────────────
+  // 字級由領地的大小決定：`labelRadius`（最大內切圓的半徑）越大字越大，塞滿整塊領地。
+  // 上下限是必要的——沒有下限小領地的字會消失，沒有上限大領地的字會蓋掉整張圖。
+  //
+  // The font size is derived from the claim's size: the larger `labelRadius` (the
+  // inscribed circle), the larger the text, so it fills the area. The clamp matters:
+  // without a floor a small claim's name vanishes, without a ceiling a big claim's name
+  // swamps the map.
+  /**
+   * 文字最多可以佔到內切圓直徑的幾成。用「實測 100px 的字寬」反推最大字級，所以
+   * 名稱會**撐滿**領地而不是固定大小；留一點餘裕（<1）免得貼著邊界。
+   *
+   * How much of the inscribed diameter the text may fill. The largest font size is
+   * derived from the measured width at 100px, so the name **fills** the claim rather
+   * than sitting at a fixed size; a little slack (<1) keeps it off the boundary.
+   */
+  TERRITORY_LABEL_FIT: 0.82,
+  /**
+   * 字級的**上限**，以「最大內切圓半徑」的倍數表示。
+   *
+   * 只靠主軸半長會爆掉：一塊細長的月牙形領地，主軸半長可以非常大，字就會被放大到
+   * 蓋滿整個畫面並溢出領地。內切圓半徑代表「這裡最寬有多寬」，用它封頂既保證字不會
+   * 離譜，也讓字仍然填得滿一塊方形領地（方形時半長 ≈ 半徑）。
+   *
+   * Caps on the font size, as multiples of the inscribed radius.
+   *
+   * The half-length alone explodes: a long crescent has an enormous half-length, so the text
+   * was scaled to cover the viewport and spill outside the claim. The inscribed radius is
+   * "how wide this actually gets", and capping with it keeps the size sane while still filling
+   * a squarish claim (where half-length ≈ radius).
+   */
+  TERRITORY_LABEL_ALONG_CAP: 2.4,
+  TERRITORY_LABEL_ACROSS_CAP: 2.0,
+  TERRITORY_LABEL_FONT_MIN: 11,
+  /**
+   * 兩端的字級上限刻意拉得很開：字級 = 領地在螢幕上的大小，所以拉近時它可以長到很大。
+   * 上限只是防止極端縮放讓字撐爆整個畫面。
+   *
+   * The ceiling is deliberately wide: the size tracks the claim's on-screen extent, so
+   * zooming in should let it grow large. The cap only stops an extreme zoom from
+   * blowing the text across the whole viewport.
+   */
+  TERRITORY_LABEL_FONT_MAX: 120,
+  /**
+   * 只在這個鏡頭比例**以上**顯示勢力名稱（sigma 的比例**越大＝越遠**）。
+   * 拉近超過它時名字就收起來，讓「這裡是某個地方」的節點與地名自己說話 —— 這正是
+   * Stellaris / CK3 的做法：帝國名屬於星系層級，拉近到行星層級就不該再擋著。
+   *
+   * Faction names are shown only at or **above** this camera ratio (in sigma a larger
+   * ratio means further out). Zooming in past it hides them so the node and its place
+   * name speak for themselves — exactly what Stellaris and CK3 do: the empire name
+   * belongs to the galaxy level and must not block the planet level.
+   */
+  TERRITORY_LABEL_SHOW_ABOVE_RATIO: 1.0,
   TERRITORY_BORDER_HOVER_ALPHA: 0.85,
   // Extra rim brightness for the hovered faction, so the region you are pointing at
   // has a clearly brighter outline than its neighbours

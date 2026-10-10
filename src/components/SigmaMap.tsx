@@ -28,6 +28,7 @@ import { CONFIG } from '@/lib/gameConfig';
 import {
   buildTerritoryField,
   factionAt,
+  factionOutlines,
   factionRegions,
   type TerritorySite,
 } from '@/lib/territory';
@@ -672,108 +673,30 @@ useEffect(() => {
     (key) => colourOf.get(key) ?? [55, 65, 81]
   );
 
-  // 領地畫成離屏點陣圖並快取，只有 hover 的勢力改變時才重畫 /
-  // The territory is cached as an offscreen bitmap, repainted only when the
-  // hovered faction changes
-  // 兩張點陣圖：**填色**與**邊界**分開。
-  // 舊版把邊界寫成「勢力色提亮」（同一色加白），再用平滑貼上，結果邊界糊成一圈漸層，
-  // 讀不出是一條線。分成兩張之後，填色維持平滑（有機的形狀），邊界用 nearest 貼上，
-  // 就是一條乾淨的半透明線。
+  // ── 領地圖層的兩樣東西 / The two things the territory layer needs ─────────
+  // **填色與邊界共用同一組平滑曲線**，所以兩者的邊緣完全一致：把封閉曲線填滿就是領地，
+  // 再沿著同一條曲線描邊就是邊界。這取代了先前的離屏點陣圖——點陣圖的解析度等於格子
+  // 解析度，拉近時邊緣永遠是階梯或糊的，而路徑填色是向量，任何縮放都平滑。
   //
-  // Two bitmaps: **fill** and **border**, kept apart. The old version drew the border as
-  // a lightened faction colour (white mixed into the same hue) and blitted everything
-  // smoothed, so the edge blurred into a gradient and never read as a line. Split in two,
-  // the fill stays smooth (organic shape) while the border is blitted with smoothing OFF,
-  // giving a clean semi-transparent line.
-  const bitmap = document.createElement('canvas');
-  bitmap.width = field.width;
-  bitmap.height = field.height;
-  const bctx = bitmap.getContext('2d');
-  if (!bctx) return;
-
-  // 邊界用**向量線段**，不再用點陣圖。
-  //
-  // 點陣圖的解析度就是格子的解析度（這裡是 field.width × field.height，實測 171×169）。
-  // 拉近時一格被放大成幾十個螢幕像素，邊界再怎麼貼都不可能是銳利的線：開平滑會糊成
-  // 漸層，關平滑會變成一格一格的方塊。真正的解法是把邊界取成線段，交給 canvas 用
-  // stroke 在**螢幕解析度**畫，任何縮放都銳利，線寬也能固定在螢幕像素。
-  //
-  // The border is a set of **vector segments**, not a bitmap.
-  //
-  // A bitmap's resolution is the grid's resolution (here 171×169). Zoomed in, one cell
-  // becomes tens of screen pixels, so no blit setting can make the edge sharp: smoothing
-  // blurs it into a gradient, no smoothing turns it into blocks. Extracting the boundary
-  // as segments and letting canvas stroke them at **screen resolution** stays crisp at
-  // any zoom, and the line width can be pinned to screen pixels.
-  interface BorderSegment {
-    /** 屬主，用來在 hover 時把那一塊的邊界畫亮 / owner, so hovering can brighten just that claim */
-    faction: number;
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-  }
-  const borderSegments: BorderSegment[] = [];
-  {
-    const cellW = (field.maxX - field.minX) / field.width;
-    const cellH = (field.maxY - field.minY) / field.height;
-    const ownerAt = (px: number, py: number): number => {
-      // 界外視為「別的屬主」，所以地圖邊緣也有邊界線 /
-      // Outside counts as a different owner, so the map edge is bordered too
-      if (px < 0 || py < 0 || px >= field.width || py >= field.height) return -2;
-      return field.owner[py * field.width + px] ?? -2;
-    };
-    for (let py = 0; py < field.height; py++) {
-      const gy0 = field.minY + py * cellH;
-      const gy1 = gy0 + cellH;
-      for (let px = 0; px < field.width; px++) {
-        const owner = field.owner[py * field.width + px] ?? -1;
-        if (owner < 0) continue;
-        const gx0 = field.minX + px * cellW;
-        const gx1 = gx0 + cellW;
-        // 只畫「自己這一側」有鄰居不同的那幾邊 / only the sides facing a different owner
-        if (ownerAt(px - 1, py) !== owner) borderSegments.push({ faction: owner, x1: gx0, y1: gy0, x2: gx0, y2: gy1 });
-        if (ownerAt(px + 1, py) !== owner) borderSegments.push({ faction: owner, x1: gx1, y1: gy0, x2: gx1, y2: gy1 });
-        if (ownerAt(px, py - 1) !== owner) borderSegments.push({ faction: owner, x1: gx0, y1: gy0, x2: gx1, y2: gy0 });
-        if (ownerAt(px, py + 1) !== owner) borderSegments.push({ faction: owner, x1: gx0, y1: gy1, x2: gx1, y2: gy1 });
-      }
-    }
-  }
-
-
+  // **The fill and the border share one set of smoothed loops**, so their edges match
+  // exactly: filling the closed curve is the territory, stroking the same curve is the
+  // border. This replaces the offscreen bitmap — a bitmap's resolution is the grid's, so
+  // zoomed in its edge is always a staircase or a blur, while a path fill is vector and
+  // stays smooth at any zoom.
+  const outlines = factionOutlines(field, 2);
   /** 邊界色 / the border colour */
   const borderRgb = CONFIG.TERRITORY_BORDER_RGB.split(',').map((v) => Number.parseInt(v.trim(), 10));
-
-  const paint = (lit: string | null) => {
-    const litIndex = lit === null ? -1 : field.factions.indexOf(lit);
-    const image = bctx.createImageData(field.width, field.height);
-    const data = image.data;
-    for (let cell = 0; cell < field.owner.length; cell++) {
-      const faction = field.owner[cell];
-      const at = cell * 4;
-      if (faction < 0) {
-        data[at + 3] = 0;
-        continue;
-      }
-      const px = cell % field.width;
-      const colour = palette[faction] ?? [55, 65, 81];
-      // 被 hover 的勢力整片打亮、其餘壓暗，一眼看出「這塊是誰的」/
-      // Lighten the hovered faction's whole region and dim the rest /
-      const alpha =
-        litIndex < 0
-          ? CONFIG.TERRITORY_FILL_ALPHA
-          : faction === litIndex
-            ? Math.min(1, CONFIG.TERRITORY_FILL_ALPHA + CONFIG.TERRITORY_HOVER_ALPHA)
-            : CONFIG.TERRITORY_FILL_ALPHA * 0.45;
-      data[at] = colour[0];
-      data[at + 1] = colour[1];
-      data[at + 2] = colour[2];
-      data[at + 3] = Math.round(alpha * 255);
-
+  /** 路徑快取：每個勢力的填色路徑只建一次 / one Path2D per faction, built once */
+  const fillPaths = outlines.map((outline) => {
+    const path = new Path2D();
+    for (const loop of outline.loops) {
+      path.moveTo(loop[0]!.x, loop[0]!.y);
+      for (let i = 1; i < loop.length; i++) path.lineTo(loop[i]!.x, loop[i]!.y);
+      path.closePath();
     }
-    bctx.putImageData(image, 0, 0);
-  };
-  paint(null);
+    return path;
+  });
+
 
   let viewWidth = 0;
   let viewHeight = 0;
@@ -901,48 +824,70 @@ useEffect(() => {
     // the same colour and the same alpha, so the interior is uniform, and the staircase
     // at the rim is covered by the vector border stroked on top, so it does not turn
     // into a mosaic.
-    ctx.imageSmoothingEnabled = false;
     ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
-    ctx.drawImage(bitmap, field.minX, field.minY, field.maxX - field.minX, field.maxY - field.minY);
 
-    // 邊界：向量線段，在**同一個 transform** 下用 stroke 畫，所以線寬與解析度都跟
-    // 螢幕一致，拉近也不會糊。線寬是螢幕像素，所以要除掉這個 transform 的平均縮放。
+    // 填色：直接把同一組平滑曲線填滿。這是**平塗**（單一顏色、單一 alpha），所以不會
+    // 有霧；而它的邊緣就是那條曲線，與邊界完全重合。
     //
-    // The border is stroked as vector segments under the **same transform**, so both its
-    // width and its resolution are tied to the screen rather than to the grid — crisp at
-    // any zoom. The width is specified in screen pixels, so divide out the transform's
-    // average scale.
+    // Fill: flood the same smoothed loops. It is **flat** (one colour, one alpha), so
+    // there is no fog, and its edge *is* the curve — identical to the border.
+    for (let i = 0; i < outlines.length; i++) {
+      const outline = outlines[i]!;
+      const colour = palette[outline.faction] ?? [55, 65, 81];
+      // 被 hover 的勢力整片打亮、其餘壓暗，一眼看出「這塊是誰的」/
+      // Lighten the hovered faction's whole region and dim the rest
+      const fillAlpha =
+        litIndexForBorder < 0
+          ? CONFIG.TERRITORY_FILL_ALPHA
+          : outline.faction === litIndexForBorder
+            ? Math.min(1, CONFIG.TERRITORY_FILL_ALPHA + CONFIG.TERRITORY_HOVER_ALPHA)
+            : CONFIG.TERRITORY_FILL_ALPHA * 0.45;
+      ctx.fillStyle = `rgba(${colour[0]}, ${colour[1]}, ${colour[2]}, ${fillAlpha})`;
+      ctx.fill(fillPaths[i]!);
+    }
+
+    // 邊界：平滑曲線，用同一個 transform 以 stroke 畫，所以線寬與解析度都跟螢幕一致。
+    // 線寬以螢幕像素指定，所以要除掉這個 transform 的平均縮放。
+    //
+    // The border is stroked under the **same transform**, so its width and resolution
+    // track the screen rather than the grid. The width is in screen pixels, so divide out
+    // the transform's average scale.
     const borderScale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
     ctx.lineWidth = CONFIG.TERRITORY_BORDER_PX / borderScale;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = `rgba(${borderRgb[0] ?? 226}, ${borderRgb[1] ?? 240}, ${borderRgb[2] ?? 255}, ${CONFIG.TERRITORY_BORDER_ALPHA})`;
-    ctx.beginPath();
-    for (const seg of borderSegments) {
-      // hover 時，被 hover 的勢力稍後會再畫一次更亮的覆蓋線，所以這裡只跳過它 → 不必，
-      // 直接全部畫一次最省；覆蓋那次只補上更亮的同位置線段。/
-      // On hover the lit faction is drawn again on top, brighter; drawing every segment
-      // once here is the cheapest base pass.
-      ctx.moveTo(seg.x1, seg.y1);
-      ctx.lineTo(seg.x2, seg.y2);
-    }
-    ctx.stroke();
-    // 被 hover 的那一塊，邊界加亮 / the hovered claim gets a brighter border
-    if (litIndexForBorder >= 0) {
-      ctx.strokeStyle = `rgba(${borderRgb[0] ?? 226}, ${borderRgb[1] ?? 240}, ${borderRgb[2] ?? 255}, ${CONFIG.TERRITORY_BORDER_HOVER_ALPHA})`;
-      ctx.beginPath();
-      for (const seg of borderSegments) {
-        if (seg.faction !== litIndexForBorder) continue;
-        ctx.moveTo(seg.x1, seg.y1);
-        ctx.lineTo(seg.x2, seg.y2);
+    ctx.lineJoin = 'round';
+    const rgb = `${borderRgb[0] ?? 226}, ${borderRgb[1] ?? 240}, ${borderRgb[2] ?? 255}`;
+    for (const outline of outlines) {
+      // 被 hover 的那一塊畫亮一點，其餘維持一般透明度 /
+      // The hovered claim is stroked brighter; the rest keep the normal alpha
+      const alphaFor =
+        litIndexForBorder < 0
+          ? CONFIG.TERRITORY_BORDER_ALPHA
+          : outline.faction === litIndexForBorder
+            ? CONFIG.TERRITORY_BORDER_HOVER_ALPHA
+            : CONFIG.TERRITORY_BORDER_ALPHA * 0.6;
+      ctx.strokeStyle = `rgba(${rgb}, ${alphaFor})`;
+      for (const loop of outline.loops) {
+        ctx.beginPath();
+        ctx.moveTo(loop[0]!.x, loop[0]!.y);
+        for (let i = 1; i < loop.length; i++) ctx.lineTo(loop[i]!.x, loop[i]!.y);
+        ctx.closePath();
+        ctx.stroke();
       }
-      ctx.stroke();
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // 勢力名字：位置由重心算，但每幀只寫 transform，不進 React state /
     // Faction names: positioned from the centroid, but only the transform is
     // written per frame — never React state
-    const showLabels = alpha > 0.6;
+    // 名稱只在**夠遠**的時候顯示。拉近到看得清某個地點時就收起來，讓節點與地名自己
+    // 說話——否則帝國名會壓在它自己的城市上面。門檻在 config。
+    //
+    // Names show only while **far enough** out. Zoomed in to where a place is readable,
+    // they are hidden so the node and place name are unobstructed — otherwise the empire
+    // name sits on top of its own city. The threshold is config.
+    const showLabels =
+      alpha > 0.6 && sigma.getCamera().ratio >= CONFIG.TERRITORY_LABEL_SHOW_ABOVE_RATIO;
     for (let i = 0; i < territoryLabelEls.current.length; i++) {
       const el = territoryLabelEls.current[i];
       const region = territoryRegions[i];
@@ -968,8 +913,54 @@ useEffect(() => {
       // most text fits. `labelRadius` is its distance to the edge; `angle` and
       // `elongation` decide the rotation.
       const anchor = sigma.graphToViewport({ x: region.labelX, y: region.labelY });
+
+      // 這個 transform 的平均縮放：把圖座標的半徑換成螢幕像素 /
+      // the transform's average scale, to turn a graph-space radius into screen pixels
+      const scale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
+
+      // 字級要撐滿領地：先量「100px 時有多寬」，再反推能塞進內切圓的最大字級。
+      // 這樣名稱大領地就大、小領地就小，而不是固定 text-sm。
+      //
+      // 先量再算是必要的：中英數字元寬度差很多（中文約 1em、拉丁約 0.55em），用字元數
+      // 估算一定失準；量一次實際寬度就沒有這個問題。
+      //
+      // The font size fills the claim: measure the width at 100px, then solve for the
+      // largest size that fits the inscribed circle. A large claim gets large text and a
+      // small one small text, instead of a fixed `text-sm`.
+      //
+      // Measuring first is essential: CJK glyphs are ~1em wide and Latin ~0.55em, so any
+      // estimate from the character count is wrong; one real measurement is not.
+      el.style.fontSize = '100px';
+      const w100 = el.offsetWidth || 1;
+      const h100 = el.offsetHeight || 1;
+      // 可用的長度與寬度用「沿主軸的半長／次軸的半寬」，不是內切圓半徑。
+      // 內切圓對細長的領地太小（幾格寬），名字會小得可笑；半長才代表那塊地有多長。
+      //
+      // The space available comes from the half-length and half-width along the principal
+      // axes, not from the inscribed radius. The inscribed circle is far too small for a
+      // thin claim (a few cells wide) and would make the name absurdly small; the half
+      // length is how long the claim actually is.
+      // 主軸半長決定字可以多長，但用內切圓半徑封頂（見 config 的說明）/
+      // The half-length decides how long the text may be, capped by the inscribed radius
+      const alongText =
+        Math.min(region.halfLength * 2, region.labelRadius * CONFIG.TERRITORY_LABEL_ALONG_CAP) *
+        CONFIG.TERRITORY_LABEL_FIT;
+      const acrossText =
+        Math.min(region.halfWidth * 2, region.labelRadius * CONFIG.TERRITORY_LABEL_ACROSS_CAP) *
+        CONFIG.TERRITORY_LABEL_FIT;
+      const targetAlong = alongText * scale;
+      const targetAcross = acrossText * scale;
+      const fontSize = Math.max(
+        CONFIG.TERRITORY_LABEL_FONT_MIN,
+        Math.min(
+          CONFIG.TERRITORY_LABEL_FONT_MAX,
+          Math.min((100 * targetAlong) / w100, (100 * targetAcross) / h100),
+        ),
+      );
+      el.style.fontSize = `${fontSize.toFixed(1)}px`;
       const labelW = el.offsetWidth || 0;
       const labelH = el.offsetHeight || 0;
+
 
       // 領地夠細長才轉：接近圓形時主軸方向不穩定，轉了只會亂晃 /
       // Only rotate when the claim is clearly elongated: a near-circular region has an
@@ -981,24 +972,50 @@ useEffect(() => {
       let deg = rotate ? (-region.angle * 180) / Math.PI : 0;
       while (deg > 90) deg -= 180;
       while (deg < -90) deg += 180;
+
+      // 不因為「字比領地寬」而隱藏：使用者要的是**用滿整塊領地**，允許字壓過節點與
+      // 道路，只要留在領地內。所以字級已經解成「塞得進主軸的長度與寬度」，這裡就不再
+      // 多做一次外框檢查把它擋掉——那正是先前字永遠大不了的原因。
+      //
+      // Do NOT hide the label just because the text is wider than the claim: the request is
+      // to **use the whole claim**, letting the text overlap nodes and roads as long as it
+      // stays inside. The size is already solved to fit the principal extents, so a second
+      // bounding-box check here only defeats it — which is exactly why the text could never
+      // grow.
+      // 把標籤**夾回領地的外框內**。
+      //
+      // 尺寸已經解成「塞得進主軸的長與寬」，但那只保證文字**放得下**，不保證它**落在**
+      // 領地裡：錨點是最大內切圓的圓心，對彎曲或細長的領地可能偏在一側，於是半徑足夠、
+      // 位置卻在外面。所以最後再把中心夾進外框（並留出半個文字框的餘裕），文字就整塊
+      // 落在領地上了。
+      //
+      // Clamp the label **back inside the region's box**.
+      //
+      // The size is solved to fit the principal extents, but that only guarantees the text
+      // *fits*; it does not guarantee it *lands* inside. The anchor is the centre of the
+      // largest inscribed circle, which for a bent or elongated claim can sit to one side —
+      // so the radius is sufficient while the position is outside. Clamping the centre into
+      // the box (with half a text-box of slack) puts the whole text on the claim.
+      const tl = sigma.graphToViewport({ x: region.minX, y: region.minY });
+      const br = sigma.graphToViewport({ x: region.maxX, y: region.maxY });
+      const boxMinX = Math.min(tl.x, br.x);
+      const boxMaxX = Math.max(tl.x, br.x);
+      const boxMinY = Math.min(tl.y, br.y);
+      const boxMaxY = Math.max(tl.y, br.y);
+      // 旋轉之後文字實際佔的框 / the box the rotated text actually occupies
       const rad = (deg * Math.PI) / 180;
-      // 轉向之後佔用的螢幕框 / the screen box the rotated text occupies
       const effW = Math.abs(labelW * Math.cos(rad)) + Math.abs(labelH * Math.sin(rad));
       const effH = Math.abs(labelW * Math.sin(rad)) + Math.abs(labelH * Math.cos(rad));
-
-      // 這個 transform 的平均縮放：把圖座標的半徑換成螢幕像素 /
-      // the transform's average scale, to turn a graph-space radius into screen pixels
-      const scale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
-      const radiusPx = region.labelRadius * scale;
-      // 內切圓塞不下就別畫：硬塞只會溢出到別的領地上 /
-      // If the inscribed circle cannot hold it, skip: forcing it in spills onto other land
-      if (radiusPx * 2 < effW || radiusPx * 2 < effH) {
-        el.style.opacity = '0';
-        continue;
-      }
-
-      const x = anchor.x;
-      const y = anchor.y;
+      // 只有當外框比文字大時才夾。若文字仍然比外框寬（極端形狀），夾出來的區間會是反的，
+      // Math.max/min 會挑到一端，反而把文字推得更歪 —— 那時就維持錨點不動。
+      //
+      // Only clamp when the box can actually hold the text. If the text is still wider than
+      // the box (an extreme shape), the clamped range inverts and Math.max/min picks one end,
+      // pushing the text further off; keep the anchor instead.
+      const spanX = boxMaxX - boxMinX;
+      const spanY = boxMaxY - boxMinY;
+      const x = spanX >= effW ? Math.max(boxMinX + effW / 2, Math.min(boxMaxX - effW / 2, anchor.x)) : anchor.x;
+      const y = spanY >= effH ? Math.max(boxMinY + effH / 2, Math.min(boxMaxY - effH / 2, anchor.y)) : anchor.y;
 
       el.style.opacity = '1';
       el.style.transform = `translate(${x}px, ${y}px) rotate(${deg}deg) translate(-50%, -50%)`;
@@ -1092,7 +1109,6 @@ useEffect(() => {
       const litKey = factionAt(field, graphPoint.x, graphPoint.y);
       if (litKey !== null && litKey !== lit) {
         lit = litKey;
-        paint(litKey);
         draw();
       }
       return;
@@ -1115,7 +1131,6 @@ useEffect(() => {
       hoveredPlaceId = null;
       if (lit !== null) {
         lit = null;
-        paint(null);
         draw();
       }
       setTooltip(null);
@@ -1132,7 +1147,6 @@ useEffect(() => {
       setTooltip(null);
       if (lit !== null) {
         lit = null;
-        paint(null);
         draw();
       }
       return;
@@ -1155,7 +1169,6 @@ useEffect(() => {
 
     if (key !== lit) {
       lit = key;
-      paint(key);
       draw();
     }
   };
@@ -1166,7 +1179,6 @@ useEffect(() => {
     setTooltip(null);
     if (lit !== null) {
       lit = null;
-      paint(null);
       draw();
     }
   };
@@ -1726,7 +1738,7 @@ useEffect(() => {
           rather than on the canvas so they inherit the app's fonts and i18n, and
           positioned per frame with a transform only. */}
       {territoryLabels.length > 0 && (
-        <div className="pointer-events-none absolute inset-0 z-[1] overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 z-[3]">
           {territoryLabels.map((label, index) => (
             <span
               key={label.id}

@@ -247,6 +247,20 @@ export default function GamePage() {
     setPopupStack((stack) => [...stack, { kind: 'leader', char }]);
   const closePopup = () => setPopupStack([]);
   const popupBack = () => setPopupStack((stack) => stack.slice(0, -1));
+  /**
+   * 從「將領數」表格點進來時，記住怎麼回到那張表。
+   *
+   * 表格本身是一個 modal，開啟將領詳情時它會被關掉（兩個 modal 疊著會互搶 Esc），所以
+   * 「返回」不能只是 popupBack() —— 那會直接關掉詳情、回到地圖，而不是回到表格。這裡
+   * 存下重新打開表格的動作，返回時一併執行。
+   *
+   * When the detail was opened from the leader table, remember how to get back to it.
+   *
+   * The table is itself a modal and closes when the detail opens (two stacked modals fight
+   * over Escape), so "back" cannot be just popupBack() — that closes the detail to the map
+   * rather than to the table. This keeps the action that reopens the table.
+   */
+  const [leaderTableReturn, setLeaderTableReturn] = useState<{ reopen: () => void } | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const queryClient = useQueryClient();
   /** 地圖視角控制（浮動縮放 / 重設按鈕）/ Map camera controls (floating zoom / reset buttons) */
@@ -396,10 +410,12 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
    * then fall back to a name match. If neither resolves, do nothing — no
    * response beats opening the wrong leader.
    */
-  const openLeaderDetail = (key: string) => {
+  const openLeaderDetail = (key: string, reopenTable?: () => void) => {
     const chars = worldState?.characters ?? [];
     const target = chars.find((c) => c.id === key) ?? chars.find((c) => c.name === key);
-    if (target) openLeader(target);
+    if (!target) return;
+    setLeaderTableReturn(reopenTable ? { reopen: reopenTable } : null);
+    openLeader(target);
   };
 
   /** 點地名 → 聚焦地圖；順便收起左側欄，不然地圖還被蓋著。
@@ -805,7 +821,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
           {/* HUD 分成兩個面板：圖例貼左下、相機控制貼右下 / HUD split into two panels: legend bottom-left, camera controls bottom-right */}
           <div className={`${GM_HUD_LEGEND}`}>
             <div className={`${GM_LEGEND}`} aria-label={t('map.faction')}>
-              {(worldState?.factions ?? []).filter((f) => f.alive).slice(0, 5).map((f) => (
+              {(worldState?.factions ?? []).filter((f) => f.alive).map((f) => (
                 <span key={f.id} className={`${GM_LEGEND_ITEM}`}>
                   <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: f.color }} />
                   <span className="text-sm text-gray-300 whitespace-nowrap">{f.name}</span>
@@ -948,8 +964,15 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
       <DetailModal
         open={detailChar !== null}
         onClose={closePopup}
-        onBack={popupBack}
-        canGoBack={popupStack.length > 1}
+        onBack={() => {
+          popupBack();
+          const back = leaderTableReturn;
+          if (back) {
+            setLeaderTableReturn(null);
+            back.reopen();
+          }
+        }}
+        canGoBack={popupStack.length > 1 || leaderTableReturn !== null}
         title={detailChar ? detailChar.name : ''}
       >
         {detailChar && (
@@ -999,7 +1022,102 @@ function LanguageSwitch({
 // ─── 右側邊欄分頁 / Right Sidebar Tabs ────────────────────────────────────────────
 
 /** 右側面板的分頁 / Tabs for the right-hand side panel */
+/**
+ * 捲到底自動載入下一批 / Load the next batch when the end of the list scrolls into view.
+ *
+ * 用哨兵元素 + IntersectionObserver，而不是監聽 scroll 事件：scroll 每次都觸發，要在
+ * handler 裡比較 scrollTop/clientHeight/scrollHeight；observer 只在跨越門檻時叫一次，
+ * 便宜很多。回呼存在 ref 裡，否則每次 render 產生新的函式會讓 observer 反覆重建。
+ *
+ * A sentinel element plus an IntersectionObserver rather than a scroll listener: scroll
+ * fires constantly and the handler has to compare scrollTop/clientHeight/scrollHeight,
+ * while the observer fires once per threshold crossing. The callback lives in a ref, or a
+ * fresh function each render would rebuild the observer on every render.
+ *
+ * @param hasMore - 還有沒有下一批 / whether another batch exists
+ * @param onLoadMore - 要載入時呼叫 / called when more should load
+ * @returns 掛在哨兵上的 ref / the ref to attach to the sentinel
+ */
+function useLoadMoreOnScroll(
+  hasMore: boolean,
+  onLoadMore: () => void,
+): React.RefObject<HTMLDivElement | null> {
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  // 寫入 ref 必須在 effect 裡：render 期間讀寫 ref.current 會觸發
+  // react-hooks/refs，而且在並行渲染下是不安全的（和 DetailModal 的做法一致）。
+  //
+  // The ref write belongs in an effect: touching `ref.current` during render trips
+  // react-hooks/refs and is unsafe under concurrent rendering (same pattern as
+  // DetailModal).
+  const callbackRef = useRef(onLoadMore);
+  useEffect(() => {
+    callbackRef.current = onLoadMore;
+  });
+  useEffect(() => {
+    const node = sentinelRef.current;
+    if (!node || !hasMore) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) callbackRef.current();
+        }
+      },
+      // 提前一點載入，捲到底才不會先看到空白 /
+      // Start a little early so reaching the end does not show blank space first
+      { rootMargin: '160px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasMore]);
+  return sentinelRef;
+}
+
 type SideTab = 'characters' | 'events' | 'stats';
+
+/** 將領表可排序的欄位 / the sortable columns of the leader table */
+type LeaderSortKey =
+  | 'name'
+  | 'faction'
+  | 'wu'
+  | 'tong'
+  | 'jing'
+  | 'speed'
+  | 'ambition'
+  | 'age'
+  | 'troops'
+  | 'gold'
+  | 'loyalty'
+  | 'place';
+
+/** 表格的一列 / one row of the leader table */
+interface LeaderRow {
+  char: WorldState['characters'][0];
+  faction: WorldState['factions'][0] | null;
+  placeName: string;
+}
+
+/**
+ * 依欄位比較兩列。字串用 localeCompare（中文才排得對），數字直接相減。
+ * 只回傳方向無關的順序，升降由呼叫端乘上 ±1 —— 兩處各自處理很容易不一致。
+ *
+ * Compare two rows by column. Strings use localeCompare so Chinese sorts sensibly; numbers
+ * subtract. This returns direction-agnostic order and the caller applies ±1, because
+ * handling the direction in two places drifts apart easily.
+ */
+function compareLeaderRows(a: LeaderRow, b: LeaderRow, key: LeaderSortKey): number {
+  switch (key) {
+    case 'name':
+      return a.char.name.localeCompare(b.char.name);
+    case 'faction':
+      return (a.faction?.name ?? '').localeCompare(b.faction?.name ?? '');
+    case 'place':
+      return a.placeName.localeCompare(b.placeName);
+    case 'loyalty':
+      return a.char.loyalty.localeCompare(b.char.loyalty);
+    default:
+      return a.char[key] - b.char[key];
+  }
+}
 
 /** 分頁圖示與名稱的單一來源，橫向頁籤與地圖上的直向 rail 共用 /
  *  Single source for tab icons and labels, shared by the horizontal tab bar and
@@ -1432,13 +1550,36 @@ function CharacterList({
   characters: WorldState['characters'];
   places: WorldState['places'];
   factions: WorldState['factions'];
-  onOpenLeaderDetail: (charId: string) => void;
+  onOpenLeaderDetail: (charId: string, reopenTable?: () => void) => void;
 }) {
   
   const [showDetail, setShowDetail] = useState(false);
   // 彈窗表格分批：將領會隨回合持續增加，避免一次掛載全部列 /
   // Batched modal rows: characters keep growing with rounds — don't mount them all
   const [rowsShown, setRowsShown] = useState(100);
+  // 表頭排序。欄位鍵與 header 對應；點同一個欄位會切換升降。
+  // Column sorting for the table head; clicking the same column toggles the direction.
+  const [sortKey, setSortKey] = useState<LeaderSortKey>('troops');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  /**
+   * 切換排序。點新欄位時用該欄位合理的預設方向（數字大的先、名字 A→Z），
+   * 而不是沿用上一個欄位的方向 —— 那會讓「點名字」先出現 Z→A。
+   *
+   * Switching columns picks that column's own sensible default direction (biggest number
+   * first, names A→Z) instead of inheriting the previous column's, which would make
+   * clicking "name" start at Z→A.
+   */
+  const toggleSort = (key: LeaderSortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir(key === 'name' || key === 'faction' || key === 'place' || key === 'loyalty' ? 'asc' : 'desc');
+    }
+    // 換排序要回到第一頁，否則會停在一個已經沒有意義的捲動位置
+    // Re-sorting returns to the first page; otherwise the scroll position is meaningless
+    setRowsShown(100);
+  };
   // 側欄清單分批：存活將領會隨回合持續增加，避免一次掛載全部列 /
   // Batched sidebar list: alive characters keep growing with rounds —
   // mount only the first page and append on demand
@@ -1476,10 +1617,23 @@ function CharacterList({
         : null,
       placeName: placeMap.get(char.placeId) ?? '—',
     }))
-    .sort((a, b) => b.char.troops - a.char.troops);
+    .sort((a, b) => {
+      const dir = sortDir === 'asc' ? 1 : -1;
+      return compareLeaderRows(a, b, sortKey) * dir;
+    });
 
   // 側欄用同一份排序：兵力 desc / Sidebar uses the same order: troops desc
   const aliveRows = characters.filter((c) => c.alive).sort((a, b) => b.troops - a.troops);
+
+  // 兩個清單都會自動接續 / both lists now continue on their own when scrolled to the end
+  const leaderLoadMoreRef = useLoadMoreOnScroll(
+    detailRows.length > rowsShown,
+    () => setRowsShown((count) => count + 100),
+  );
+  const listLoadMoreRef = useLoadMoreOnScroll(
+    aliveRows.length > listShown,
+    () => setListShown((count) => count + 100),
+  );
 
 
   return (
@@ -1520,6 +1674,10 @@ function CharacterList({
               
             </button>
           ))}
+        {/* 哨兵：捲到這裡就自動載入下一批（按鈕保留給鍵盤與不想等的人）/
+            Sentinel: scrolled here, load the next batch (the button stays for keyboard
+            users and for anyone who would rather not wait) */}
+        <div ref={listLoadMoreRef} aria-hidden="true" />
         {aliveRows.length > listShown && (
           <button
             type="button"
@@ -1546,25 +1704,64 @@ function CharacterList({
         >
           <thead>
             <tr className="text-gray-400 text-left border-b border-white/10">
-              <th className="py-2 pr-3 font-medium">{t('character.name')}</th>
-              <th className="py-2 pr-3 font-medium">{t('faction.name')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.wu')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.tong')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.jing')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.speed')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.ambition')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.age')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.troops')}</th>
-              <th className="py-2 pr-3 font-medium text-right">{t('character.gold')}</th>
-              <th className="py-2 pr-3 font-medium">{t('character.loyalty')}</th>
-              <th className="py-2 font-medium">{t('character.place')}</th>
+              {(
+                [
+                  ['name', 'character.name'],
+                  ['faction', 'faction.name'],
+                  ['wu', 'character.wu'],
+                  ['tong', 'character.tong'],
+                  ['jing', 'character.jing'],
+                  ['speed', 'character.speed'],
+                  ['ambition', 'character.ambition'],
+                  ['age', 'character.age'],
+                  ['troops', 'character.troops'],
+                  ['gold', 'character.gold'],
+                  ['loyalty', 'character.loyalty'],
+                  ['place', 'character.place'],
+                ] as const
+              ).map(([key, labelKey]) => {
+                const active = sortKey === key;
+                return (
+                  <th
+                    key={key}
+                    className={`py-2 pr-3 font-medium ${key === 'place' ? '' : 'text-right'}`}
+                    aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  >
+                    {/* 表頭本身是排序按鈕：整格可點，字尾顯示目前方向。
+                        The header *is* the sort control: the whole cell is clickable, and
+                        the glyph shows the current direction. */}
+                    <button
+                      type="button"
+                      onClick={() => toggleSort(key)}
+                      className={`inline-flex items-center gap-0.5 hover:text-gray-200 transition-colors duration-150 ${
+                        active ? 'text-cyan-300' : ''
+                      }`}
+                    >
+                      {t(labelKey)}
+                      {active && <span aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>}
+                    </button>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
-            {detailRows.slice(0, rowsShown).map(({ char, faction, placeName }) => (
+            {detailRows.slice(0, rowsShown).map(({ char, faction, placeName }: LeaderRow) => (
               <tr
                 key={char.id}
-                className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150 cursor-pointer"
+                // 虛擬化：`content-visibility: auto` 讓瀏覽器**跳過畫面外的列**的排版與繪製，
+                // 只在捲到時才算。這就是專案裡事件日誌列已經在用的做法（同一個 class 字串），
+                // 而且是瀏覽器原生、零相依、對表格列一樣有效。
+                //
+                // `contain-intrinsic-size` 給每列一個預估高度，否則跳過的列高度算成 0，
+                // 捲軸會抖動。
+                //
+                // Virtualisation: `content-visibility: auto` makes the browser **skip layout and
+                // paint** for rows outside the viewport, doing the work only when they scroll in.
+                // It is the idiom the event log already uses (same class string), it is native,
+                // needs no dependency, and works on table rows. `contain-intrinsic-size` gives a
+                // row an estimated height, or skipped rows measure 0 and the scrollbar jitters.
+                className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150 cursor-pointer [content-visibility:auto] [contain-intrinsic-size:auto_37px]"
                 onClick={() => {
                   // 先關閉表格彈窗再開詳情：兩個 modal 同時存在會一起搶 Esc /
                   // Close the table modal before opening the detail: two stacked
@@ -1576,14 +1773,14 @@ function CharacterList({
                   // floating on top of the detail modal
                   setHoverPreview(null);
                   setShowDetail(false);
-                  onOpenLeaderDetail(char.id);
+                  onOpenLeaderDetail(char.id, () => setShowDetail(true));
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
                     setHoverPreview(null);
                     setShowDetail(false);
-                    onOpenLeaderDetail(char.id);
+                    onOpenLeaderDetail(char.id, () => setShowDetail(true));
                   }
                 }}
                 tabIndex={0}
@@ -1654,6 +1851,7 @@ function CharacterList({
             ))}
           </tbody>
         </table>
+        <div ref={leaderLoadMoreRef} aria-hidden="true" />
         {detailRows.length > rowsShown && (
           <button
             type="button"

@@ -221,6 +221,16 @@ The game features an interactive force-directed graph map using Sigma.js:
 - The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
 - **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
 - **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader
+- **Battle report** — a 佔領 row carries a **戰報 / Report** button opening the arithmetic behind
+  that engagement (attacker troops × wu × roll vs defenders garrison × fortress × roll). When the
+  place had no garrison the report says so outright instead of showing a blank calculation, because
+  a fought-over capture and a walk-in look identical in the list
+- **Economy events** — every round each place writes one `INCOME` row: its income, the troops it
+  recruited, and how the gold was split between the king, the administrator and the others. One row
+  per place rather than per leader, since a row already names the recipients
+- **Leader table sorting** — the 將領數 table head sorts: click a column, click again to reverse.
+  Switching columns starts from that column's own sensible direction (numbers descending, names A→Z),
+  and opening a leader from the table keeps a **back** action to return to it
 - **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
 - **Node glow + drop shadow** — a second, static overlay canvas under the spotlight layer and under Sigma paints a soft faction-colored halo behind every place, scaled by its on-screen size; it redraws on camera moves only, so an idle map costs nothing

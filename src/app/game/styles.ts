@@ -96,7 +96,12 @@ export const GM_HUD_PANEL =
 /** 圖例：靠左；限寬並可橫向捲動，窄視窗下不會撞到右側控制列 /
  *  Legend: left, width-capped and horizontally scrollable so it cannot collide
  *  with the right-hand controls on narrow viewports */
-export const GM_HUD_LEGEND = `${GM_HUD_PANEL} left-4 max-w-[min(55%,24rem)]`;
+/**
+ * 圖例面板。加上高度上限與縱向捲動，作為**安全閥**：包成很多行時不會蓋住整張地圖。
+ * The legend panel gets a height cap and vertical scroll as a **safety valve**, so a legend that
+ * wraps to many lines cannot cover the map.
+ */
+export const GM_HUD_LEGEND = `${GM_HUD_PANEL} left-4 max-w-[min(55%,24rem)] max-h-[40vh] overflow-y-auto ds-gm-scroll`;
 // 相機控制要避開右側面板（內容 19rem + 頁籤 rail 與間距，實測約 405px），
 // 否則 reset/縮小/滑桿會被面板蓋住。面板展開時往左挪、收合時貼齊右緣。
 // 窄視窗下 26rem 會把控制列推出畫面，所以只在 lg 以上套用，窄版維持右緣。
@@ -122,7 +127,16 @@ export const GM_CORNER_BL = `${GM_CORNER_BASE} bottom-0 left-0 border-w-[0_0_1px
 export const GM_CORNER_BR = `${GM_CORNER_BASE} bottom-0 right-0 border-w-[0_1px_1px_0]`;
 
 /** 圖例 / the legend rail */
-export const GM_LEGEND = 'flex items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden';
+/**
+ * 圖例。**換行**而不是橫向捲動：原本是 `overflow-x-auto` 加上隱藏捲軸，所以勢力一多
+ * 就有一半看不到，而且沒有任何「這裡可以捲」的提示。改成 flex-wrap 之後，多出來的勢力
+ * 會落到第二行，圖例自己長高。
+ *
+ * The legend **wraps** rather than scrolling sideways. It used to be `overflow-x-auto` with the
+ * scrollbar hidden, so extra factions were simply invisible with no hint that scrolling was
+ * possible. With flex-wrap they flow onto a second line and the legend grows taller.
+ */
+export const GM_LEGEND = 'flex flex-wrap items-center gap-x-3 gap-y-1.5';
 export const GM_LEGEND_ITEM = 'flex flex-none items-center gap-[0.4rem]';
 
 /** 統計格 / stat cells */

@@ -461,7 +461,8 @@ read territory and topography at the same time.
   plus the covered extent; `nearestSite()` answers click in one scan (deliberately *not* a grid: one
   query is one scan, and scanning 2000 places is cheaper than maintaining a grid);
   `factionAt()` answers hover from the field; `factionRegions()` returns per-faction centroids for
-  the labels; `neighbourMask()` reports which of a cell's four sides border a different owner.
+  the labels; `factionOutlines()` + `smoothLoop()` turn the boundary into smoothed curves for the
+  border stroke, and `factionRegions()` also returns each region's label anchor, radius and axis.
   No DOM, so `territory.test.ts` runs under `node`. The same split is used by the two newer
   ambient layers: `battleFleet.ts` and `spaceFlow.ts` are pure and tested under `node`, with
   their renderers (`BattleFleet.tsx` / `SpaceFlow.tsx`) doing nothing but drawing.
@@ -471,18 +472,37 @@ read territory and topography at the same time.
 - **The claim radius is relative**, `TERRITORY_BLOB_RADIUS × meanNeighbourDistance()`. A fixed
   world-coordinate radius smears everything into one blob when places are dense and vanishes when
   they are sparse.
-- **The rim is drawn on the cell's _own_ pixel**, not per side. The first version wrote rim
-  bytes into the *neighbour's* pixel (`at ± 4`), but the paint loop then visited that neighbour
-  and overwrote it with the body colour — so most of the rim was erased and only broken fragments
-  survived, which read as "the edge isn't clear". A second pass cannot fix it either:
-  `putImageData` replaces pixels rather than compositing, so it would wipe the fill. Because each
-  cell writes only itself, two neighbouring factions each light their own side and the boundary
-  reads as one continuous line. `neighbourMask()` still decides *whether* a cell is a border cell;
-  `TERRITORY_RIM_LIGHT` sets contrast, and since the rim costs one cell of thickness, raising it
-  changes brightness, not width.
-- The bitmap is painted **once per data change** into an offscreen canvas and repainted only when
-  the hovered *faction* changes — never per frame. `imageSmoothing` stays **on**: the field already
-  computes the border as a curve, so smoothing only removes the last of the cell stepping.
+- **The fill is a flat solid colour; the border is a smoothed vector curve.** No fog, no
+  staircase, and the two are independent. `imageSmoothingEnabled = false` on the fill, because a
+  territory must be one flat colour and smoothing blurs the rim into a gradient — that *is* the fog.
+  Turning smoothing off would normally expose the cell staircase, but the border is drawn on top of
+  those exact cell boundaries, so it covers them. (An earlier version lightened the faction colour to
+  make a "rim", which is white mixed into the same hue and reads as a gradient; `TERRITORY_RIM_LIGHT`
+  and `neighbourMask` are no longer used for this.)
+- **`factionOutlines()` in `territory.ts` builds the border** as closed loops, then `smoothLoop()`
+  applies Chaikin corner cutting. A bitmap's resolution *is* the grid's, so zoomed in it can never be
+  sharp; stroking raw cell edges gives a staircase. Chaining the boundary into loops and smoothing it
+  gives a curve at screen resolution. A faction can have several loops (a hole, or two disconnected
+  holdings), hence an array of arrays. Points stay inside the original hull, so a curve never
+  overshoots. Skips cells whose faction key is missing, matching `factionRegions`.
+- **The label's size comes from the inscribed circle; its visibility comes from the bounding box.**
+  These must stay separate. Size: `factionRegions()` computes `labelRadius` (a two-pass chamfer
+  distance transform — the deepest cell is the centre of the largest inscribed circle) and the label
+  solves for the largest font that fits, by measuring its width at 100px. An estimate from the
+  character count is always wrong, because CJK glyphs are ~1em and Latin ~0.55em. Visibility: tested
+  against the **box**, not the circle — the inscribed circle is far smaller for a thin claim, and
+  using it hid a perfectly visible territory's name.
+- The label is anchored at `labelX`/`labelY` (that deepest cell), **not** the centroid: a centroid
+  lands in the concave notch of an L-shaped claim, which is not its own land. `angle` / `elongation`
+  come from the cell positions' covariance; rotation only applies past elongation 1.5, because a
+  near-circular region has an unstable axis. The screen angle negates the graph angle (screen y is
+  flipped) and normalises to ±90° so text is never upside-down.
+- Faction names show only while `camera.ratio >= TERRITORY_LABEL_SHOW_ABOVE_RATIO` — a larger sigma
+  ratio is *further out*. Zoomed in past it, the name hides so the node and its place name are
+  unobstructed; this is the Stellaris / CK3 rule that an empire name belongs to the galaxy level.
+  The label layer is `z-[3]`, above sigma's container, so the text may overlap nodes and roads.
+- The fill bitmap is painted **once per data change** into an offscreen canvas and repainted only when
+  the hovered *faction* changes — never per frame.
 - **Sigma owns the camera. Do not hand-roll pan or zoom in this component.** The territory layer
   used to switch the container's `pointer-events` off so the canvas underneath could receive hover
   and click, and then implement its own `onWheel` / `onDrag` — which is what produced a shake that
@@ -588,6 +608,41 @@ similar angles, so particles flow along one shared field instead of scattering.
 - Opacities are written straight to the DOM rather than through React state — a per-frame
   `setState` would re-render the whole map.
 - The graph→viewport mapping assumes **camera angle 0** (both camera animations pass `angle: 0`).
+
+### Battle Report & Economy Events
+
+- **`INCOME` is a new event type**, written once per place per round by `economy.ts`. It carries
+  the place, the round's income, the recruited troops, and who was paid how much
+  (`kingGold` / `adminGold` / `othersGold`). **One event per place, not per leader**: a world holds
+  hundreds of places, and per-leader rows would be hundreds of events a round for no extra
+  information — one row already answers "where did it come from and how much". Names are fetched
+  with the characters specifically so the log can name the recipient.
+- **`PLACE_CAPTURED` now carries a `report`** — the arithmetic behind the engagement
+  (`attackerTroops`, `attackerWu`, `attackRoll`, `attackPower`, `defenderGarrison`,
+  `defenderFortress`, `defenceRoll`, `defencePower`, `outcome`). `outcome` is
+  `'assault'`, `'repelled'` — or the report is **`null`**, which *is* the no-defenders case.
+  A capture has two very different histories (fought a garrison, or walked into an empty place)
+  and a log row cannot show the difference, so `BattleReport.tsx` states it explicitly rather
+  than leaving a blank the reader would take for a bug.
+- The row's **戰報 / Report** button opens `BattleReport.tsx`, which is portalled to
+  `document.body` — the log is a scroll container, and an absolutely positioned panel inside it
+  would scroll away with the rows.
+- Editing either phase: both files use **CRLF**, so a scripted edit must normalise line endings
+  first or its anchors silently fail to match.
+
+### Leader Table: sorting & returning from the detail
+
+- The 將領數 table head **is** the sort control: each `<th>` renders a button, the active column is
+  tinted, and a ▲/▼ shows the direction. `compareLeaderRows()` returns direction-agnostic order and
+  the caller applies ±1, because handling the direction in two places drifts apart. Strings use
+  `localeCompare` so Chinese sorts sensibly.
+- **Switching columns picks that column's own default direction** (numbers descending, names A→Z)
+  instead of inheriting the previous column's, which would make clicking "name" start at Z→A.
+  Re-sorting also resets the paging, since the old scroll position is meaningless.
+- **Opening a leader from the table keeps a way back.** The table is itself a modal and closes when
+  the detail opens (two stacked modals fight over Escape), so "back" cannot be just `popupBack()` —
+  that closes to the map rather than to the table. `leaderTableReturn` holds the reopen action, and
+  `DetailModal`'s existing `onBack` / `canGoBack` props surface it.
 
 ### Stats Charts
 

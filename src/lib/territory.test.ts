@@ -3,6 +3,8 @@ import {
   buildTerritoryField,
   factionAt,
   factionRegions,
+  factionOutlines,
+  smoothLoop,
   meanNeighbourDistance,
   nearestSite,
   neighbourMask,
@@ -341,6 +343,92 @@ describe('neighbourMask', () => {
   });
 });
 
+describe('smoothLoop', () => {
+  it('returns the same number of points on the first pass', () => {
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    expect(smoothLoop(square, 1)).toHaveLength(8);
+  });
+
+  it('leaves points inside the original hull, so a curve never overshoots', () => {
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    for (const p of smoothLoop(square, 3)) {
+      expect(p.x).toBeGreaterThanOrEqual(0);
+      expect(p.x).toBeLessThanOrEqual(10);
+      expect(p.y).toBeGreaterThanOrEqual(0);
+      expect(p.y).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it('cuts the sharp corner off: no point stays exactly on the original vertex', () => {
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const smoothed = smoothLoop(square, 2);
+    const onCorner = smoothed.some(
+      (p) => (p.x === 0 || p.x === 10) && (p.y === 0 || p.y === 10),
+    );
+    expect(onCorner).toBe(false);
+  });
+
+  it('handles degenerate input without throwing', () => {
+    expect(smoothLoop([], 2)).toEqual([]);
+    expect(smoothLoop([{ x: 1, y: 1 }], 2)).toHaveLength(1);
+  });
+});
+
+describe('factionOutlines', () => {
+  it('returns one closed loop per isolated region', () => {
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    const outlines = factionOutlines(field, 1);
+    expect(outlines.length).toBeGreaterThan(0);
+    for (const outline of outlines) {
+      expect(outline.loops.length).toBeGreaterThan(0);
+      // A closed curve needs several points to be a shape at all
+      expect(outline.loops[0]!.length).toBeGreaterThanOrEqual(4);
+    }
+  });
+
+  it('keeps every outline point inside the covered extent', () => {
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const outline of factionOutlines(field, 2)) {
+      for (const loop of outline.loops) {
+        for (const p of loop) {
+          expect(p.x).toBeGreaterThanOrEqual(field.minX);
+          expect(p.x).toBeLessThanOrEqual(field.maxX);
+          expect(p.y).toBeGreaterThanOrEqual(field.minY);
+          expect(p.y).toBeLessThanOrEqual(field.maxY);
+        }
+      }
+    }
+  });
+
+  it('only ever references faction indices that exist in the field', () => {
+    // An outline keyed by an index past the end of \`field.factions\` would index nothing
+    // when the colour is looked up, so guard the invariant rather than a world shape.
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const outline of factionOutlines(field, 1)) {
+      expect(outline.faction).toBeGreaterThanOrEqual(0);
+      expect(outline.faction).toBeLessThan(field.factions.length);
+    }
+  });
+});
+
 describe('factionRegions', () => {
   it('should group by faction and order largest first', () => {
     const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
@@ -402,6 +490,20 @@ describe('factionRegions', () => {
       // A region of any depth has a positive distance to its edge; zero would mean the
       // label can never be placed.
       expect(region.labelRadius).toBeGreaterThan(0);
+    }
+  });
+
+  it('should report extents that grow with the region and stay positive', () => {
+    // The label is sized from these, so a zero would collapse the text to nothing; and the
+    // long axis must be at least the short one.
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const region of factionRegions(field)) {
+      expect(region.halfLength).toBeGreaterThan(0);
+      expect(region.halfWidth).toBeGreaterThan(0);
+      expect(region.halfLength).toBeGreaterThanOrEqual(region.halfWidth - 1e-9);
+      // A real region is wider across than the inscribed circle's diameter is tall
+      expect(region.halfWidth * 2).toBeGreaterThanOrEqual(region.labelRadius - 1e-9);
     }
   });
 

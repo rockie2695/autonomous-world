@@ -29,6 +29,7 @@ import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
+import { buildBattleReport } from '../battleReport';
 import { grantAdmin } from '../adminAssign';
 
 /**
@@ -96,6 +97,13 @@ export async function battle(
     const attacker = attackers[0];
     if (!attacker || !attacker.factionId) continue;
 
+    // 這一場的計算明細，供戰報顯示。沒有駐軍時維持 null —— 那本身就是「無守軍、直接
+    // 佔領」，戰報要明確說出來，而不是留白。
+    //
+    // The arithmetic behind this engagement, for the battle report. It stays null when
+    // there was no garrison, and that *is* the "no defenders, walk-in capture" case.
+    let battleReport: ReturnType<typeof buildBattleReport> = null;
+
     let captured = false;
 
     if (place.garrison > 0) {
@@ -122,6 +130,17 @@ export async function battle(
         defRandom;
 
       if (atk > def) {
+        const reportParts = {
+          attackerTroops: attacker.troops,
+          attackerWu: attacker.wu,
+          attackRoll: atkRandom,
+          attackPower: atk,
+          defenderGarrison: place.garrison,
+          defenderFortress: place.fortress,
+          defenceRoll: defRandom,
+          defencePower: def,
+        };
+        battleReport = buildBattleReport('assault', reportParts);
         // 進攻成功：駐軍全滅，攻擊者疲勞後佔領 /
         // Assault succeeds: garrison wiped, attacker fatigues then captures
         const fatiguedTroops = Math.floor(
@@ -133,6 +152,17 @@ export async function battle(
         });
         captured = true;
       } else {
+        const reportParts = {
+          attackerTroops: attacker.troops,
+          attackerWu: attacker.wu,
+          attackRoll: atkRandom,
+          attackPower: atk,
+          defenderGarrison: place.garrison,
+          defenderFortress: place.fortress,
+          defenceRoll: defRandom,
+          defencePower: def,
+        };
+        battleReport = buildBattleReport('repelled', reportParts);
         // 進攻失敗：攻擊者依速度差嘗試逃跑（駐軍速度視為 0）/
         // Assault fails: attacker tries to escape (garrison speed treated as 0)
         const speedDiff = attacker.speed;
@@ -254,6 +284,7 @@ export async function battle(
             placeName: place.name,
             factionId: attacker.factionId,
             garrisonFought: place.garrison,
+            report: battleReport,
           },
         },
       });
