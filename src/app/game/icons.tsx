@@ -117,6 +117,17 @@ export function EventGlyph({ type }: { type: string }) {
         </>
       );
       break;
+    case 'TROOPS_BOUGHT':
+      // 錢幣 + 上行的箭頭：一筆「把錢換成兵」的交易，而不是單純的收入 /
+      // A coin with an upward arrow: gold traded for soldiers, not income received
+      body = (
+        <>
+          <circle cx="12" cy="14.5" r="5.5" />
+          <path d="M9.8 13.4 12 11.6l2.2 1.8" />
+          <path d="M12 5.5v4.5m-2-2.2L12 5.5l2 2.3" />
+        </>
+      );
+      break;
     default:
       body = <circle cx="12" cy="12" r="3.2" />;
   }

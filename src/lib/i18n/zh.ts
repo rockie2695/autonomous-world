@@ -295,6 +295,7 @@ export const zh = {
   events: {
       incomeDesc: '{place} 收益 {gold} 金、徵兵 {recruits}（駐軍 {total}）',
       incomeLeader: '{leader} 得 {gold} 金（現有 {total} 金）',
+      troopsBought: '{leader} 於 {place} 購兵 {bought} 名，花費 {cost} 金（餘 {gold} 金，兵 {troops}）',
       reportTitle: '戰報',
       reportAttack: '進攻',
       reportDefence: '防守',

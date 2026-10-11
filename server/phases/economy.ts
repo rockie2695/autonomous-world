@@ -223,11 +223,47 @@ export async function economy(
 
         const cost = buyCount * CONFIG.CHAR_BUY_TROOP_PRICE;
 
-        await prisma.character.update({
+        const updatedChar = await prisma.character.update({
           where: { id: char.id },
           data: {
             gold: { decrement: cost },
             troops: { increment: buyCount },
+          },
+        });
+
+        // 購兵要寫事件：這是唯一一筆「**自己的錢變成自己的兵**」的紀錄，而 INCOME 只
+        // 說明地方发了多少錢給誰，看不出誰把錢換成了兵。沒有它，日誌會出現「某某 得 5 金」
+        // 卻找不到他後來買了幾個兵 —— 錢去了哪裡就斷了。
+        //
+        // 每次購買都帶 `charId`（不只是名稱），所以這一列能點回該將領；也帶 `placeId`，
+        // 可以直接把地圖鏡頭帶到成交的地方。
+        //
+        // Log the purchase: it is the only record of a leader turning **their own gold into
+        // their own soldiers**, and INCOME only says what a place paid out. Without it the log
+        // shows "某某 got 5 gold" and never says how many troops it turned into — the money
+        // just stops there.
+        //
+        // `charId` (not just the name) so the row links back to the leader, and `placeId` so the
+        // camera can jump to where the trade happened.
+        await prisma.event.create({
+          data: {
+            worldId,
+            round,
+            type: 'TROOPS_BOUGHT',
+            data: {
+              charId: char.id,
+              charName: char.name,
+              placeId: place.id,
+              placeName: place.name,
+              bought: buyCount,
+              cost,
+              // 花完後的餘額與兵力，與 INCOME 同一個理由：只寫增減量說不出「現在有多少」
+              //
+              // The resulting balance and strength, for the same reason INCOME carries them:
+              // the delta alone cannot answer "how much does he have now"
+              goldAfter: updatedChar.gold,
+              troopsAfter: updatedChar.troops,
+            },
           },
         });
       }

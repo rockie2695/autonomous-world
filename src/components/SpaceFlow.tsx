@@ -55,7 +55,7 @@ export interface SpaceFlowProps {
    * 浮在地圖上方而不是黏在上面。
    *
    * 刻意用 **ref 而不是數值 prop**：相機每幀都在動，數值 prop 會讓這個元件每幀重新
-   * 渲染，而它只需要在動畫迴圈裡查���一次位置。
+   * 渲染，而它只需要在動畫迴圈裡查一次位置。
    *
    * Deliberately a **ref rather than numeric props**: the camera moves every frame, so
    * numeric props would re-render this component every frame when all it needs is to

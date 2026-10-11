@@ -537,12 +537,7 @@ export const CONFIG = {
   TERRITORY_HOVER_ALPHA: 0.35,
   // 邊界亮邊：往白色混多少。**逐邊**套用，所以只要薄就不會糊成一團 /
   // Rim light: mixed toward white. Applied **per side**, so keep it thin or it smears
-    // Rim light: mixed toward white. Drawn on the cell's **own** pixel, so it costs one
-  // cell of thickness — raise it for contrast, not for width.
-  // 邊界往白色混合。畫在格子**自己**的像素上，所以厚度只有一格 —— 這個值調的是
-  // 對比，不是粗細。
-  TERRITORY_RIM_LIGHT: 0.78,
-  // ── 領地邊界 / Territory border ───────────────────────────────────────────
+// ── 領地邊界 / Territory border ───────────────────────────────────────────
   // 邊界是一條**半透明的線**，不是把勢力色提亮。提亮只是在同一塊色裡加白，看起來像
   // 漸層；一條獨立顏色的線才讀得出「這裡是邊界」。顏色與透明度都在這裡調。
   //
@@ -577,7 +572,7 @@ export const CONFIG = {
    * The legibility floor. A name **solved below this is not drawn**, rather than being
    * scaled up until it reads — scaling up is exactly what would push it off its claim.
    */
-  TERRITORY_LABEL_FONT_MIN: 11,
+  TERRITORY_LABEL_FONT_MIN: 8,
   /**
    * 名字朝白色調亮的混合比例（0–1）。底下的領地填色是同一個勢力色疊在深色背景上的
    * 半透明色塊，原色壓在上面會整個暗掉；往白色混可以保持色相又把亮度拉起來。
@@ -617,10 +612,6 @@ export const CONFIG = {
    */
   TERRITORY_LABEL_SHOW_ABOVE_RATIO: 0.6,
   TERRITORY_BORDER_HOVER_ALPHA: 0.85,
-  // Extra rim brightness for the hovered faction, so the region you are pointing at
-  // has a clearly brighter outline than its neighbours
-  // 被 hover 勢力的邊界額外加亮，讓指到的區域輪廓比鄰居明顯
-  TERRITORY_HOVER_RIM_LIGHT: 0.15,
   // 少於這麼多格子的勢力不標名字，否則小領地上會疊成一團 /
   // Factions below this cell count get no label, or tiny holdings stack up
   TERRITORY_MIN_LABEL_CELLS: 10,

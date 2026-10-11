@@ -83,6 +83,7 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   DEFECTION: 'character',
   BUILDING_UPGRADE: 'economy',
   INCOME: 'economy',
+  TROOPS_BOUGHT: 'economy',
   FACTION_COLLAPSE: 'faction',
   FACTION_ELIMINATED: 'faction',
   ADMIN_ASSIGNED: 'admin',
@@ -103,6 +104,15 @@ const EVENT_CATEGORIES: readonly EventCategory[] = [
 
 /** 事件帶的是「人」「地」還是其他資訊 / Which kind of information an event carries */
 type EventInfo = 'people' | 'place' | 'other';
+
+/**
+ * 事件的數值欄位一律可能是 `unknown`（資料來自資料庫的 JSON 欄），所以統一套一個讀法。
+ * A numeric field on an event is always `unknown` in practice — it comes out of a JSON
+ * column — so every case reads it through this one helper.
+ */
+function eventNum(value: unknown): number {
+  return typeof value === 'number' ? value : 0;
+}
 
 /**
  * 判斷一個事件屬於哪一類資訊：`data` 裡有人名就是人物、有地名就是地點，
@@ -362,14 +372,13 @@ export function EventLog({
         // new balance), and when the king *is* the administrator the two shares must merge into
         // one row: he legitimately receives both (40% + 30%), but split across two lines it reads
         // as a duplicate — "黎志 得 3 金 · 黎志 得 2 金".
-        const num = (v: unknown): number => (typeof v === 'number' ? v : 0);
-        const gold = num(p.income);
-        const recruits = num(p.recruits);
-        const garrisonAfter = num(p.garrisonAfter);
+        const gold = eventNum(p.income);
+        const recruits = eventNum(p.recruits);
+        const garrisonAfter = eventNum(p.garrisonAfter);
         const kingId = typeof p.kingId === 'string' ? p.kingId : null;
         const adminId = typeof p.adminId === 'string' ? p.adminId : null;
-        const kingGold = num(p.kingGold);
-        const adminGold = num(p.adminGold);
+        const kingGold = eventNum(p.kingGold);
+        const adminGold = eventNum(p.adminGold);
         // 同一個人坐兩個位子 / one person holding both seats
         const sameLeader = kingId !== null && kingId === adminId;
         const leadId = sameLeader ? kingId : null;
@@ -388,7 +397,7 @@ export function EventLog({
                 {fillTemplate(t('events.incomeLeader'), {
                   leader: leaderNode(leadId, p.kingName),
                   gold: String(kingGold + adminGold),
-                  total: String(num(p.adminGoldAfter)),
+                  total: String(eventNum(p.adminGoldAfter)),
                 })}
               </>
             )}
@@ -398,7 +407,7 @@ export function EventLog({
                 {fillTemplate(t('events.incomeLeader'), {
                   leader: leaderNode(kingId, p.kingName),
                   gold: String(kingGold),
-                  total: String(num(p.kingGoldAfter)),
+                  total: String(eventNum(p.kingGoldAfter)),
                 })}
               </>
             )}
@@ -408,13 +417,32 @@ export function EventLog({
                 {fillTemplate(t('events.incomeLeader'), {
                   leader: leaderNode(adminId, p.adminName),
                   gold: String(adminGold),
-                  total: String(num(p.adminGoldAfter)),
+                  total: String(eventNum(p.adminGoldAfter)),
                 })}
               </>
             )}
           </>
         );
       }
+      case 'TROOPS_BOUGHT':
+        // 一筆購兵 = 誰、在哪、花多少、買到幾個，以及**換完之後**剩下什麼。
+        // `INCOME` 只說明地方發了多少錢，所以單看它會看到「某某 得 5 金」卻看不到那筆錢
+        // 變成了幾個兵 —— 金錢流向會斷掉。餘額與兵力都要，否則只說得出花了多少，
+        // 說不出他現在手上還有沒有錢。
+        //
+        // One purchase per row: who, where, what it cost, how many troops it bought, and what
+        // is left afterwards. `INCOME` only reports what a place paid out, so on its own the log
+        // shows "某某 got 5 gold" and never says how many troops that became — the money's
+        // path just stops. The balance and the troop count are both needed: the cost alone
+        // cannot answer whether he can afford another batch.
+        return fillTemplate(t('events.troopsBought'), {
+          leader: leaderNode(p.charId, p.charName),
+          place: placeNode(p.placeId, p.placeName),
+          bought: String(eventNum(p.bought)),
+          cost: String(eventNum(p.cost)),
+          gold: String(eventNum(p.goldAfter)),
+          troops: String(eventNum(p.troopsAfter)),
+        });
       default:
         return event.type;
     }

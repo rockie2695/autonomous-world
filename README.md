@@ -235,6 +235,10 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Economy events** — every round each place writes one `INCOME` row: its income, the troops it
   recruited, and how the gold was split between the king, the administrator and the others. One row
   per place rather than per leader, since a row already names the recipients
+- **Troop purchases** — when a leader spends their **own** gold on soldiers, that writes a
+  `TROOPS_BOUGHT` row naming them, the place, how many troops they bought, what it cost, and what
+  they were left with. It is the other half of the money trail: `INCOME` alone shows a leader being
+  paid but never what they spent it on
 - **Leader table sorting** — the 將領數 table head sorts: click a column, click again to reverse.
   Switching columns starts from that column's own sensible direction (numbers descending, names A→Z),
   and opening a leader from the table keeps a **back** action to return to it

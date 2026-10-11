@@ -1694,6 +1694,17 @@ rendering all 27 combinations:
 - 只記錄**真的發出**的金額：沒有控制者時 split 仍算得出數字，但那些錢沒發出去，照抄會讓日誌顯示
   「收益 10 金」卻沒有收款人。
 
+### `TROOPS_BOUGHT` 事件 / The `TROOPS_BOUGHT` event
+
+- 由 `economy.ts` 在**每次購買**時寫一筆：`charId` + `charName`、`placeId` + `placeName`、`bought`、
+  `cost`，以及成交後的 `goldAfter` / `troopsAfter`。
+- **為什麼需要它**：`INCOME` 只記錄「一個地方發了多少錢」，所以單看它，日誌會顯示「某某 得 5 金」
+  卻永遠不會說那筆錢換成了幾個兵——金錢的流向會斷在半路。帶上**花完後的餘額與兵力**，日誌才說得出
+  「他現在買不買得起下一批」，光有花費是不夠的。
+- 帶 `charId`（不只是名稱）才能點回該將領；帶 `placeId` 則可以把地圖鏡頭帶到成交的地點。
+- 分在 `economy` 類別，圖示是「硬幣 + 上行箭頭」。新增事件型別時必須同時加進 `EventLog.tsx` 的
+  `EVENT_CATEGORY` **與** `EventGlyph` 的 switch，否則會靜靜地掉到預設圓點。
+
 ### `PLACE_CAPTURED` 的戰報 / The capture report
 
 - `PLACE_CAPTURED` 現在帶著 `report`：攻守雙方算式的每一項（`attackerTroops`、`attackerWu`、`attackRoll`、

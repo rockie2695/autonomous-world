@@ -296,6 +296,7 @@ export const en = {
   events: {
       incomeDesc: '{place} earned {gold} gold, recruited {recruits} troops (garrison {total})',
       incomeLeader: '{leader} received {gold} gold (now {total})',
+      troopsBought: '{leader} bought {bought} troops at {place} for {cost} gold ({gold} gold and {troops} troops left)',
       reportTitle: 'Battle report',
       reportAttack: 'Attack',
       reportDefence: 'Defence',

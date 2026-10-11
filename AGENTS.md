@@ -476,8 +476,9 @@ read territory and topography at the same time.
   territory must be one flat colour and smoothing blurs the rim into a gradient — that *is* the fog.
   Turning smoothing off would normally expose the cell staircase, but the border is drawn on top of
   those exact cell boundaries, so it covers them. (An earlier version lightened the faction colour to
-  make a "rim", which is white mixed into the same hue and reads as a gradient; `TERRITORY_RIM_LIGHT`
-  and `neighbourMask` are no longer used for this.)
+  make a "rim", which is white mixed into the same hue and reads as a gradient; the two
+  `*_RIM_LIGHT` tunables that drove it were **removed** with it. `neighbourMask` survives as an
+  exported helper with its own tests, but the renderer does not call it.)
 - **`factionOutlines()` in `territory.ts` builds the border** as closed loops, then `smoothLoop()`
   applies Chaikin corner cutting. A bitmap's resolution *is* the grid's, so zoomed in it can never be
   sharp; stroking raw cell edges gives a staircase. Chaining the boundary into loops and smoothing it
@@ -632,6 +633,14 @@ similar angles, so particles flow along one shared field instead of scattering.
   hundreds of places, and per-leader rows would be hundreds of events a round for no extra
   information — one row already answers "where did it come from and how much". Names are fetched
   with the characters specifically so the log can name the recipient.
+- **`TROOPS_BOUGHT` is written once per purchase**, by the same phase. It carries `charId` +
+  `charName`, `placeId` + `placeName`, `bought`, `cost`, and the resulting `goldAfter` /
+  `troopsAfter`. It exists because `INCOME` only reports what a *place* paid out: without it the log
+  shows "某某 got 5 gold" and never says how many troops that became, so the money's path stops
+  mid-sentence. The resulting balances are carried for the same reason `INCOME` carries its own —
+  the cost alone cannot answer whether the leader can afford another batch. It is filed under the
+  `economy` category and gets a coin-and-up-arrow glyph, so it must be added to `EVENT_CATEGORY` in
+  `EventLog.tsx` **and** to the `EventGlyph` switch, or it silently falls through to the default dot.
 - **`PLACE_CAPTURED` now carries a `report`** — the arithmetic behind the engagement
   (`attackerTroops`, `attackerWu`, `attackRoll`, `attackPower`, `defenderGarrison`,
   `defenderFortress`, `defenceRoll`, `defencePower`, `outcome`). `outcome` is
