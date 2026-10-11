@@ -123,14 +123,17 @@ autonomous-world/
 │           └── epithet.ts         # Shared two-character epithet components
 ├── src/components/
 │   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
+│   ├── mapShared.ts               # SigmaMap's pure half: colour maths, glow sprites, shapes, MapCameraControls
 │   ├── LeaderAvatar.tsx           # Procedural leader head bust (seeded from character.id)
-│   ├── BattleFleet.tsx         # Ships trading fire along contested roads (Canvas 2D)
-│   ├── SpaceFlow.tsx           # Flow-field space dust (Simplex noise, Canvas 2D)
+│   ├── BattleFleet.tsx            # Ships trading fire along contested roads (Canvas 2D)
+│   ├── BattleReport.tsx           # Battle report popup (the attack/defence arithmetic)
+│   ├── SpaceFlow.tsx              # Flow-field space dust (Simplex noise, Canvas 2D)
 │   └── home/                   # Homepage sections (three.js scenes, live poller, hooks)
 │                                #   FleetScene.tsx renders the same fleet over the 3D graph
 │                                #   (the event log and charts live in src/app/game/)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
+│   ├── battleReport.ts           # Pure battle-report builder (no DB, so it is testable)
 │   ├── adminAssign.ts             # grantAdmin/revokeAdmin — shared admin assignment rules (ambition + cooldown)
 │   ├── graph/
 │   │   └── layout.ts              # ForceAtlas2 layout calculation

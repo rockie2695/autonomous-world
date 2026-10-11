@@ -190,6 +190,7 @@ src/components/
                            #   resetView animates to fit the whole graph (getBBox), not
                            #   ratio 1. Duration is CONFIG.MAP_CAMERA_ANIM_MS, or 0 when
                            #   prefers-reduced-motion is set.
+├── mapShared.ts            # SigmaMap's pure half: colour maths, glow sprites, shapes, MapCameraControls
 ├── LeaderAvatar.tsx        # Procedural leader head bust, seeded from character.id; pure trait logic in deriveAvatarTraits()
 ├── BattleFleet.tsx         # Ships trading fire along contested roads (Canvas 2D, game page). Pure derivation in lib/battleFleet.ts
 ├── SpaceFlow.tsx           # Flow-field space dust behind the map. Pure field logic in lib/spaceFlow.ts; every colour in gameConfig

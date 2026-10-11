@@ -18,12 +18,12 @@ This document details all technologies used in the Autonomous World project and 
 9. [React Compiler](#react-compiler)
 10. [Vitest (測試框架)](#vitest-測試框架)
 11. [遊戲核心系統 / Game Core Systems](#遊戲核心系統--game-core-systems)
-12. [地圖視覺化 / Map Visualization](#地圖視覺化--map-visualization)
-13. [國際化 / Internationalization (i18n)](#國際化--internationalization-i18n)
-14. [部署與環境 / Deployment & Environment](#部署與環境--deployment--environment)
-
----
-
+12. [經濟與戰報 / Economy & Battle Report](#經濟與戰報--economy--battle-report)
+13. [地圖視覺化 / Map Visualization](#地圖視覺化--map-visualization)
+14. [氛圍圖層 / Ambient Layers](#氛圍圖層--ambient-layers)
+15. [國際化 / Internationalization (i18n)](#國際化--internationalization-i18n)
+16. [部署與環境 / Deployment & Environment](#部署與環境--deployment--environment)
+17. [總結 / Summary](#總結--summary)
 ## 技術架構總覽 / Technology Stack Overview
 
 ```
@@ -1667,6 +1667,43 @@ rendering all 27 combinations:
 
 ---
 
+## 經濟與戰報 / Economy & Battle Report
+
+### 經濟 / Economy
+
+- **無主之地完全不進入經濟循環**：不產出、不徵兵、也不寫事件。無主之地沒有勢力在其上收稅或養兵，
+  讓它出現在事件日誌只會被讀成「這裡有人在收錢」。
+- **一個地方要有住在這裡的角色才算被掌握**：`place.characters` 為空時，連國王的份也不發——否則一座
+  空城照樣把收益送給遠方的國王。作法是把空位視為未填補（`kingId` / `adminId` 都是 `null`），
+  於是三個分配分支都不會執行。
+- 收益分配：君王 40%、行政官 30%、其他人 30%；`jing`（經濟）會放大領導者實拿的金額（見 `server/income.ts`）。
+  **當君王與行政官是同一個人**時，他理所當然拿到兩份（40% + 30%），事件日誌必須合併成一行，
+  否則會出現「某某 得 3 金 · 某某 得 2 金」這種看起來像重複的紀錄。
+- **徵兵**（`PLACE_BASE_RECRUIT` + `barracks × PLACE_BARRACKS_RECRUIT_PER_LV`）加的是**地方的駐軍**，
+  不會變成任何角色的個人兵力。
+- **領導者的個人兵力只能買**：`CHAR_BUY_TROOP_PRICE` 每兵 2 金，一次買 10–100，前提是可負擔至少 10 兵
+  （即 20 金）。戰鬥只會讓兵力下降：獲勝 `CHAR_FATIGUE_PER_WIN`（×0.9），撤退或陣亡歸零。
+  新生成的角色 `troops: 0`。
+
+### `INCOME` 事件 / The `INCOME` event
+
+- 由 `economy.ts` 每回合**每地寫一筆**，不是每人一筆：世界有上百個地方，每人一筆每回合就是數百筆事件，
+  而一筆就已經回答「錢從哪裡來、給了多少」。
+- 攜帶 `income`、`recruits`、`garrisonAfter`，以及每位收款人的 `*Gold` 與**發完後的總額** `*GoldAfter`。
+  「增加量」與「總量」都要，日誌才說得出「現在有多少」。
+- 只記錄**真的發出**的金額：沒有控制者時 split 仍算得出數字，但那些錢沒發出去，照抄會讓日誌顯示
+  「收益 10 金」卻沒有收款人。
+
+### `PLACE_CAPTURED` 的戰報 / The capture report
+
+- `PLACE_CAPTURED` 現在帶著 `report`：攻守雙方算式的每一項（`attackerTroops`、`attackerWu`、`attackRoll`、
+  `attackPower`、`defenderGarrison`、`defenderFortress`、`defenceRoll`、`defencePower`、`outcome`）。
+- **`report` 是 `null` 就是「無守軍」**。一場佔領有兩種完全不同的經過（打了一場守軍，或走進空城），
+  事件列看不出差別，所以 `BattleReport.tsx` 明白寫出「無守軍」，而不是留一格空白讓人以為是 bug。
+- 建構子抽在 `server/battleReport.ts`（**純函式、不碰資料庫**），所以三種情況都能直接測——`battle.ts`
+  在載入時就建立 prisma client，想測那段邏輯就必須連上資料庫。
+- 戰報彈窗被 portal 到 `document.body`：事件日誌是捲動容器，絕對定位的面板會跟著列捲走。
+
 ## 地圖視覺化 / Map Visualization
 
 ### 版本資訊 / Version Info
@@ -2076,6 +2113,43 @@ radius, four together ~83%.
 `Place` 本來就帶 `layoutX`/`layoutY`，而 effect 內同步 setState 會觸發 lint 的
 cascading-render 規則。`imageSmoothing` 保持**開啟**：場本身已把邊界算成曲線，平滑只是
 去掉最後一點格子階梯。
+
+---
+
+## 氛圍圖層 / Ambient Layers
+
+兩個純邏輯 + 薄渲染層的疊加層，都坐在地圖與圖譜之下，都不搶資訊。
+Two layers, each a pure module plus a thin renderer, sitting under the map: atmosphere, not information.
+
+### 流場太空塵埃 / Flow-field dust
+
+- **來源**：`src/lib/spaceFlow.ts`（純邏輯，`node` 環境可測）+ `src/components/SpaceFlow.tsx`（只負責畫）
+- 粒子沿著一個 **3D Simplex noise 場**移動，所以會自然聚成絲帶、渦流與空洞——「隨機但有結構」。
+  關鍵是場的**連續性**：鄰近位置回傳相近的角度，粒子才會沿著同一片場流動。
+- **噪聲來自 `three`，不是新相依**：`three/examples/jsm/math/SimplexNoise` 是同一個演算法且已經安裝。
+- **種子必須是真正的 PRNG**。`createNoise3D(rand)` 會呼叫 `rand` 兩百多次來建立 permutation
+  table；傳入 `() => 0.5` 會讓所有梯度索引相同，場就退化成一根平滑斜坡，正好失去這個技法唯一的重點。
+  本專案用既有的 `createRng()`。
+- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種顏色。取樣尺度比流動更細（色帶在絲帶內再分層）、
+  漂移更慢（顏色不隨流動翻騰）。重生時保留舊的 `size` 但**刻意不保留舊的色相**——保留會讓顏色與位置脫鉤。
+- **不做半透明拖尾填色**：樣板的每幀 `fillRect('rgba(...)')` 需要一個不透明底色才能淡出，而本頁的底是
+  漸層加星雲，半透明累積會把它抹糊。粒子各自淡入淡出。
+- **不用 `lighter` 混合**：疊加會讓交叉處發亮，但底下的地圖本來就亮，那會吃掉道路的對比。
+- **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。要更亮，先調 `LIGHTNESS` / `MAX_ALPHA`，不要先動 `SATURATION`。
+- 色相是**量化**的，所以整層只需要 `HUE_STEPS` 個預先建好的填色字串，每幀零配置。
+
+### 艦隊交戰 / Battle fleet
+
+- **來源**：`src/lib/battleFleet.ts`（純邏輯）+ 兩個渲染器：`BattleFleet.tsx`（遊戲頁，Canvas 2D）與
+  `home/FleetScene.tsx`（首頁，three.js 正交投影）。
+- **戰線由「誰控制哪裡」推導，不是事件推播**：兩端屬於不同勢力的道路*就是*一條戰線。兩個頁面的資料
+  差異很大，但這條規則兩邊都算得出來，而且它就是世界狀態本身——勢力一死或易手，戰線立刻跟著變。
+- 同勢力之間與無主之地的道路不算戰線；端點重疊的線段會被跳過（零長度沒有定義的法向量）。
+- **初始相位由戰線的 `key` 雜湊而來，絕不用 `Math.random()`**。隨機相位會在每次重掛載時重新洗牌，整片
+  艦隊就會明顯跳動。兩個檔案都有決定性測試。
+- 首頁的 3D 場景中，深度**只影響大小與亮度，不影響位置**：俯視圖上深度本來就難判讀，讓它改變位置只會
+  讓交戰看起來錯亂。
+
 
 ---
 
