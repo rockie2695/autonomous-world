@@ -2138,17 +2138,17 @@ Two layers, each a pure module plus a thin renderer, sitting under the map: atmo
 - **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。要更亮，先調 `LIGHTNESS` / `MAX_ALPHA`，不要先動 `SATURATION`。
 - 色相是**量化**的，所以整層只需要 `HUE_STEPS` 個預先建好的填色字串，每幀零配置。
 
-### 艦隊交戰 / Battle fleet
+### 戰鬥回饋只在戰報裡 / Battle feedback lives only in the report
 
-- **來源**：`src/lib/battleFleet.ts`（純邏輯）+ 兩個渲染器：`BattleFleet.tsx`（遊戲頁，Canvas 2D）與
-  `home/FleetScene.tsx`（首頁，three.js 正交投影）。
-- **戰線由「誰控制哪裡」推導，不是事件推播**：兩端屬於不同勢力的道路*就是*一條戰線。兩個頁面的資料
-  差異很大，但這條規則兩邊都算得出來，而且它就是世界狀態本身——勢力一死或易手，戰線立刻跟著變。
-- 同勢力之間與無主之地的道路不算戰線；端點重疊的線段會被跳過（零長度沒有定義的法向量）。
-- **初始相位由戰線的 `key` 雜湊而來，絕不用 `Math.random()`**。隨機相位會在每次重掛載時重新洗牌，整片
-  艦隊就會明顯跳動。兩個檔案都有決定性測試。
-- 首頁的 3D 場景中，深度**只影響大小與亮度，不影響位置**：俯視圖上深度本來就難判讀，讓它改變位置只會
-  讓交戰看起來錯亂。
+- 地圖上**沒有**戰鬥動畫。先前那支沿著戰線交火的艦隊（`battleFleet.ts` + `BattleFleet.tsx` +
+  `FleetScene.tsx`）已整個刪除，連同它的 `BATTLE_FLEET_*` 設定與測試。
+- **移除的理由**：戰線是由「誰控制哪裡」推導的，所以兩個勢力只要接壤就一直「在打仗」。那是環境雜訊而不是
+  資訊，而且它跟真正說明一場交戰的那份報告競爭注意力。
+- 現在唯一呈現交戰的地方是事件日誌的 **`PLACE_CAPTURED` 戰報**（`BattleReport.tsx`）：攻守算式加上
+  攻防重播動畫。地圖只保留顯示回合的**重點光環**（紅＝被攻擊、青＝新建），它標示的是「什麼時候、哪裡」，
+  而不是一場華麗的戰鬥。
+- 若日後真的要地圖級的戰鬥視覺，它必須**綁定正在顯示的那一回合與真實的 `PLACE_CAPTURED` 事件**，
+  而不能由「長期存在的控制關係」推導。
 
 
 ---

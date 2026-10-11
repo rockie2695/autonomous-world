@@ -10,10 +10,12 @@
 // ============================================================================
 
 import {
+  brightenColor,
   hexToRgb,
   getGlowSprite,
   hslToHex,
   readDesignToken,
+  solveLabelFontSize,
   type Faction,
   type Place,
   type Tooltip,
@@ -605,10 +607,14 @@ field: buildTerritoryField(
     () =>
       territoryRegions.map((region) => {
         const faction = factions.find((entry) => entry.id === region.key);
+        const raw = faction?.color ?? CONFIG.MAP_LABEL_FALLBACK_FACTION;
         return {
           id: region.key,
           name: faction?.name ?? '',
-          color: faction?.color ?? CONFIG.MAP_LABEL_FALLBACK_FACTION,
+          // 名字壓在半透明的同色領地上會整個暗掉，所以朝白色調亮；色相不變 /
+          // The name sits on a translucent tint of its own colour and goes muddy on it,
+          // so mix toward white; the hue is unchanged
+          color: brightenColor(raw, CONFIG.TERRITORY_LABEL_LIGHTEN),
         };
       }),
     [territoryRegions, factions]
@@ -897,70 +903,57 @@ useEffect(() => {
         continue;
       }
 
-      // 把標籤夾在領地的**邊界內**，而不是只放在重心上。
-      // 重心對長條形或彎曲的領地會落在形狀外面（例如一塊 L 形的領地，重心在缺口
-      // 的空地上），於是名字會印在別人的地盤或無主之地上。做法是：先算出領地邊界在
-      // 螢幕上的矩形，再用標籤自己的尺寸把它往內縮，最後把重心夾進去。
+      // ── 標籤放在**最大內切圓的圓心**，字級解成「整塊文字都還在圓裡」──
       //
-      // ── 標籤放在**最大內切圓的圓心**，不是重心，並且沿著領地的主軸轉向 ──
-      // 重心對 L 形或彎曲的領地會落在缺口（不是自己的地）上；圓心則保證是領地裡最寬的
-      // 位置，也就是塞得下最多字的地方。`labelRadius` 是那個位置到邊界的距離，用來判斷
-      // 字放不放得下；`angle` / `elongation` 決定要不要轉向。
+      // 錨點與字級用**同一個**圓，名字就必定整塊落在自己的領地內：內切圓是唯一能保證
+      // 這件事的形狀（`labelRadius` 是該格到最近異主格的距離）。半對角線 ≤ 半徑的矩形
+      // 以圓心為中心就整塊在圓內，而圓是旋轉對稱的，所以**完全不需要夾位置**。
       //
-      // The label sits at the centre of the **largest inscribed circle**, not the centroid,
-      // and turns along the claim's principal axis. A centroid lands in the notch of an
-      // L-shaped claim; this point is guaranteed to be the roomiest spot, i.e. where the
-      // most text fits. `labelRadius` is its distance to the edge; `angle` and
-      // `elongation` decide the rotation.
+      // 這裡曾經用「主軸半長／半寬」當可用空間，再把圓心夾進領地的外框。兩處都會讓名字
+      // 跑到領地外面：半長來自共變異數，對彎曲或月牙形的領地可以遠大於實際領地（字因此
+      // 被放大到溢出）；而外框夾取對 L 形領地會正好把名字推進缺口——那個缺口根本不是自己
+      // 的地。內切圓沒有這兩個問題，而且省掉了整段夾取程式碼。
+      //
+      // The anchor and the size come from the **same** circle, which is what makes the whole
+      // text box land on its own claim: the inscribed circle is the only shape that guarantees
+      // it (`labelRadius` is that cell's distance to the nearest differently-owned cell). A
+      // box centred there whose half-diagonal does not exceed the radius is inside by
+      // construction, and a circle is rotation-invariant — so there is nothing to clamp.
+      //
+      // This used to size from the principal half-length/half-width and then clamp the centre
+      // into the region's bounding box. Both steps put names outside the claim: the half-length
+      // comes from the covariance and can far exceed the real claim for a bent or crescent one
+      // (so the text was scaled until it spilled), and clamping into the box pushes the name
+      // straight into the notch of an L-shaped claim — which is not even its own land. The
+      // circle has neither failure, and it deletes the whole clamp.
       const anchor = sigma.graphToViewport({ x: region.labelX, y: region.labelY });
 
       // 這個 transform 的平均縮放：把圖座標的半徑換成螢幕像素 /
       // the transform's average scale, to turn a graph-space radius into screen pixels
       const scale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
 
-      // 字級要撐滿領地：先量「100px 時有多寬」，再反推能塞進內切圓的最大字級。
-      // 這樣名稱大領地就大、小領地就小，而不是固定 text-sm。
-      //
-      // 先量再算是必要的：中英數字元寬度差很多（中文約 1em、拉丁約 0.55em），用字元數
-      // 估算一定失準；量一次實際寬度就沒有這個問題。
-      //
-      // The font size fills the claim: measure the width at 100px, then solve for the
-      // largest size that fits the inscribed circle. A large claim gets large text and a
-      // small one small text, instead of a fixed `text-sm`.
-      //
-      // Measuring first is essential: CJK glyphs are ~1em wide and Latin ~0.55em, so any
-      // estimate from the character count is wrong; one real measurement is not.
+      // 先量「100px 時文字多大」再解字級，兩邊都必須是實測值 /
+      // Measure the text at 100px first, then solve; both inputs are real measurements
       el.style.fontSize = '100px';
-      const w100 = el.offsetWidth || 1;
-      const h100 = el.offsetHeight || 1;
-      // 可用的長度與寬度用「沿主軸的半長／次軸的半寬」，不是內切圓半徑。
-      // 內切圓對細長的領地太小（幾格寬），名字會小得可笑；半長才代表那塊地有多長。
+      const { fontSize, legible } = solveLabelFontSize({
+        widthAt100: el.offsetWidth || 1,
+        heightAt100: el.offsetHeight || 1,
+        radiusPx: region.labelRadius * scale,
+        fit: CONFIG.TERRITORY_LABEL_FIT,
+        fontMax: CONFIG.TERRITORY_LABEL_FONT_MAX,
+        fontMin: CONFIG.TERRITORY_LABEL_FONT_MIN,
+      });
+      // 小到看不清就整個不畫。**不要**把它放大到看得見——放大正是會讓它溢出領地的那件事，
+      // 而領地裡一個四像素的髒點比沒有名字更糟。拉近時字級本來就會變大，名字會自己回來。
       //
-      // The space available comes from the half-length and half-width along the principal
-      // axes, not from the inscribed radius. The inscribed circle is far too small for a
-      // thin claim (a few cells wide) and would make the name absurdly small; the half
-      // length is how long the claim actually is.
-      // 主軸半長決定字可以多長，但用內切圓半徑封頂（見 config 的說明）/
-      // The half-length decides how long the text may be, capped by the inscribed radius
-      const alongText =
-        Math.min(region.halfLength * 2, region.labelRadius * CONFIG.TERRITORY_LABEL_ALONG_CAP) *
-        CONFIG.TERRITORY_LABEL_FIT;
-      const acrossText =
-        Math.min(region.halfWidth * 2, region.labelRadius * CONFIG.TERRITORY_LABEL_ACROSS_CAP) *
-        CONFIG.TERRITORY_LABEL_FIT;
-      const targetAlong = alongText * scale;
-      const targetAcross = acrossText * scale;
-      const fontSize = Math.max(
-        CONFIG.TERRITORY_LABEL_FONT_MIN,
-        Math.min(
-          CONFIG.TERRITORY_LABEL_FONT_MAX,
-          Math.min((100 * targetAlong) / w100, (100 * targetAcross) / h100),
-        ),
-      );
+      // Too small to read means not drawn at all. Do **not** scale it up until it reads: that is
+      // precisely the operation that would push it off its claim, and a four-pixel smudge inside
+      // a territory is worse than no name. Zooming in grows the size, so it comes back on its own.
+      if (!legible) {
+        el.style.opacity = '0';
+        continue;
+      }
       el.style.fontSize = `${fontSize.toFixed(1)}px`;
-      const labelW = el.offsetWidth || 0;
-      const labelH = el.offsetHeight || 0;
-
 
       // 領地夠細長才轉：接近圓形時主軸方向不穩定，轉了只會亂晃 /
       // Only rotate when the claim is clearly elongated: a near-circular region has an
@@ -973,52 +966,8 @@ useEffect(() => {
       while (deg > 90) deg -= 180;
       while (deg < -90) deg += 180;
 
-      // 不因為「字比領地寬」而隱藏：使用者要的是**用滿整塊領地**，允許字壓過節點與
-      // 道路，只要留在領地內。所以字級已經解成「塞得進主軸的長度與寬度」，這裡就不再
-      // 多做一次外框檢查把它擋掉——那正是先前字永遠大不了的原因。
-      //
-      // Do NOT hide the label just because the text is wider than the claim: the request is
-      // to **use the whole claim**, letting the text overlap nodes and roads as long as it
-      // stays inside. The size is already solved to fit the principal extents, so a second
-      // bounding-box check here only defeats it — which is exactly why the text could never
-      // grow.
-      // 把標籤**夾回領地的外框內**。
-      //
-      // 尺寸已經解成「塞得進主軸的長與寬」，但那只保證文字**放得下**，不保證它**落在**
-      // 領地裡：錨點是最大內切圓的圓心，對彎曲或細長的領地可能偏在一側，於是半徑足夠、
-      // 位置卻在外面。所以最後再把中心夾進外框（並留出半個文字框的餘裕），文字就整塊
-      // 落在領地上了。
-      //
-      // Clamp the label **back inside the region's box**.
-      //
-      // The size is solved to fit the principal extents, but that only guarantees the text
-      // *fits*; it does not guarantee it *lands* inside. The anchor is the centre of the
-      // largest inscribed circle, which for a bent or elongated claim can sit to one side —
-      // so the radius is sufficient while the position is outside. Clamping the centre into
-      // the box (with half a text-box of slack) puts the whole text on the claim.
-      const tl = sigma.graphToViewport({ x: region.minX, y: region.minY });
-      const br = sigma.graphToViewport({ x: region.maxX, y: region.maxY });
-      const boxMinX = Math.min(tl.x, br.x);
-      const boxMaxX = Math.max(tl.x, br.x);
-      const boxMinY = Math.min(tl.y, br.y);
-      const boxMaxY = Math.max(tl.y, br.y);
-      // 旋轉之後文字實際佔的框 / the box the rotated text actually occupies
-      const rad = (deg * Math.PI) / 180;
-      const effW = Math.abs(labelW * Math.cos(rad)) + Math.abs(labelH * Math.sin(rad));
-      const effH = Math.abs(labelW * Math.sin(rad)) + Math.abs(labelH * Math.cos(rad));
-      // 只有當外框比文字大時才夾。若文字仍然比外框寬（極端形狀），夾出來的區間會是反的，
-      // Math.max/min 會挑到一端，反而把文字推得更歪 —— 那時就維持錨點不動。
-      //
-      // Only clamp when the box can actually hold the text. If the text is still wider than
-      // the box (an extreme shape), the clamped range inverts and Math.max/min picks one end,
-      // pushing the text further off; keep the anchor instead.
-      const spanX = boxMaxX - boxMinX;
-      const spanY = boxMaxY - boxMinY;
-      const x = spanX >= effW ? Math.max(boxMinX + effW / 2, Math.min(boxMaxX - effW / 2, anchor.x)) : anchor.x;
-      const y = spanY >= effH ? Math.max(boxMinY + effH / 2, Math.min(boxMaxY - effH / 2, anchor.y)) : anchor.y;
-
       el.style.opacity = '1';
-      el.style.transform = `translate(${x}px, ${y}px) rotate(${deg}deg) translate(-50%, -50%)`;
+      el.style.transform = `translate(${anchor.x}px, ${anchor.y}px) rotate(${deg}deg) translate(-50%, -50%)`;
     }
   };
 
@@ -1745,7 +1694,7 @@ useEffect(() => {
               ref={(el) => {
                 territoryLabelEls.current[index] = el;
               }}
-              className="absolute left-0 top-0 whitespace-nowrap font-orbitron text-sm tracking-widest opacity-0"
+              className="absolute left-0 top-0 whitespace-nowrap font-orbitron leading-none tracking-widest opacity-0"
               style={{
                 color: label.color,
                 // 勢力色是執行期資料；文字陰影讓名字在深色與淺色領地上都讀得到 /

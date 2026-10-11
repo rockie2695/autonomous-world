@@ -109,22 +109,6 @@ export interface FactionRegion {
   cx: number;
   cy: number;
   /**
-   * 勢力範圍的邊界（圖座標）/ The region's bounds in graph space.
-   *
-   * 標籤需要它才能**留在領地裡面**：只靠重心的話，一塊長條形或彎曲的領地會把名字放到
-   * 範圍外的空白上。所以要能把標籤夾回邊界內，並且在領地在螢幕上太小以致於放不下時
-   * 直接不畫。
-   *
-   * The label needs this to **stay inside the territory**: with only a centroid, an
-   * elongated or bent region puts its name on blank ground outside the claim. Bounds
-   * let the label be clamped back inside, and let it be skipped entirely when the
-   * region is too small on screen to hold it.
-   */
-  minX: number;
-  minY: number;
-  maxX: number;
-  maxY: number;
-  /**
    * 標籤的錨點：區塊內離邊界最遠的那一格（最大內切圓的圓心），圖座標。
    * The label anchor: the cell farthest from any boundary — the centre of the largest
    * inscribed circle — in graph coordinates.
@@ -137,28 +121,6 @@ export interface FactionRegion {
   angle: number;
   /** 主軸／次軸的長度比；越大越細長 / axial ratio; larger means more elongated */
   elongation: number;
-  /**
-   * 領地沿著主軸的半長，以及垂直方向的半寬（圖座標）。
-   *
-   * 這是「字要撐滿整個領地」的關鍵：內切圓的半徑對細長的領地會很小（一條長長的領地
-   * 內切圓只有幾格寬），用半徑去算字級會讓名字小得可笑。沿著主軸的半長才代表那塊地
-   * 有多長，字才有辦法變大。
-   *
-   * 由共變異數的特徵值推得：均勻填滿的橢圓，沿軸的變異數是 a²/4，所以 a = 2√λ。
-   *
-   * The half-length along the principal axis and the half-width across it, in graph
-   * coordinates.
-   *
-   * This is what lets the text fill the whole claim: the inscribed radius is tiny for a
-   * long thin claim (a strip only a few cells wide), so sizing from it makes the name
-   * absurdly small. The half-length along the axis is how long the claim actually is,
-   * which is what lets the text grow.
-   *
-   * Derived from the covariance eigenvalues: for a uniformly filled ellipse the variance
-   * along an axis is a²/4, so a = 2√λ.
-   */
-  halfLength: number;
-  halfWidth: number;
 }
 
 /** 一條封閉邊界上的一個點（圖座標）/ one point on a closed outline, in graph coordinates */
@@ -790,10 +752,6 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
     cells: number;
     sumX: number;
     sumY: number;
-    minX: number;
-    minY: number;
-    maxX: number;
-    maxY: number;
     /** 目前為止最深的格子 / the deepest cell so far */
     best: number;
     bestPx: number;
@@ -819,10 +777,6 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
         entry.cells += 1;
         entry.sumX += gx;
         entry.sumY += gy;
-        if (gx < entry.minX) entry.minX = gx;
-        if (gx > entry.maxX) entry.maxX = gx;
-        if (gy < entry.minY) entry.minY = gy;
-        if (gy > entry.maxY) entry.maxY = gy;
         if (d > entry.best) { entry.best = d; entry.bestPx = px; entry.bestPy = py; }
         entry.sxx += gx * gx;
         entry.syy += gy * gy;
@@ -832,10 +786,6 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
           cells: 1,
           sumX: gx,
           sumY: gy,
-          minX: gx,
-          minY: gy,
-          maxX: gx,
-          maxY: gy,
           best: d,
           bestPx: px,
           bestPy: py,
@@ -865,25 +815,16 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
       const l1 = (trace + diff) / 2;
       const l2 = (trace - diff) / 2;
       const elongation = l2 > 1e-9 ? Math.sqrt(l1 / l2) : 99;
-      // 沿主軸／次軸的半長度（見介面上的說明）/ half extents along each axis
-      const halfLength = 2 * Math.sqrt(Math.max(l1, 0));
-      const halfWidth = 2 * Math.sqrt(Math.max(l2, 0));
       return {
         key,
         cellCount: e.cells,
         cx,
         cy,
-        minX: e.minX,
-        minY: e.minY,
-        maxX: e.maxX,
-        maxY: e.maxY,
         labelX: graphX(e.bestPx),
         labelY: graphY(e.bestPy),
         labelRadius: e.best * cellAvg,
         angle,
         elongation,
-        halfLength,
-        halfWidth,
       };
     })
     .sort((a, b) => b.cellCount - a.cellCount);

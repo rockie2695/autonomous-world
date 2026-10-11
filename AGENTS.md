@@ -192,10 +192,8 @@ src/components/
                            #   prefers-reduced-motion is set.
 ├── mapShared.ts            # SigmaMap's pure half: colour maths, glow sprites, shapes, MapCameraControls
 ├── LeaderAvatar.tsx        # Procedural leader head bust, seeded from character.id; pure trait logic in deriveAvatarTraits()
-├── BattleFleet.tsx         # Ships trading fire along contested roads (Canvas 2D, game page). Pure derivation in lib/battleFleet.ts
 ├── SpaceFlow.tsx           # Flow-field space dust behind the map. Pure field logic in lib/spaceFlow.ts; every colour in gameConfig
 └── home/                   # Homepage sections (three.js scenes, live poller, hooks)
-                            #   FleetScene.tsx renders the same fleet over the 3D graph
                             #   (the event log and charts live in src/app/game/)
 
 src/app/game/ is split into focused modules — page.tsx is the orchestrator, and
@@ -464,9 +462,9 @@ read territory and topography at the same time.
   `factionAt()` answers hover from the field; `factionRegions()` returns per-faction centroids for
   the labels; `factionOutlines()` + `smoothLoop()` turn the boundary into smoothed curves for the
   border stroke, and `factionRegions()` also returns each region's label anchor, radius and axis.
-  No DOM, so `territory.test.ts` runs under `node`. The same split is used by the two newer
-  ambient layers: `battleFleet.ts` and `spaceFlow.ts` are pure and tested under `node`, with
-  their renderers (`BattleFleet.tsx` / `SpaceFlow.tsx`) doing nothing but drawing.
+  No DOM, so `territory.test.ts` runs under `node`. The same split is used by the ambient dust
+  layer: `spaceFlow.ts` is pure and tested under `node`, with its renderer (`SpaceFlow.tsx`)
+  doing nothing but drawing.
 - **The field is built during render**, in a `useMemo` over `places`, not inside the effect and
   pushed into state — `Place` already carries `layoutX`/`layoutY`, and setting state synchronously
   in an effect trips the cascading-render lint rule.
@@ -486,21 +484,40 @@ read territory and topography at the same time.
   gives a curve at screen resolution. A faction can have several loops (a hole, or two disconnected
   holdings), hence an array of arrays. Points stay inside the original hull, so a curve never
   overshoots. Skips cells whose faction key is missing, matching `factionRegions`.
-- **The label's size comes from the inscribed circle; its visibility comes from the bounding box.**
-  These must stay separate. Size: `factionRegions()` computes `labelRadius` (a two-pass chamfer
-  distance transform — the deepest cell is the centre of the largest inscribed circle) and the label
-  solves for the largest font that fits, by measuring its width at 100px. An estimate from the
-  character count is always wrong, because CJK glyphs are ~1em and Latin ~0.55em. Visibility: tested
-  against the **box**, not the circle — the inscribed circle is far smaller for a thin claim, and
-  using it hid a perfectly visible territory's name.
+- **The inscribed circle governs the label's position *and* its size — there is nothing to clamp.**
+  `factionRegions()` computes `labelRadius` (a two-pass chamfer distance transform — the deepest cell is
+  the centre of the largest inscribed circle), and `solveLabelFontSize()` in `mapShared.ts` solves for
+  the largest font whose **whole text box** still fits that circle: half-diagonal ≤ `labelRadius ×
+  TERRITORY_LABEL_FIT`, solved from the text's real measured size at 100px. An estimate from the
+  character count is always wrong, because CJK glyphs are ~1em and Latin ~0.55em. Because the circle is
+  rotation-invariant, the *same* circle positions the label — the clamp was deleted, not just relaxed.
+  - **This replaced two steps that each pushed names off their own claim.** Sizing from the covariance's
+    half-length/half-width overflowed, because a bent or crescent claim has a half-length far larger than
+    its real extent; and clamping the centre into the region's **bounding box** was worse, because an
+    L-shaped claim's box contains its own notch — which is not its land. The box is not a subset of the
+    claim; the inscribed circle is. Do not reintroduce either.
+  - The half-diagonal (not a square) is what lets a strongly non-square name run nearly `2r` long while
+    staying only `r/4` thick, so a thin claim still gets a readable name.
+  - **Too small to read means not drawn, never scaled up.** Scaling up to reach `TERRITORY_LABEL_FONT_MIN`
+    is the one operation that would push the text outside its claim. Zooming in grows the size, so a
+    hidden name returns on its own.
 - The label is anchored at `labelX`/`labelY` (that deepest cell), **not** the centroid: a centroid
   lands in the concave notch of an L-shaped claim, which is not its own land. `angle` / `elongation`
   come from the cell positions' covariance; rotation only applies past elongation 1.5, because a
   near-circular region has an unstable axis. The screen angle negates the graph angle (screen y is
-  flipped) and normalises to ±90° so text is never upside-down.
+  flipped) and normalises to ±90° so text is never upside-down. `halfLength` / `halfWidth` and the
+  region bbox were **removed** — they existed only to feed the sizing and clamp that are gone.
+- **The name is brightened, not the raw faction colour.** The territory fill is that same faction colour
+  composited translucently over a dark backdrop, so the raw colour goes muddy on top of it.
+  `brightenColor()` (also `mapShared.ts`) mixes toward white by `TERRITORY_LABEL_LIGHTEN`, which keeps
+  the hue — so the name still reads as *that* faction's colour. It is computed once per label in a
+  `useMemo`, never per frame.
 - Faction names show only while `camera.ratio >= TERRITORY_LABEL_SHOW_ABOVE_RATIO` — a larger sigma
   ratio is *further out*. Zoomed in past it, the name hides so the node and its place name are
   unobstructed; this is the Stellaris / CK3 rule that an empire name belongs to the galaxy level.
+  **That threshold is deliberately equal to `LABEL_ZOOM_RATIO` (0.6)**, the place-name rule. When the two
+  differ, the band between them shows *no* text at all — place names already gone, faction names not yet
+  arrived — so equal values make the faction name take over at the exact ratio the place names vanish.
   The label layer is `z-[3]`, above sigma's container, so the text may overlap nodes and roads.
 - The fill bitmap is painted **once per data change** into an offscreen canvas and repainted only when
   the hovered *faction* changes — never per frame.
@@ -556,24 +573,21 @@ read territory and topography at the same time.
     visible across most of the zoomed-out range but **not** at the far end (ratio 3 is "fully
     zoomed out" on the slider).
 
-### Battle Fleet (`src/lib/battleFleet.ts` + two renderers)
+### Battle feedback lives only in the event log report
 
-Ships are **derived from ownership, not pushed as events.** A road whose two ends belong to rival
-factions *is* a front line. The two pages have very different data — the game page has
-`CHARACTER_MOVED`, the home page only recent events from `/api/public/world` — so an event pipeline
-would be needed to make them agree. This rule is derivable from both, and it is world state itself:
-a faction dies or loses land, the front lines move that instant, with no need to wait for the next
-round.
+**Do not add a battle animation to the map.** A fleet of ships trading fire along contested roads
+was removed from both pages: it was derived from ownership, so it was permanently "at war" everywhere
+two factions touched, which is ambient noise rather than information. It also competed with the thing
+that actually reports a battle.
 
-- `battleFleet.ts` is **pure, no DOM**, so it runs under `node`. Same-faction roads and roads with an
-  unowned end are internal or non-combatant. Coincident endpoints are skipped, since a zero-length
-  segment has no defined normal. Cap the simultaneous fronts by the smaller garrison of the two ends.
-- Two renderers over the same fronts: `BattleFleet.tsx` (Canvas 2D, game page) and
-  `home/FleetScene.tsx` (three.js orthographic, home page — depth affects **size and brightness
-  only**, never position, or the engagement looks scrambled).
-- **Initial phases are hashed from the front's `key`, never `Math.random()`.** Random phases reshuffle
-  on every React remount and the whole fleet visibly jumps — the exact class of bug the map drag fix
-  just eliminated. Both files have a test for determinism.
+The one place a battle is shown is the **`PLACE_CAPTURED` report** (`BattleReport.tsx`, opened from
+the 戰報 / Report button in the event log): the arithmetic of that engagement plus the attack–defence
+replay. Its distinguishing case is the no-defenders report. The map keeps only the **spotlight ring**
+for the displayed round — red for attacked, cyan for created — which marks *when* and *where*, not an
+elaborated fight.
+
+If a map-level battle visual is ever wanted again, it must be scoped to the round being displayed and
+tied to a real `PLACE_CAPTURED` event, not derived from standing ownership.
 
 ### Space Dust (`src/lib/spaceFlow.ts` + `src/components/SpaceFlow.tsx`)
 

@@ -251,35 +251,6 @@ export const CONFIG = {
   MOVE_ANIM_DURATION: 1500, // 移動點行進時間（毫秒）/ Travel time of the move dot (ms)
   MOVE_ANIM_PAUSE: 2500, // 每週期停頓（毫秒）/ Pause between animation cycles (ms)
 
-  // ── 艦隊交戰 / Battle Fleet ───────────────────────────────────────────────
-  // 首頁與遊戲頁共用的戰艦動畫。交戰**不是**靠事件推播，而是直接由「誰控制哪裡」
-  // 推導：兩端屬於不同勢力的道路就是戰線。現實資料一變，戰線跟著變，所以這個動畫
-  // 永遠跟得上模擬，而且兩個頁面用的是同一段純邏輯。
-  //
-  // The fleet animation shared by the home page and the game page. Engagements are
-  // **not** driven by an event stream but derived from who owns what: a road whose
-  // two ends belong to rival factions *is* a front line. Real data changes, the
-  // front lines change with it, so the animation always matches the simulation —
-  // and both pages run the same pure logic.
-
-  /** 同時作戰的戰線上限，超出的依駐軍總和取大者 / Max simultaneous front lines; the rest are dropped smallest-first */
-  BATTLE_FLEET_MAX_FRONTS: 24,
-  /** 每條戰線上各方各幾艘 / Ships per side on one front line */
-  BATTLE_FLEET_SHIPS_PER_SIDE: 2,
-  /** 艦隊沿戰線巡航速度（世界單位 / 秒）/ Cruise speed along the line (world units/sec) */
-  BATTLE_FLEET_SPEED: 42,
-  /** 開火間隔（毫秒）/ Interval between shots (ms) */
-  BATTLE_FLEET_FIRE_MS: 700,
-  /** 曳光飛彈速度（世界單位 / 秒）/ Tracer speed (world units/sec) */
-  BATTLE_FLEET_BOLT_SPEED: 320,
-  /** 交戰雙方各自的航道偏移（世界單位），避免疊在一起 / Per-side lane offset so the two sides do not overlap */
-  BATTLE_FLEET_LANE: 9,
-  /** 艦體長度（螢幕像素）/ Ship length in screen pixels */
-  BATTLE_FLEET_SHIP_PX: 8,
-  /** 戰線底線透明度 / Opacity of the front-line base stroke */
-  BATTLE_FLEET_LINE_ALPHA: 0.14,
-  /** 曳光飛彈拖尾長度（世界單位）/ Tracer tail length in world units */
-  BATTLE_FLEET_BOLT_LEN: 26,
   /** 頭像呼吸：胸口在 SVG 單位的起伏量 / Avatar breathing: chest rise, in SVG units */
   AVATAR_BREATH_RISE: 0.012,
   /** 頭像呼吸：胸口上移量（SVG 單位）/ Avatar breathing: chest lift, in SVG units */
@@ -432,8 +403,6 @@ export const CONFIG = {
   SPACE_FLOW_MAX_LIFE: 600,         // 最長生命（幀）/ longest life, frames
   SPACE_FLOW_FADE_FRACTION: 0.15,   // 淡入與淡出各佔生命的比例 / fade in and out share
   SPACE_FLOW_SEED: 'space-flow',    // 噪聲種子，讓場可重現 / noise seed, so the field is reproducible
-  /** 艦隊的前後深度展開（世界單位），給 3D 場景分層用 / Depth spread for layering the fleet in 3D */
-  BATTLE_FLEET_DEPTH: 40,
 
   // ── 地名標籤顯示 / Place Label Visibility ──────────────────────────────────
   // 純粹依「鏡頭縮放」決定：camera.ratio ≤ 此值才顯示地名，與兵力無關。
@@ -602,22 +571,22 @@ export const CONFIG = {
    */
   TERRITORY_LABEL_FIT: 0.82,
   /**
-   * 字級的**上限**，以「最大內切圓半徑」的倍數表示。
+   * 可讀下限。**低於這個字級就不畫**，而不是把它放大到看得見 ——
+   * 放大會讓文字溢出領地，正是要避免的事。
    *
-   * 只靠主軸半長會爆掉：一塊細長的月牙形領地，主軸半長可以非常大，字就會被放大到
-   * 蓋滿整個畫面並溢出領地。內切圓半徑代表「這裡最寬有多寬」，用它封頂既保證字不會
-   * 離譜，也讓字仍然填得滿一塊方形領地（方形時半長 ≈ 半徑）。
-   *
-   * Caps on the font size, as multiples of the inscribed radius.
-   *
-   * The half-length alone explodes: a long crescent has an enormous half-length, so the text
-   * was scaled to cover the viewport and spill outside the claim. The inscribed radius is
-   * "how wide this actually gets", and capping with it keeps the size sane while still filling
-   * a squarish claim (where half-length ≈ radius).
+   * The legibility floor. A name **solved below this is not drawn**, rather than being
+   * scaled up until it reads — scaling up is exactly what would push it off its claim.
    */
-  TERRITORY_LABEL_ALONG_CAP: 2.4,
-  TERRITORY_LABEL_ACROSS_CAP: 2.0,
   TERRITORY_LABEL_FONT_MIN: 11,
+  /**
+   * 名字朝白色調亮的混合比例（0–1）。底下的領地填色是同一個勢力色疊在深色背景上的
+   * 半透明色塊，原色壓在上面會整個暗掉；往白色混可以保持色相又把亮度拉起來。
+   *
+   * How far the name is mixed toward white. The territory fill is that same faction colour
+   * composited translucently over a dark backdrop, so the raw colour goes muddy on top of
+   * it; mixing keeps the hue and restores the lightness.
+   */
+  TERRITORY_LABEL_LIGHTEN: 0.45,
   /**
    * 兩端的字級上限刻意拉得很開：字級 = 領地在螢幕上的大小，所以拉近時它可以長到很大。
    * 上限只是防止極端縮放讓字撐爆整個畫面。
@@ -629,15 +598,24 @@ export const CONFIG = {
   TERRITORY_LABEL_FONT_MAX: 120,
   /**
    * 只在這個鏡頭比例**以上**顯示勢力名稱（sigma 的比例**越大＝越遠**）。
-   * 拉近超過它時名字就收起來，讓「這裡是某個地方」的節點與地名自己說話 —— 這正是
+   *
+   * 刻意等於 `LABEL_ZOOM_RATIO`（地方名的門檻）：兩個門檻如果不同，中間就會出現一段
+   * 「兩種名字都不顯示」的空白帶——地方名先消失、勢力名還沒出現，那一段地圖上完全沒有
+   * 文字可讀。讓兩者相等，勢力名就在地方名消失的**同一個比例**接手。
+   *
+   * Deliberately equal to `LABEL_ZOOM_RATIO` (the place-name threshold). When the two
+   * differ, the band between them shows *no* names at all: the place names are already gone
+   * and the faction names have not arrived yet. Equal values make the faction name take over
+   * at the exact ratio the place names disappear.
+   *
+   * 拉近到低於它時名字就收起來，讓「這裡是某個地方」的節點與地名自己說話 —— 這正是
    * Stellaris / CK3 的做法：帝國名屬於星系層級，拉近到行星層級就不該再擋著。
    *
-   * Faction names are shown only at or **above** this camera ratio (in sigma a larger
-   * ratio means further out). Zooming in past it hides them so the node and its place
-   * name speak for themselves — exactly what Stellaris and CK3 do: the empire name
-   * belongs to the galaxy level and must not block the planet level.
+   * Zooming in past it hides them so the node and its place name speak for themselves —
+   * exactly what Stellaris and CK3 do: the empire name belongs to the galaxy level and must
+   * not block the planet level.
    */
-  TERRITORY_LABEL_SHOW_ABOVE_RATIO: 1.0,
+  TERRITORY_LABEL_SHOW_ABOVE_RATIO: 0.6,
   TERRITORY_BORDER_HOVER_ALPHA: 0.85,
   // Extra rim brightness for the hovered faction, so the region you are pointing at
   // has a clearly brighter outline than its neighbours

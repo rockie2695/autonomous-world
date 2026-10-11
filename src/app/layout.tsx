@@ -44,7 +44,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="zh-TW" className="dark">
+    // `data-scroll-behavior="smooth"` 宣告這裡的 `scroll-behavior: smooth` 是有意的，
+    // 讓 Next 在路由切換時跳過它——否則換頁會從舊位置平滑捲回去。
+    // Next needs this attribute because `html { scroll-behavior: smooth }` is set in
+    // globals.css: without it a route change animates the scroll back from the old page.
+    <html lang="zh-TW" className="dark" data-scroll-behavior="smooth">
       <body className={`min-h-screen bg-[#020617] text-gray-100 antialiased ${inter.variable} ${orbitron.variable} font-sans`}>
         <QueryProvider>{children}</QueryProvider>
       </body>

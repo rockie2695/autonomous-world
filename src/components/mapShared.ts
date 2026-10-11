@@ -173,6 +173,100 @@ export function withAlpha(color: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+/**
+ * 把顏色朝白色調亮指定的混合比例。
+ * Mix a colour toward white by `amount`, keeping its hue.
+ *
+ * 勢力色是 `hsl(H, 70%, 50%)`（建立勢力時產生），而領地填色是同一個顏色疊在深色
+ * 背景上的半透明色塊。名字直接用原色會和底下的色塊一起變暗，讀起來像糊掉。往白色
+ * 混是最直接的做法：色相不變，亮度上去，所以名字仍然是「這個勢力的顏色」。
+ *
+ * Faction colours are `hsl(H, 70%, 50%)` and the territory fill is that same colour
+ * composited translucently over a dark backdrop, so the raw colour reads as muddy once
+ * it sits on top of it. Mixing toward white lifts the lightness while keeping the hue,
+ * so the name still reads as *this* faction's colour.
+ *
+ * @param color - HSL 字串或 hex 色碼 / An HSL string or hex colour
+ * @param amount - 0 = 原色不變，1 = 純白 / 0 leaves it alone, 1 is pure white
+ * @returns 調亮後的 hex；無法解析時原樣傳回 / The brightened hex, or the input unchanged
+ */
+export function brightenColor(color: string, amount: number): string {
+  const trimmed = color.trim();
+  const hex = trimmed.startsWith('#')
+    ? trimmed
+    : /^hsl\(/i.test(trimmed)
+      ? hslToHex(trimmed)
+      : '';
+  if (!/^#[0-9a-f]{6}$/i.test(hex)) return color;
+
+  const [r, g, b] = hexToRgb(hex);
+  const mix = Math.min(1, Math.max(0, amount));
+  const channel = (c: number) =>
+    Math.round(c + (255 - c) * mix)
+      .toString(16)
+      .padStart(2, '0');
+  return `#${channel(r)}${channel(g)}${channel(b)}`;
+}
+
+/** 勢力名字字級的求解輸入 / Input for solving the faction-name font size */
+export interface LabelFontFit {
+  /** 文字在 100px 字級下的寬度（px）/ Text width measured at font-size 100px */
+  widthAt100: number;
+  /** 文字在 100px 字級下的高度（px）/ Text height measured at font-size 100px */
+  heightAt100: number;
+  /** 內切圓半徑，換算成螢幕像素 / Inscribed-circle radius, in screen pixels */
+  radiusPx: number;
+  /** 可用比例，0–1 / The fraction of the radius the text may occupy, 0–1 */
+  fit: number;
+  /** 字級上限 / Largest allowed font size */
+  fontMax: number;
+  /** 可讀下限；比它小就寧可不要這個名字 / Below this the name is unreadable, so drop it */
+  fontMin: number;
+}
+
+/** 勢力名字字級的求解結果 / Solved faction-name font size */
+export interface LabelFontSolution {
+  /** 解出來的字級（px）/ The solved font size in px */
+  fontSize: number;
+  /** 是否大到看得懂 / Whether it clears `fontMin` */
+  legible: boolean;
+}
+
+/**
+ * 解出「整塊文字都還在內切圓裡」的最大字級。
+ * Solve the largest font size whose **whole text box** still fits the inscribed circle.
+ *
+ * 名字要留在自己的領地裡，唯一的保證就是內切圓：`labelRadius` 是那個位置到最近異主
+ * 格的距離，所以一個以它為圓心、半對角線不超過半徑的矩形，必定整塊落在領地內。這也
+ * 是為什麼**不需要**再夾位置——圓心就是安全的錨點，旋轉也不影響（圓是旋轉對稱的）。
+ *
+ * 用半對角線而不是把文字當成正方形，是因為名字的長寬比很偏：一個四字名在 100px 下大約
+ * 400×100px，半對角線讓它可以長到接近 2r 卻仍然只有 r/4 厚，正好把細長的領地用滿。
+ *
+ * The inscribed circle is the only *guarantee* the name stays on its own claim:
+ * `labelRadius` is that point's distance to the nearest differently-owned cell, so a box
+ * centred there whose half-diagonal does not exceed the radius is inside by construction.
+ * That is also why no position clamp is needed — the circle centre is a safe anchor, and
+ * rotation does not matter, because a circle is rotation-invariant.
+ *
+ * The half-diagonal (rather than treating the text as a square) matters because names are
+ * strongly non-square: a four-glyph CJK name measures about 400×100px at 100px, so this lets
+ * it run nearly 2r long while staying only r/4 thick, which is what a thin claim can hold.
+ *
+ * @param m - 量測結果與上限 / The measurements and bounds
+ * @returns 字級，以及是否大到看得懂 / The font size and whether it is legible
+ */
+export function solveLabelFontSize(m: LabelFontFit): LabelFontSolution {
+  const diag = Math.hypot(m.widthAt100, m.heightAt100);
+  if (!(diag > 0) || !(m.radiusPx > 0)) return { fontSize: 0, legible: false };
+
+  // hypot(w, h) ≤ 2r with w = widthAt100 · fs/100, so
+  // fs ≤ 200 · r · fit / hypot(widthAt100, heightAt100).
+  const solved = (200 * m.radiusPx * m.fit) / diag;
+  const fontSize = Math.min(m.fontMax, solved);
+  return { fontSize, legible: fontSize >= m.fontMin };
+}
+
 export interface Place {
   id: string;
   name: string;

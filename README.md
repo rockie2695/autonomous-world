@@ -110,7 +110,6 @@ autonomous-world/
 │       ├── rng.ts                 # Seeded RNG (mulberry32)
 │       ├── snapshot.ts            # Snapshot compression/decompression (gzip)
 │       ├── territory.ts           # Territory force field (pure logic, no DOM)
-│       ├── battleFleet.ts         # Contested-road front lines (pure logic, no DOM)
 │       ├── spaceFlow.ts           # Flow-field dust: noise field + colour ramp (pure logic)
 │       ├── i18n/                  # Internationalization (zh/en)
 │       │   ├── index.ts           # Locale management
@@ -125,11 +124,9 @@ autonomous-world/
 │   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
 │   ├── mapShared.ts               # SigmaMap's pure half: colour maths, glow sprites, shapes, MapCameraControls
 │   ├── LeaderAvatar.tsx           # Procedural leader head bust (seeded from character.id)
-│   ├── BattleFleet.tsx            # Ships trading fire along contested roads (Canvas 2D)
 │   ├── BattleReport.tsx           # Battle report popup (the attack/defence arithmetic)
 │   ├── SpaceFlow.tsx              # Flow-field space dust (Simplex noise, Canvas 2D)
 │   └── home/                   # Homepage sections (three.js scenes, live poller, hooks)
-│                                #   FleetScene.tsx renders the same fleet over the 3D graph
 │                                #   (the event log and charts live in src/app/game/)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
@@ -210,6 +207,11 @@ The game features an interactive force-directed graph map using Sigma.js:
   glow stay visible underneath — and unowned land is never coloured, because CK3 leaves unclaimed
   land untouched. Hovering a *place* still shows that place's tooltip; hovering open territory shows
   the faction's, and lifting a region dims the rest. Each faction's **name** is DOM over its region
+- **Faction names always sit inside their own territory** — both the anchor and the font size come from
+  the same inscribed circle, so the whole text box is inside the claim by construction (no clamping).
+  A name is brightened toward white first, because the fill beneath it is that same colour over a dark
+  backdrop; and faction names take over at the exact zoom where the place names disappear, so no band
+  of the map is left with no label at all
 - **Space dust** — the map sits on a slowly drifting flow field: particles follow a 3D Simplex noise
   field, so they gather into ribbons, vortices and voids rather than scattering at random, and each
   particle's colour is read from the noise **at its position**, so one ribbon is one colour band.
@@ -217,10 +219,12 @@ The game features an interactive force-directed graph map using Sigma.js:
   toward 360 for a rainbow, but raise `SPACE_FLOW_LIGHTNESS` or `SPACE_FLOW_MAX_ALPHA` before
   `SPACE_FLOW_SATURATION` — the map already carries faction colour, and vivid ribbons cost the roads
   their contrast
-- **Battle fleet** — a road whose two ends belong to rival factions *is* a front line, and ships from
-  both sides cruise it trading fire. The front lines are derived from ownership rather than pushed as
-  events, so they need no pipeline to appear on both the home page and the game page, and they follow
-  the simulation the instant a faction dies or loses land
+- **Battles are shown in one place only** — the `PLACE_CAPTURED` report. There is no map-level battle
+  animation: an earlier fleet of ships trading fire along contested roads was removed because it was
+  derived from *ownership*, so it was permanently "at war" everywhere two factions touched. That is
+  ambient noise rather than information, and it competed with the report that actually explains an
+  engagement. The map's only battle cue is the spotlight ring for the displayed round — red for
+  attacked, cyan for created
 - The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
 - **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
 - **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader

@@ -460,26 +460,32 @@ describe('factionRegions', () => {
     const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
     if (!field) throw new Error('expected a field');
     for (const region of factionRegions(field)) {
-      expect(region.minX).toBeLessThanOrEqual(region.cx);
-      expect(region.maxX).toBeGreaterThanOrEqual(region.cx);
-      expect(region.minY).toBeLessThanOrEqual(region.cy);
-      expect(region.maxY).toBeGreaterThanOrEqual(region.cy);
-      // And the bounds must be a real box, not a point
-      expect(region.maxX).toBeGreaterThan(region.minX);
-      expect(region.maxY).toBeGreaterThan(region.minY);
+      expect(region.cx).toBeGreaterThanOrEqual(field.minX);
+      expect(region.cx).toBeLessThanOrEqual(field.maxX);
+      expect(region.cy).toBeGreaterThanOrEqual(field.minY);
+      expect(region.cy).toBeLessThanOrEqual(field.maxY);
     }
   });
 
-  it('should anchor the label inside the region, not on a concave notch', () => {
-    // The centroid of a bent claim can fall outside it; the inscribed-circle centre
-    // never can, and it is what the label is positioned with.
+  it('should anchor the label on land the faction actually owns', () => {
+    // The anchor is not merely inside the bounding box — the bounding box of an L-shaped
+    // claim includes the notch, which is *not* its own land, and clamping a label into
+    // that box is exactly how a name ends up printed on someone else's ground. The anchor
+    // must belong to the faction at every sampled step around it, out to the radius the
+    // label is allowed to occupy.
     const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
     if (!field) throw new Error('expected a field');
     for (const region of factionRegions(field)) {
-      expect(region.labelX).toBeGreaterThanOrEqual(region.minX);
-      expect(region.labelX).toBeLessThanOrEqual(region.maxX);
-      expect(region.labelY).toBeGreaterThanOrEqual(region.minY);
-      expect(region.labelY).toBeLessThanOrEqual(region.maxY);
+      expect(factionAt(field, region.labelX, region.labelY)).toBe(region.key);
+      // Walk out along 16 directions to just inside the inscribed radius: every sample must
+      // still be owned, which is precisely the guarantee the label's size is solved against.
+      for (let step = 0; step < 16; step++) {
+        const a = (step / 16) * Math.PI * 2;
+        const r = region.labelRadius * 0.9;
+        const sx = region.labelX + Math.cos(a) * r;
+        const sy = region.labelY + Math.sin(a) * r;
+        expect(factionAt(field, sx, sy)).toBe(region.key);
+      }
     }
   });
 
@@ -493,17 +499,16 @@ describe('factionRegions', () => {
     }
   });
 
-  it('should report extents that grow with the region and stay positive', () => {
-    // The label is sized from these, so a zero would collapse the text to nothing; and the
-    // long axis must be at least the short one.
+  it('should report a usable elongation, and treat a circle as maximally round', () => {
+    // Elongation only decides whether to rotate the text, so it has to be finite and
+    // >= 1. A perfectly symmetric region has no meaningful axis and must not produce NaN
+    // (the component skips rotation below 1.5).
     const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
     if (!field) throw new Error('expected a field');
     for (const region of factionRegions(field)) {
-      expect(region.halfLength).toBeGreaterThan(0);
-      expect(region.halfWidth).toBeGreaterThan(0);
-      expect(region.halfLength).toBeGreaterThanOrEqual(region.halfWidth - 1e-9);
-      // A real region is wider across than the inscribed circle's diameter is tall
-      expect(region.halfWidth * 2).toBeGreaterThanOrEqual(region.labelRadius - 1e-9);
+      expect(Number.isFinite(region.elongation)).toBe(true);
+      expect(region.elongation).toBeGreaterThanOrEqual(1 - 1e-9);
+      expect(Number.isFinite(region.angle)).toBe(true);
     }
   });
 
