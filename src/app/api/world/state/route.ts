@@ -170,6 +170,9 @@ export async function GET(request: NextRequest) {
         color: true,
         alive: true,
         collapsing: true,
+        // The place popup recomputes what a place actually pays its administrator, and the
+        // king's own cut comes off the top — so the client needs to know who the king is.
+        kingId: true,
       },
     }),
     prisma.character.findMany({
@@ -180,6 +183,7 @@ export async function GET(request: NextRequest) {
         factionId: true,
         wu: true,
         tong: true,
+    ti: true,
         jing: true,
         speed: true,
         loyalty: true,

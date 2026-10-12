@@ -21,6 +21,17 @@ import type { MapCameraControls } from '@/components/SigmaMap';
 import { LeaderAvatar } from '@/components/LeaderAvatar';
 import { apiFetch } from '@/lib/api';
 import { CONFIG } from '@/lib/gameConfig';
+import { splitIncome } from '../../../server/income';
+import {
+  BUILDING_MAX_LEVEL,
+  buildingPerLevel,
+  buildingTotal,
+  nextUpgradeGain,
+  placeIncome,
+  placeRecruits,
+  upgradeCost,
+  type BuildingKind,
+} from '@/lib/placeEffects';
 import { signOut } from 'next-auth/react';
 import { Ic, Crown } from './icons';
 import { EventLog } from './EventLog';
@@ -1069,6 +1080,7 @@ type LeaderSortKey =
   | 'faction'
   | 'wu'
   | 'tong'
+  | 'ti'
   | 'jing'
   | 'speed'
   | 'ambition'
@@ -1453,6 +1465,7 @@ function LeaderDetail({
   const stats: ReadonlyArray<readonly [string, string | number]> = [
     [t('character.wu'), char.wu],
     [t('character.tong'), char.tong],
+    [t('character.ti'), char.ti],
     [t('character.jing'), char.jing],
     [t('character.speed'), char.speed],
     [t('character.ambition'), Math.round(char.ambition)],
@@ -1699,6 +1712,7 @@ function CharacterList({
                   ['faction', 'faction.name'],
                   ['wu', 'character.wu'],
                   ['tong', 'character.tong'],
+                  ['ti', 'character.ti'],
                   ['jing', 'character.jing'],
                   ['speed', 'character.speed'],
                   ['ambition', 'character.ambition'],
@@ -1823,6 +1837,7 @@ function CharacterList({
                 </td>
                 <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.wu}</td>
                 <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.tong}</td>
+                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.ti}</td>
                 <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.jing}</td>
                 <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.speed}</td>
                 {/* 野心存於 Float 欄位（±0.5 增減），顯示取整與其他整數屬性一致 /
@@ -1941,6 +1956,30 @@ function PlaceDetail({
   // 管理此地點的行政官（可能人在他處）/ The place's administrator (may be elsewhere)
   const adminChar = characters.find((c) => c.id === place.administratorId) ?? null;
 
+  // 這個地方每回合實際給行政官多少。**直接呼叫真正的分配函式**，而不是在 UI 裡重寫一遍
+  // 比例：沒有行政官就一分不發（新規則），若這裡顯示「40%」會讓人以為他照樣有錢。
+  // 預覽與模擬若各寫一份，兩者遲早會對不上。
+  //
+  // What this place actually pays its administrator this round. This **calls the real split
+  // function** rather than restating the ratio in the UI: with no administrator nobody is
+  // paid, and quoting "40%" would read as though he still gets paid. A preview that
+  // re-derives the rule separately from the simulation will drift from it.
+  const kingIdOfThisPlace = place.factionId
+    ? (factions.find((f) => f.id === place.factionId)?.kingId ?? null)
+    : null;
+  const kingCharOfPlace = characters.find((c) => c.id === kingIdOfThisPlace) ?? null;
+  const othersHere = placeChars.filter(
+    (c) => c.id !== place.administratorId && c.id !== kingIdOfThisPlace
+  ).length;
+  const adminLeaderShare = adminChar
+    ? splitIncome(
+        placeIncome(place.market),
+        kingCharOfPlace ? kingCharOfPlace.jing : null,
+        adminChar.jing,
+        othersHere
+      ).admin
+    : null;
+
   // 相連地點保留完整物件（不是只有名字）——點擊跳轉需要 id /
   // Keep the whole place objects rather than just names: navigating needs the id
   const linkedPlaces = roads
@@ -2037,11 +2076,83 @@ function PlaceDetail({
             </div>
           )}
 
-          {/* 建築資訊 / Building Info */}
-          <div className="grid grid-cols-3 gap-2">
-            <BuildingStat label={t('place.fortress')} value={place.fortress} />
-            <BuildingStat label={t('place.market')} value={place.market} />
-            <BuildingStat label={t('place.barracks')} value={place.barracks} />
+          {/* 建築資訊：每一級的效果、升級費用 / Buildings: what each level does, and what an upgrade costs */}
+          <div>
+            <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.buildings')}</div>
+            <div className="space-y-1.5">
+              {BUILDING_ROWS.map((row) => {
+                const level = place[row.kind];
+                const per = buildingPerLevel(row.kind);
+                const gain = nextUpgradeGain(row.kind, level);
+                const cost = level >= BUILDING_MAX_LEVEL ? null : upgradeCost(level);
+                return (
+                  <div
+                    key={row.kind}
+                    className="rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5"
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-base text-gray-300">{t(row.labelKey)}</span>
+                      <span className="font-orbitron text-base text-cyan-300 tabular-nums">
+                        {t('place.level')} {level}/{BUILDING_MAX_LEVEL}
+                      </span>
+                    </div>
+                    {/* 目前等級帶來的總效果，以及「再升一級會多多少」/ The total this level
+                        already grants, and what one more level would add */}
+                    <div className="mt-0.5 text-sm text-gray-400">
+                      <span className="text-gray-200">{formatEffect(buildingTotal(row.kind, level), per.unit)}</span>
+                      {gain !== null && (
+                        <span className="text-emerald-300">
+                          {' · '}
+                          {t('place.nextLevel')} {formatEffect(gain, per.unit)}
+                        </span>
+                      )}
+                    </div>
+                    {cost !== null ? (
+                      <div className="mt-0.5 text-sm">
+                        <span className="text-gray-400">{t('place.upgradeCost')} </span>
+                        <span className={adminChar && adminChar.gold >= cost ? 'text-amber-300' : 'text-rose-300'}>
+                          {t('character.gold')} {cost}
+                        </span>
+                        {adminChar && (
+                          <span className="text-gray-500">
+                            {' · '}
+                            {t('place.adminHas')} {adminChar.gold}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-0.5 text-sm text-amber-300">{t('place.maxLevel')}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 這個地方每回合實際產出多少 / What this place actually yields each round */}
+          <div className="rounded-lg bg-white/5 border border-white/10 px-2.5 py-2 space-y-1">
+            <div className={`${GM_TITLE} text-xs!`}>{t('place.perRound')}</div>
+            <div className="flex items-baseline justify-between gap-2 text-base">
+              <span className="text-gray-400">{t('place.recruitsToGarrison')}</span>
+              <span className="font-orbitron text-cyan-300 tabular-nums">
+                +{placeRecruits(place.barracks)}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between gap-2 text-base">
+              <span className="text-gray-400">{t('place.incomeTotal')}</span>
+              <span className="font-orbitron text-amber-300 tabular-nums">
+                {placeIncome(place.market)}
+              </span>
+            </div>
+            {/* 依新的分配規則，沒有行政官就誰都不拿，所以這裡必須寫明實際結果而不是比例 /
+                Under the new split nobody is paid without an administrator, so this states the
+                outcome rather than the nominal share */}
+            <div className="flex items-baseline justify-between gap-2 text-base">
+              <span className="text-gray-400">{t('place.toAdmin')}</span>
+              <span className={`font-orbitron tabular-nums ${adminChar ? 'text-amber-300' : 'text-gray-500'}`}>
+                {adminLeaderShare === null ? t('place.nobodyPaid') : `+${adminLeaderShare}`}
+              </span>
+            </div>
           </div>
 
           {/* 駐軍 / Garrison */}
@@ -2116,6 +2227,7 @@ function PlaceDetail({
                   <div className="flex flex-wrap gap-x-2.5 text-xs font-orbitron text-gray-400">
                     <span>{t('character.wu')} {char.wu}</span>
                     <span>{t('character.tong')} {char.tong}</span>
+                    <span>{t('character.ti')} {char.ti}</span>
                     <span>{t('character.jing')} {char.jing}</span>
                     <span>{t('character.speed')} {char.speed}</span>
                     <span>{t('character.age')} {char.age}</span>
@@ -2130,19 +2242,27 @@ function PlaceDetail({
   );
 }
 
-function BuildingStat({
-  label,
-  value,
-}: {
-  label: string;
-  value: number;
-}) {
-  return (
-    <div className={`${GM_STAT}`}>
-      <div className={`${GM_STAT_VALUE}`}>{value}</div>
-      <div className={`${GM_STAT_LABEL}`}>{label}</div>
-    </div>
-  );
+/**
+ * 三種建築在彈窗裡的顯示順序，以及各自的名稱 key。
+ * Display order for the three buildings in the popup, and each one's label key.
+ */
+const BUILDING_ROWS: ReadonlyArray<{ kind: BuildingKind; labelKey: string }> = [
+  { kind: 'fortress', labelKey: 'place.fortress' },
+  { kind: 'market', labelKey: 'place.market' },
+  { kind: 'barracks', labelKey: 'place.barracks' },
+];
+
+/**
+ * 把一個效果值寫成「+20% 防禦」/「+5 金」/「+3 名」這種讀得懂的樣子。
+ * Render an effect value as something readable: a percent, an amount of gold, or a headcount.
+ *
+ * 單位由 `buildingPerLevel()` 決定，所以這裡只負責挑前綴與後綴，數字本身不猜分。
+ * The unit comes from `buildingPerLevel()`, so this only picks the affix; it never guesses.
+ */
+function formatEffect(value: number, unit: 'percent' | 'gold' | 'troops'): string {
+  if (unit === 'percent') return `+${Math.round(value)}%`;
+  if (unit === 'gold') return `+${value} ${t('character.gold')}`;
+  return `+${value}`;
 }
 
 /**

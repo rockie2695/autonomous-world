@@ -53,6 +53,8 @@ export interface AvatarCharacter {
   tong: number;
   /** 經濟：決定頸前的算盤／銅錢／錢袋 / Economy: picks abacus, cash coin, or pouch */
   jing: number;
+  /** 速度：身後動勢線的數量 / Speed: how many motion lines trail the head */
+  speed: number;
   ambition: number;
   age: number;
   isKing: boolean;
@@ -198,7 +200,83 @@ export function breathAmount(tSeconds: number): number {
   return Math.min(1, sine / peakSine);
 }
 
+/**
+ * 眨眼曲線：大部分時間睜著，每 4 秒閉眼 0.14 秒。
+ * The blink curve: eyes open almost always, shut for 0.14s every 4s.
+ *
+ * 用**三角波**而不是線性淡入淡出：眨眼是「啪地閉上、啪地張開」，拉長的過渡會看起來像
+ * 在瞇眼而不是在眨。
+ *
+ * A triangle rather than a linear ramp: a blink *snaps* shut and open, and a long fade
+ * reads as squinting instead.
+ *
+ * @param tSeconds - 動畫經過的秒數 / Seconds into the animation
+ * @returns 0 = 睜開，1 = 完全閉上 / 0 open, 1 fully shut
+ */
+export function blinkAmount(tSeconds: number): number {
+  const PERIOD = 4;
+  const SHUT = 0.14;
+  const phase = ((tSeconds % PERIOD) + PERIOD) % PERIOD;
+  if (phase >= SHUT) return 0;
+  return Math.sin((Math.PI * phase) / SHUT);
+}
+
+/**
+ * 說話曲線：一段話裡嘴開合幾次，然後**停頓**。
+ * The talking curve: the mouth opens and closes a few times, then **pauses**.
+ *
+ * 停頓是關鍵。沒有停頓的話嘴會像節拍器一樣不停開合，看起來像壞掉；有了停頓才像在說話。
+ *
+ * The pause is the point. Without one the mouth opens and closes on a metronome and looks
+ * broken; the pause is what makes it read as speech.
+ *
+ * @param tSeconds - 動畫經過的秒數 / Seconds into the animation
+ * @returns 0 = 閉著，1 = 全開 / 0 closed, 1 fully open
+ */
+export function talkAmount(tSeconds: number): number {
+  const PERIOD = 3.4;
+  const SPEECH = 2.0;
+  const phase = ((tSeconds % PERIOD) + PERIOD) % PERIOD;
+  if (phase >= SPEECH) return 0;
+  // 一句話裡三次開合；偏移讓它不會從頭到尾對稱得像在擺動 /
+  // Three mouth movements per utterance; the offset keeps it from swinging in perfect symmetry
+  return 0.5 + 0.5 * Math.sin(((phase / SPEECH) * 3 - 0.35) * Math.PI);
+}
+
 /** 一張臉所有已解析的特徵 / Every resolved trait that makes up one face */
+/**
+ * 速度的三段顏色，與其他三個屬性的金／鋼／麻**刻意不同**。
+ * The speed band's three colours, deliberately unlike the gold/steel/hemp of the abilities.
+ *
+ * 速度不是穿在身上的東西，而是身後的動勢，所以給它自己的色階；否則它又是一件戲服，
+ * 跟其他三個屬性混在一起就分不出來了。
+ *
+ * Speed is not something worn, it is motion behind the head, so it gets its own ramp —
+ * otherwise it is one more costume piece and reads as part of the ability set.
+ */
+/** 瞳派的中心高度（與 eyeY 保持一致）/ The eye line, matching `eyeY` */
+const EYE_Y = 43.5;
+
+/**
+ * 嘴的上編高度：張嘴時無輯回這裡為輪軸。
+ * The mouth's top edge — the pivot it opens from, so an opening mouth grows downward
+ * rather than sliding upward.
+ */
+const MOUTH_Y = 54.2;
+
+const SPEED_TIER_COLOR: Record<AbilityTier, string> = {
+  high: '#fbbf24',
+  mid: '#38bdf8',
+  low: '#94a3b8',
+};
+
+/** 每個速度分段畫幾條動勢線 / How many motion lines each speed band draws */
+const SPEED_LINES: Record<AbilityTier, readonly number[]> = {
+  high: [22, 28.5, 35, 41.5],
+  mid: [26, 33],
+  low: [29.5],
+};
+
 export interface AvatarTraits {
   skin: string;
   widthMul: number;
@@ -217,13 +295,15 @@ export interface AvatarTraits {
   tongTier: AbilityTier;
   /** 經濟三段 → 算盤／銅錢／空錢袋 / Economy band -> abacus, cash coin, empty pouch */
   jingTier: AbilityTier;
+  /** 速度三段 → 身後的動勢線數量（1/2/3）/ Speed band -> how many motion lines trail the head */
+  speedTier: AbilityTier;
   /** 疤長在哪一邊（由 id 決定，兩邊都有疤的隊伍看起來會很整齊）/ Which side the scar sits on (id-seeded, so a unit is not symmetric to a fault) */
   scarRight: boolean;
 }
 
 /** 頭像提示中的一列 / One row of the avatar tooltip */
 export interface AvatarCue {
-  stat: 'wu' | 'tong' | 'jing';
+  stat: 'wu' | 'tong' | 'jing' | 'speed';
   tier: AbilityTier;
 }
 
@@ -243,6 +323,7 @@ export function avatarCues(traits: AvatarTraits): AvatarCue[] {
     { stat: 'wu', tier: traits.wuTier },
     { stat: 'tong', tier: traits.tongTier },
     { stat: 'jing', tier: traits.jingTier },
+    { stat: 'speed', tier: traits.speedTier },
   ];
 }
 
@@ -296,6 +377,7 @@ export function deriveAvatarTraits(character: AvatarCharacter): AvatarTraits {
     wuTier: tierFor(character.wu),
     tongTier: tierFor(character.tong),
     jingTier: tierFor(character.jing),
+  speedTier: tierFor(character.speed),
     scarRight,
   };
 }
@@ -324,7 +406,12 @@ export function LeaderAvatar({
   breathe = false,
 }: LeaderAvatarProps) {
   const traits = deriveAvatarTraits(character);
-  const { skin, hairColor, hairStyle, eyeShape, mouthShape, facialHair } = traits;
+  const { skin, hairColor, hairStyle, eyeShape, mouthShape, facialHair, speedTier } = traits;
+  // 眨眼與說話各動一個 <g>，每幀只寫 transform —— 逐幀 setState 會重繪整張臉 /
+  // Blink and talk each drive one <g>; only the transform is written per frame, because a
+  // per-frame setState would re-render the whole face
+  const eyeRef = useRef<SVGGElement>(null);
+  const mouthRef = useRef<SVGGElement>(null);
   const grey = hairColor === '#9ca3af' || hairColor === '#e5e7eb';
   // 提示預設收合，只有 hover 或鍵盤 focus 才出現 /
   // The tooltip stays collapsed until hover or keyboard focus
@@ -344,12 +431,31 @@ export function LeaderAvatar({
     if (!breathe) return;
     const chest = chestRef.current;
     const head = headRef.current;
-    if (!chest || !head) return;
+    const eye = eyeRef.current;
+    const mouth = mouthRef.current;
+    if (!chest || !head || !eye || !mouth) return;
 
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     let raf = 0;
     let start = 0;
     let reduced = motionQuery.matches;
+
+    /**
+     * 眼睛與嘴都從**自己的中心**縮放，否則閉眼會讓眼睛整個往上跑、張嘴會讓嘴往上長。
+     * 所以先平移到中心、縮放、再平移回去。
+     *
+     * Both scale about **their own centre**, or a blink would slide the eyes upward and an
+     * opening mouth would grow upward instead of opening downward. So: translate to the
+     * centre, scale, translate back.
+     */
+    const applyFace = (seconds: number) => {
+      const blink = blinkAmount(seconds);
+      const talk = talkAmount(seconds);
+      eye.setAttribute('transform', `translate(50 ${EYE_Y}) scale(1 ${(1 - 0.92 * blink).toFixed(4)}) translate(-50 ${-EYE_Y})`);
+      // 嘴巴往下張開，所以中心固定在上緣；說話時張到 2.4 倍高 /
+      // The mouth opens downward, so its centre is pinned to the top edge; speech opens it to 2.4x
+      mouth.setAttribute('transform', `translate(50 ${MOUTH_Y}) scale(1 ${(1 + 1.4 * talk).toFixed(4)}) translate(-50 ${-MOUTH_Y})`);
+    };
 
     const apply = (amount: number) => {
       // 胸口起伏 + 頭部微幅後仰：兩個節點不同相位才不會像整張圖在縮放 /
@@ -364,13 +470,16 @@ export function LeaderAvatar({
     // Under reduced motion, render a single frame and start no loop
     if (reduced) {
       apply(0);
+      applyFace(0);
       return;
     }
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
       if (start === 0) start = now;
-      apply(breathAmount((now - start) / 1000));
+      const seconds = (now - start) / 1000;
+      apply(breathAmount(seconds));
+      applyFace(seconds);
     };
     raf = requestAnimationFrame(loop);
 
@@ -380,6 +489,7 @@ export function LeaderAvatar({
         cancelAnimationFrame(raf);
         raf = 0;
         apply(0);
+        applyFace(0);
       } else if (raf === 0) {
         start = 0;
         raf = requestAnimationFrame(loop);
@@ -648,7 +758,18 @@ export function LeaderAvatar({
         fill="none"
       />
 
-      {/* 眼 / Eyes */}
+      {/* 速度：身後的動势線，數量階速度分段 /
+          Speed: motion lines behind the head, one to three by band. Drawn *before* the head
+          so they read as trailing behind it, and deliberately pale: they are a rating mark,
+          not another costume piece. */}
+      <g aria-hidden="true" stroke={SPEED_TIER_COLOR[speedTier]} strokeWidth="1.4" strokeLinecap="round" opacity="0.75" fill="none">
+        {SPEED_LINES[speedTier].map((dy, i) => (
+          <path key={i} d={`M${34 - i * 2.5} ${dy} H${41 - i * 2.5}`} />
+        ))}
+      </g>
+
+      {/* 眼（会眨眼）/ Eyes (they blink) */}
+      <g ref={eyeRef}>
       {eyeShape === 'dot' && (
         <>
           <circle cx="43.5" cy={eyeY} r="1.6" fill="#1f2937" />
@@ -670,6 +791,8 @@ export function LeaderAvatar({
         </>
       )}
 
+      </g>
+
       {/* 鼻 / Nose */}
       <path
         d="M50 47 L48.8 51.2 L51.2 51.2"
@@ -680,10 +803,12 @@ export function LeaderAvatar({
         fill="none"
       />
 
-      {/* 嘴 / Mouth */}
+      {/* 嘴（會開合）/ Mouth (it opens and closes) */}
+      <g ref={mouthRef}>
       {mouthShape === 'flat' && <path d="M46.5 55 L53.5 55" stroke="#7c4a3a" strokeWidth={LINE} strokeLinecap="round" fill="none" />}
       {mouthShape === 'smile' && <path d="M46.5 54 Q50 57.5 53.5 54" stroke="#7c4a3a" strokeWidth={LINE} fill="none" strokeLinecap="round" />}
       {mouthShape === 'firm' && <path d="M46 56 L54 54.6" stroke="#7c4a3a" strokeWidth={LINE + 0.2} strokeLinecap="round" fill="none" />}
+      </g>
       {facialHair === 'moustache' && (
         <path d="M44.5 53 Q50 51 55.5 53 Q50 56 44.5 53 Z" fill={hairColor} />
       )}

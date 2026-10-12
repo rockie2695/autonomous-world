@@ -136,6 +136,7 @@ model Character {
   factionId         String?                 // Current faction (null = unaffiliated) / 當前派系（null = 無所屬）
   wu                Int                       // 武力 Martial power (5-30) / 武力
   tong              Int                       // 統領 Leadership (5-30) / 統領
+  ti                Int                       // 體魄 Physique (5-30): defence in leader-vs-leader battle / 體魄，將領對戰的防禦力
   jing              Int                       // 經濟 Economy (5-30) / 經濟
   speed             Int                       // 速度 Speed (5-30, v1.1) / 速度
   loyalty           Loyalty                  // 忠誠 Loyalty tag (doesn't affect defection) / 忠誠標籤（不影響叛逃）

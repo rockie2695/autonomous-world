@@ -22,7 +22,8 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
-import { splitIncome } from '../income';
+import { splitIncome, tongPurchaseMultiplier } from '../income';
+import { placeIncome, placeRecruits } from '@/lib/placeEffects';
 
 /**
  * 處理世界中所有地點的經濟。
@@ -43,7 +44,7 @@ export async function economy(
     include: {
       characters: {
         where: { alive: true },
-        select: { id: true, name: true, gold: true, troops: true },
+        select: { id: true, name: true, gold: true, troops: true, tong: true },
       },
       faction: {
         select: { kingId: true },
@@ -83,9 +84,7 @@ export async function economy(
     // when nobody was.
     if (!place.factionId) continue;
 
-    const income =
-      CONFIG.PLACE_BASE_INCOME +
-      place.market * CONFIG.PLACE_MARKET_INCOME_PER_LV;
+    const income = placeIncome(place.market);
 
     // 取得君王與總督 / Get king and admin
     // ── 沒人在這裡，就沒有控制者，錢也不發放 ──
@@ -103,7 +102,12 @@ export async function economy(
     // A missing record falls back to 0 (neutral); only an empty seat is null
     const kingJing = kingId ? (leaderJing.get(kingId) ?? 0) : null;
     const adminJing = adminId ? (leaderJing.get(adminId) ?? 0) : null;
-    const split = splitIncome(income, kingJing, adminJing);
+    // 「其他人」= 住在這裡、又既不是君王也不是行政官的角色 /
+    // "Everyone else" = living here, and neither the king nor the administrator
+    const otherChars = place.characters.filter(
+      (c: { id: string }) => c.id !== kingId && c.id !== adminId
+    );
+    const split = splitIncome(income, kingJing, adminJing, otherChars.length);
 
     // 分配收入 / Distribute income
     // ── 分配收益，同時記下「發了多少」與「發完剩多少」──
@@ -117,43 +121,16 @@ export async function economy(
     let adminGoldAfter = 0;
     let othersGold = 0;
 
-    if (kingId && adminId) {
+    if (kingId && split.king > 0) {
       const king = await prisma.character.update({
         where: { id: kingId },
         data: { gold: { increment: split.king } },
       });
       kingGold = split.king;
       kingGoldAfter = king.gold;
-      const admin = await prisma.character.update({
-        where: { id: adminId },
-        data: { gold: { increment: split.admin } },
-      });
-      adminGold = split.admin;
-      adminGoldAfter = admin.gold;
+    }
 
-      const otherChars = place.characters.filter(
-        (c: { id: string }) => c.id !== kingId && c.id !== adminId
-      );
-      if (otherChars.length > 0 && split.others > 0) {
-        const perChar = Math.floor(split.others / otherChars.length);
-        for (const char of otherChars) {
-          await prisma.character.update({
-            where: { id: char.id },
-            data: { gold: { increment: perChar } },
-          });
-        }
-        othersGold = perChar * otherChars.length;
-      }
-    } else if (kingId) {
-      // 只有君王：他獨得（splitIncome 已經把整筆算給他）/ only the king, who takes it all
-      const king = await prisma.character.update({
-        where: { id: kingId },
-        data: { gold: { increment: split.king } },
-      });
-      kingGold = split.king;
-      kingGoldAfter = king.gold;
-    } else if (adminId) {
-      // 只有行政官：他獨得 / only the administrator, who takes it all
+    if (adminId && split.admin > 0) {
       const admin = await prisma.character.update({
         where: { id: adminId },
         data: { gold: { increment: split.admin } },
@@ -162,10 +139,30 @@ export async function economy(
       adminGoldAfter = admin.gold;
     }
 
+    // 「其他人」平分剩下的 30%。splitIncome 已經保證三份加起來等於 income，所以這裡
+    // 不會多發錢。沒有行政官時三份都是 0，整段自然跳過。
+    //
+    // "Everyone else" splits the remaining 30%. splitIncome already guarantees the three
+    // shares sum to `income`, so this cannot pay out extra. With no administrator all three
+    // are 0 and this whole block is skipped, which is the point.
+    if (otherChars.length > 0 && split.others > 0) {
+      const perChar = Math.floor(split.others / otherChars.length);
+      if (perChar > 0) {
+        for (const char of otherChars) {
+          await prisma.character.update({
+            where: { id: char.id },
+            data: { gold: { increment: perChar } },
+          });
+        }
+        // 只記真正發出去的金額；除不盡的餘數留在地方上 /
+        // Record only what was actually paid; the remainder stays with the place
+        othersGold = perChar * otherChars.length;
+      }
+    }
+
     // ── 徵兵，同樣記下增加量與總量 ──
     // Recruit for the garrison, keeping both the increment and the new total.
-    const recruits =
-      CONFIG.PLACE_BASE_RECRUIT + place.barracks * CONFIG.PLACE_BARRACKS_RECRUIT_PER_LV;
+    const recruits = placeRecruits(place.barracks);
     const updatedPlace = await prisma.place.update({
       where: { id: place.id },
       data: { garrison: { increment: recruits } },
@@ -215,11 +212,25 @@ export async function economy(
     for (const char of place.characters) {
       const maxBuyable = Math.floor(char.gold / CONFIG.CHAR_BUY_TROOP_PRICE);
       if (maxBuyable >= CONFIG.CHAR_BUY_TROOP_MIN) {
-        // 購買一批（10-100 兵）/ Buy a batch (10-100 troops)
-        const buyCount = rng.int(
+        // ── tong（統領）決定「這一筆買多少」，公式與 jing 對收入的完全相同 ──
+        // 購買上限 = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)
+        // 以平均值為中心，所以一般將領的上限就是 CHAR_BUY_TROOP_MAX、高 tong 買得到更多、
+        // 低 tong 買得少一些。錢仍然是最硬的限制：買不到 min 就不買。
+        //
+        // tong (leadership) sets **how large one purchase is**, with exactly the formula jing
+        // uses for income: cap = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) /
+        // CHAR_ABILITY_MAX). Centred on the average, so an average leader's cap is just
+        // CHAR_BUY_TROOP_MAX, a high-tong one buys more and a low-tong one less.
+        // Gold is still the hard limit, and the floor stays CHAR_BUY_TROOP_MIN.
+        const tongCap = Math.max(
           CONFIG.CHAR_BUY_TROOP_MIN,
-          Math.min(CONFIG.CHAR_BUY_TROOP_MAX, maxBuyable)
+          Math.round(
+            CONFIG.CHAR_BUY_TROOP_MAX *
+              tongPurchaseMultiplier(char.tong)
+          )
         );
+        const buyCap = Math.min(tongCap, maxBuyable);
+        const buyCount = rng.int(CONFIG.CHAR_BUY_TROOP_MIN, buyCap);
 
         const cost = buyCount * CONFIG.CHAR_BUY_TROOP_PRICE;
 

@@ -121,6 +121,34 @@ export interface FactionRegion {
   angle: number;
   /** 主軸／次軸的長度比；越大越細長 / axial ratio; larger means more elongated */
   elongation: number;
+  /**
+   * 標籤**可以用到哪裡**：以錨點為中心、沿主軸對齊的矩形半長與半寬（圖座標）。
+   * 整個矩形都經過驗證確認落在自己領地內，所以文字用它當作可用空間是安全的。
+   *
+   * Where the label **may reach**: the half-length and half-width (graph units) of a
+   * rectangle centred on the anchor and aligned to the principal axis. The whole rectangle
+   * is verified to lie inside this faction's own claim, so sizing text against it is safe.
+   *
+   * 這是內切圓之外的第二個答案。圓只保證「圓心附近最寬多少」，對一塊**細長**的領地
+   * 來說它小得可憐——名字沿長軸可以跑很遠，卻因為圓太窄而被迫縮成一小撮。要用滿整塊
+   * 領地，就必須沿主軸量一個真正在領地裡的矩形。
+   *
+   * This is the second answer alongside the inscribed circle. The circle only reports "how
+   * wide it is at the roomiest point", which is tiny for an **elongated** claim: a name could
+   * run a long way along the axis but the circle forces it tiny. Filling the claim needs a
+   * rectangle measured along the principal axis that genuinely lies inside it.
+   *
+   * 兩者的差別正是那個「驗證」：共變異數的半長**不能**用，因為彎曲的領地算出來可以遠大於
+   * 實際領地；這裡是沿著格子走出領地為止，所以量到的就是真的。走出來之後還要檢查矩形四邊
+   * 與內部都還是自己人，否則就縮小。
+   *
+   * The difference is exactly that verification. The covariance half-length must **not** be
+   * used, because for a bent claim it can far exceed the real thing; this walks the grid until
+   * it leaves the claim, so what it measures is real. After walking, the rectangle's edges and
+   * interior are re-checked for ownership and shrunk if they fail.
+   */
+  halfAlong: number;
+  halfAcross: number;
 }
 
 /** 一條封閉邊界上的一個點（圖座標）/ one point on a closed outline, in graph coordinates */
@@ -643,6 +671,171 @@ export function factionAt(
 }
 
 /**
+ * 一個勢力名稱的典型長寬比，用來決定「哪一個內接矩形最值得用」。
+ * The typical length:width ratio of a faction name, used to decide which inscribed
+ * rectangle is worth having.
+ *
+ * 一個四字中文名在 100px 下大約 440×100，所以比例是 4.4:1。目標不是「面積最大」——那會挑到一塊又矮又寬的矩形，
+ * 名字放不進去。目標是「**能放多大的字**」，而那取決於長與厚的較小者，所以要同時
+ * 考量兩者。用一個代表性比例當權重，元件端仍會用實際量測到的長寬再解一次。
+ *
+ * A four-glyph CJK name measures about 440x100px at font-size 100, hence 4.4:1. The goal is
+ * deliberately **not** the largest area —
+ * that would pick a short fat rectangle no name fits. The goal is the **largest font** that
+ * fits, which depends on the smaller of length and thickness, so both have to count. A
+ * representative ratio stands in for the weighting here; the component re-solves with the
+ * real measured aspect afterwards.
+ */
+const LABEL_NAME_ASPECT = 4.4;
+
+/**
+ * 量出「以某格為中心、沿 `angle` 對齊、而且整塊都在同一勢力領地內」的矩形半長與半寬。
+ * Measure the half-length and half-width of a rectangle centred on a cell, aligned to
+ * `angle`, whose **entire area** belongs to the same faction.
+ *
+ * **不能只是「沿軸走到底再同時縮小」**：那會找到一個又矮又窄的答案。細長的領地沿主軸可以
+ * 跑很遠，但只要矩形有一點太厚，四個角就會伸出領地外，於是縮小循環把兩邊一起砍小，最後
+ * 得到一個比內切圓還小的矩形——正好和「把領地用滿」相反。
+ *
+ * You cannot just "walk to the end, then shrink both sides". For an elongated claim the axis
+ * reach is long, but as soon as the rectangle is any thicker its **corners** leave the claim, so
+ * a shrink-both-sides loop converges on something small and squat — the opposite of filling the
+ * claim.
+ *
+ * 正確做法是**搜尋**：把厚度當成外層變數，對每個候選厚度二分求出「還在領地內的最大長度」，
+ * 再用「能放多大的字」評分，取最佳者。
+ *
+ * The right approach is to **search**: treat thickness as the outer variable, binary-search the
+ * largest length that still fits for each candidate thickness, score the result by the font size
+ * it would yield, and keep the best.
+ *
+ * @returns 半長與半寬（圖座標）/ The half-extents, in graph units
+ */
+function measureClaimRect(
+  field: TerritoryField,
+  factionIndex: number,
+  px: number,
+  py: number,
+  angle: number,
+  cellW: number,
+  cellH: number
+): { halfAlong: number; halfAcross: number } {
+  const spanX = field.maxX - field.minX;
+  const spanY = field.maxY - field.minY;
+  const gx0 = field.minX + ((px + 0.5) / field.width) * spanX;
+  const gy0 = field.minY + ((py + 0.5) / field.height) * spanY;
+
+  const owns = (gx: number, gy: number): boolean => {
+    if (gx < field.minX || gy < field.minY || gx > field.maxX || gy > field.maxY) return false;
+    const cx = Math.floor(((gx - field.minX) / spanX) * field.width);
+    const cy = Math.floor(((gy - field.minY) / spanY) * field.height);
+    return field.owner[cy * field.width + cx] === factionIndex;
+  };
+
+  const ax = Math.cos(angle);
+  const ay = Math.sin(angle);
+  const bx = -ay;
+  const by = ax;
+  const step = Math.max(Math.min(cellW, cellH) * 0.5, 1e-6);
+  const limit = Math.hypot(spanX, spanY);
+
+  const reach = (dx: number, dy: number): number => {
+    let d = 0;
+    while (d < limit && owns(gx0 + dx * (d + step), gy0 + dy * (d + step))) d += step;
+    return d;
+  };
+
+  const aMax = Math.min(reach(ax, ay), reach(-ax, -ay));
+  const bMax = Math.min(reach(bx, by), reach(-bx, -by));
+  if (aMax <= 0 || bMax <= 0) return { halfAlong: 0, halfAcross: 0 };
+
+  /**
+   * 整個矩形（不只是四條邊）都必須是自己人，所以用一張取樣網覆蓋面積。
+   * The whole rectangle — not merely its four edges — must be ours, so sample a grid over the area.
+   */
+  const fits = (a: number, b: number): boolean => {
+    // 11x11：後續用同樣密度複驗，所以這裡不能比它更粗 /
+    // 11x11: the result is re-verified at this same density later, so this cannot be coarser
+    const n = 11;
+    for (let i = 0; i < n; i++) {
+      const u = -a + (2 * a * i) / (n - 1);
+      for (let j = 0; j < n; j++) {
+        const v = -b + (2 * b * j) / (n - 1);
+        if (!owns(gx0 + ax * u + bx * v, gy0 + ay * u + by * v)) return false;
+      }
+    }
+    return true;
+  };
+
+  let bestAlong = 0;
+  let bestAcross = 0;
+  let bestScore = -1;
+
+  // 厚度由厚到薄掃 12 檔；每檔二分求出可行的最大長度 /
+  // Sweep thickness from thick to thin over 12 steps, binary-searching the largest feasible length
+  for (let step_i = 12; step_i >= 1; step_i--) {
+    const b = (bMax * step_i) / 12;
+    if (b <= 0) continue;
+    if (!fits(0, b)) continue; // even a zero-length rectangle pokes out at this thickness
+    let lo = 0;
+    let hi = aMax;
+    for (let it = 0; it < 12; it++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid, b)) lo = mid;
+      else hi = mid;
+    }
+    // 能放多大的字：字級 = min(200·a/w100, 200·b/h100)，所以「每單位圖座標」的價值
+    // 長是 1/寬、厚是 1/高 —— 長的權重是厚的 LABEL_NAME_ASPECT 倍。這個比例寫反的話
+    // 會挑到又矮又寬的矩形，字反而比原來的圓還小。
+    //
+    // The font is min(200·a/w100, 200·b/h100), so per graph unit a unit of **length** is
+    // worth LABEL_NAME_ASPECT times a unit of thickness. Get that ratio backwards and the
+    // search picks a squat rectangle whose font is smaller than the circle it replaced.
+    const score = Math.min(lo / LABEL_NAME_ASPECT, b);
+    if (score > bestScore) {
+      bestScore = score;
+      bestAlong = lo;
+      bestAcross = b;
+    }
+  }
+
+  let outAlong = bestAlong * 0.98;
+  let outAcross = bestAcross * 0.98;
+
+  // ── 交出去之前的最終複驗（密度比搜尋時高一倍）──
+  // 搜尋用的是 11×11 的取樣，而「保證在領地內」不能只在同樣密度下成立：格子之間還有
+  // 縫隙，錨點剛好壓在格線上時，11×11 可能剛好跨過去而 21×21 沒有。用更高密度複驗一次，
+  // 不乾淨就整體縮小，直到乾淨為止。這是唯一保證輸出的矩形**真的**整塊在自己地盤上的地方。
+  //
+  // Final re-check before handing the result over, at twice the search's density.
+  //
+  // Containment must not be guaranteed only at the sampling density used to search: there are
+  // gaps *between* samples, and when the anchor sits right on a cell boundary an 11x11 grid can
+  // step over a sliver that a 21x21 grid catches. Re-verify at the finer density and shrink until
+  // it is clean. This is the single place where the returned rectangle is guaranteed to really
+  // lie wholly on this faction's own land.
+  for (let attempt = 0; attempt < 10; attempt++) {
+    let clean = true;
+    const n = 21;
+    for (let i = 0; i < n && clean; i++) {
+      const u = -outAlong + (2 * outAlong * i) / (n - 1);
+      for (let j = 0; j < n; j++) {
+        const v = -outAcross + (2 * outAcross * j) / (n - 1);
+        if (!owns(gx0 + ax * u + bx * v, gy0 + ay * u + by * v)) {
+          clean = false;
+          break;
+        }
+      }
+    }
+    if (clean) break;
+    outAlong *= 0.93;
+    outAcross *= 0.93;
+  }
+
+  return { halfAlong: outAlong, halfAcross: outAcross };
+}
+
+/**
  * 某一格的四個方向裡，哪些鄰居屬於**不同**勢力。
  * Which of a cell's four sides border a *different* owner, as a bitmask.
  *
@@ -815,6 +1008,18 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
       const l1 = (trace + diff) / 2;
       const l2 = (trace - diff) / 2;
       const elongation = l2 > 1e-9 ? Math.sqrt(l1 / l2) : 99;
+      // 標籤可以用到的矩形：沿主軸量、並且驗證整塊都在自己領地內 /
+      // The rectangle the label may use: measured along the principal axis, with the
+      // whole area verified to be inside this faction's own claim
+      const rect = measureClaimRect(
+        field,
+        field.factions.indexOf(key),
+        e.bestPx,
+        e.bestPy,
+        angle,
+        cellW,
+        cellH
+      );
       return {
         key,
         cellCount: e.cells,
@@ -825,6 +1030,8 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
         labelRadius: e.best * cellAvg,
         angle,
         elongation,
+        halfAlong: rect.halfAlong,
+        halfAcross: rect.halfAcross,
       };
     })
     .sort((a, b) => b.cellCount - a.cellCount);

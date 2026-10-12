@@ -491,6 +491,23 @@ export function SigmaMap({
     const graph = graphRef.current;
     if (!sigma || !graph) return;
 
+    // ── 先記住鏡頭，因為 graph.clear() 會把圖清空 ──
+    // 清空圖之後 sigma 有可能把鏡頭狀態重置（節點集合變空時某些版本會重新界定範圍），
+    // 所以在清空**之前**把 x / y / ratio / angle 存下來，之後原樣還回去。
+    // 少了這一步，每按一次「下一回合」地圖就會跳回預設視角。
+    //
+    // Remember the camera **before** clearing: emptying the graph can reset sigma's camera
+    // state (some versions re-derive its bounds when the node set empties). Snapshotting
+    // x / y / ratio / angle up front and putting them back afterwards is what stops the map
+    // jumping to a default view on every "Next Round".
+    const camera = sigma.getCamera();
+    const saved = {
+      x: camera.x,
+      y: camera.y,
+      ratio: camera.ratio,
+      angle: camera.angle,
+    };
+
     graph.clear();
 
     // 建立勢力顏色對照 / Create faction color map
@@ -550,6 +567,16 @@ export function SigmaMap({
         }
       }
     }
+
+    // ── 把鏡頭放回去，資料更新不應該改變使用者正在看的畫面 ──
+    // setState 是瞬間的（不是動畫）：使用者剛剛主動調整過視角，正在進行的相機動畫
+    // 早就結束了，這裡要的是「立刻回到原本的位置」，不是慢慢滑回去。
+    //
+    // Put the camera back: a data refresh must not change the view the user is looking at.
+    // `setState` is instantaneous rather than animated — the user just adjusted the view by
+    // hand, so any camera animation has long finished; what is wanted here is an immediate
+    // return to where they were, not a slow glide.
+    camera.setState(saved);
 
     // 資料重建後清除 hover 狀態並重繪 / Clear hover state and redraw after rebuild
     hoveredNodeRef.current = null;
@@ -939,6 +966,11 @@ useEffect(() => {
         widthAt100: el.offsetWidth || 1,
         heightAt100: el.offsetHeight || 1,
         radiusPx: region.labelRadius * scale,
+        // 沿主軸量出、並驗證整塊都在自己領地內的矩形：這才是「可以用到哪裡」/
+        // The rectangle measured along the principal axis and verified to lie wholly
+        // inside this faction's claim — that is the space the name may actually use
+        availAlongPx: region.halfAlong * scale,
+        availAcrossPx: region.halfAcross * scale,
         fit: CONFIG.TERRITORY_LABEL_FIT,
         fontMax: CONFIG.TERRITORY_LABEL_FONT_MAX,
         fontMin: CONFIG.TERRITORY_LABEL_FONT_MIN,

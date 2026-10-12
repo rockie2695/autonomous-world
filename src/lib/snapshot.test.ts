@@ -51,6 +51,7 @@ describe('Snapshot Compression', () => {
         factionId: 'faction-1',
         wu: 25,
         tong: 28,
+        ti: 22,
         jing: 20,
         speed: 18,
         loyalty: 'SELF',

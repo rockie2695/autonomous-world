@@ -54,6 +54,7 @@ export interface WorldState {
     factionId: string | null;
     wu: number;            // 武力 / Martial
     tong: number;          // 統領 / Leadership
+    ti: number;            // 體魄 / Physique
     jing: number;          // 經濟 / Economy
     speed: number;         // 速度 / Speed
     loyalty: string;       // 忠誠 / Loyalty
@@ -153,6 +154,7 @@ export async function createSnapshot(
       factionId: c.factionId,
       wu: c.wu,
       tong: c.tong,
+      ti: c.ti,
       jing: c.jing,
       speed: c.speed,
       loyalty: c.loyalty,

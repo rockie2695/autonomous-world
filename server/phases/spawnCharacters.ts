@@ -89,6 +89,7 @@ export async function spawnCharacters(
     const name = generatePersonName(rng);
     const wu = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
     const tong = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
+    const ti = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
     const jing = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
     const speed = rng.gaussian(
       CONFIG.CHAR_SPEED_MEAN,
@@ -116,6 +117,7 @@ export async function spawnCharacters(
         name,
         wu,
         tong,
+        ti,
         jing,
         speed,
         loyalty,

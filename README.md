@@ -239,6 +239,17 @@ The game features an interactive force-directed graph map using Sigma.js:
   `TROOPS_BOUGHT` row naming them, the place, how many troops they bought, what it cost, and what
   they were left with. It is the other half of the money trail: `INCOME` alone shows a leader being
   paid but never what they spent it on
+- **Place popup** — every building shows its level, what that level **currently** grants, what one
+  more would add, and the upgrade price (coloured by whether the administrator can afford it).
+  A **每回合產出** block shows the garrison recruits, the total income, and what the administrator
+  **actually** gets — which is nothing at all when a place has no administrator, rather than a
+  nominal percentage. All of it is computed from the same module the simulation uses, so the popup
+  can never quote a number the game does not apply
+- **Defection rows name all three parties** — the faction left, the place left from, and the faction
+  joined (or founded), instead of only "某某 defected"
+- **The avatar blinks, talks and shows speed** — the mouth opens and closes with a pause so it reads
+  as speech rather than a metronome, the eyes blink, and speed appears as one to three motion lines
+  behind the head in its own colour (deliberately not the gold/steel/hemp the abilities share)
 - **Leader table sorting** — the 將領數 table head sorts: click a column, click again to reverse.
   Switching columns starts from that column's own sensible direction (numbers descending, names A→Z),
   and opening a leader from the table keeps a **back** action to return to it
@@ -300,12 +311,14 @@ view of faction power rather than another rendering of one metric.
 
 ### Economy
 - Each territory generates income based on market level
-- Income is split: 40% king, 30% administrator, 30% shared among others
+- Income is split: **30% king, 40% administrator, 30% shared among everyone else**. A vacant king or an empty "everyone else" bucket has its share absorbed by whoever is present, because the total is fixed and gold cannot vanish 
+- **No administrator means nobody is paid.** The administrator is the person actually running the place, so without one the place is ungoverned, and quietly routing the money to a distant king would pay someone who is not there
 - **Economy (jing)** scales what a leader pockets: a leader's cut is multiplied by
   `1 + (jing − 17.5) / 30`, so an average leader is unchanged, a high-`jing` one takes more
   and a low-`jing` one less. A lone leader (no king *or* no admin) already receives the whole
   income, so no multiplier applies — the total distributed can never exceed the place's income
-- Characters can buy troops with personal gold
+- Characters buy troops with personal gold: 2 gold per troop, in batches of 10-100. The **cap on one purchase is scaled by 統領 (tong)** with the same average-centred formula jing uses for income, so leadership decides how many soldiers one purchase can buy 
+- **統領 (tong) only does that.** It no longer reduces defection, and it no longer defends — that is **體魄 (ti)**
 
 ### Accounts
 

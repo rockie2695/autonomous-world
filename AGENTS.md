@@ -351,6 +351,11 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `26rem` so they clear the open panel, and **only from `lg` up** — a fixed offset would push them off-screen on narrow viewports, so narrow keeps `right-4`
 - The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 8`
 - Controls are held in **both a ref and state**: `onControlsReady` sets `mapControlsRef` (imperative calls) *and* `mapControls` state (rendering). Reading `ref.current` during render is a lint error ("Cannot access refs during render")
+- **The camera must survive a data refresh.** The graph-rebuild effect runs on every `[places, factions, roads,
+  characters]` change, i.e. every time a round advances, and it calls `graph.clear()` — emptying the graph can
+  reset sigma's camera state. Snapshot `x / y / ratio / angle` **before** the clear and `camera.setState(saved)`
+  afterwards, or the map snaps to a default view on every "Next Round". Use `setState`, not an animation:
+  the user adjusted the view by hand, so what is wanted is an immediate return, not a glide.
 - The header renders `TelemetryStrip inline`, merging 世界概況 into the header row and handing the height back to the map
 - **Autoplay floor is 5s**: `AUTOPLAY_MIN_MS: 5000`, `AUTOPLAY_MAX_MS: 15000`, `AUTOPLAY_DEFAULT_MS: 5000`. `CONFIG` is `as const`, so the slider state must be `useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS)` or it pins to the literal and rejects every other speed
 - **Loading skeletons** all use `GM_SKEL`: `MapSidePanel` shows `PanelSkeleton` while world state is pending, `EventLog` renders skeleton rows during its own fetch, and `StatsCharts` derives `statsPending = currentRound >= 1 && !data && !fetchFailed` so an unanswered request reads as *loading* rather than `game.noData`. `StatsCharts` fetches with a manual `useEffect`, not `useQuery`, so it has no `isLoading` to read
@@ -485,29 +490,56 @@ read territory and topography at the same time.
   gives a curve at screen resolution. A faction can have several loops (a hole, or two disconnected
   holdings), hence an array of arrays. Points stay inside the original hull, so a curve never
   overshoots. Skips cells whose faction key is missing, matching `factionRegions`.
-- **The inscribed circle governs the label's position *and* its size — there is nothing to clamp.**
-  `factionRegions()` computes `labelRadius` (a two-pass chamfer distance transform — the deepest cell is
-  the centre of the largest inscribed circle), and `solveLabelFontSize()` in `mapShared.ts` solves for
-  the largest font whose **whole text box** still fits that circle: half-diagonal ≤ `labelRadius ×
-  TERRITORY_LABEL_FIT`, solved from the text's real measured size at 100px. An estimate from the
-  character count is always wrong, because CJK glyphs are ~1em and Latin ~0.55em. Because the circle is
-  rotation-invariant, the *same* circle positions the label — the clamp was deleted, not just relaxed.
-  - **This replaced two steps that each pushed names off their own claim.** Sizing from the covariance's
-    half-length/half-width overflowed, because a bent or crescent claim has a half-length far larger than
-    its real extent; and clamping the centre into the region's **bounding box** was worse, because an
-    L-shaped claim's box contains its own notch — which is not its land. The box is not a subset of the
-    claim; the inscribed circle is. Do not reintroduce either.
-  - The half-diagonal (not a square) is what lets a strongly non-square name run nearly `2r` long while
-    staying only `r/4` thick, so a thin claim still gets a readable name.
+- **The label sits at the centre of a verified inscribed *rectangle*, aligned to the claim's
+  principal axis.** `factionRegions()` returns `halfAlong` / `halfAcross` for it, and
+  `solveLabelFontSize()` in `mapShared.ts` solves for the largest font whose text box fits inside that
+  rectangle. An estimate from the character count is always wrong, because CJK glyphs are ~1em and
+  Latin ~0.55em, so both dimensions come from the text's real measured size at 100px.
+  - **The circle alone is too conservative, and that was the "label doesn't fill the territory"
+    bug.** `labelRadius` (a two-pass chamfer distance transform) reports only "how wide this is at
+    the roomiest point", which for an elongated claim is a sliver. A name could run a long way along
+    the axis and was still capped at the circle's diameter, filling ~80% of the circle and a small
+    fraction of the claim. The rectangle measured 15.9px → 19.5px on real data.
+  - **The rectangle must be *searched*, not walked-and-shrunk.** `measureClaimRect()` sweeps thickness
+    as the outer variable and binary-searches the largest feasible length for each, scoring by the
+    font it would yield. The obvious alternative — walk to the end, then shrink both sides — converges
+    on something small and *squat*, because a long thin claim's rectangle pokes out at the corners
+    the moment it is any thicker. That is the opposite of filling the claim.
+  - **Score length and thickness at their real relative worth.** The font is
+    `min(200·a/w100, 200·b/h100)`, so a unit of length is worth `LABEL_NAME_ASPECT` (4.4) times a
+    unit of thickness. Getting that ratio backwards picks squat rectangles whose font is *smaller*
+    than the circle it replaced.
+  - **Containment cannot rest on the search's own sampling density.** There are gaps *between*
+    samples, and when the anchor sits on a cell boundary an 11×11 grid steps over a sliver that a
+    21×21 grid catches. The result therefore carries a 2% inset and a final 21×21 re-check that
+    shrinks until clean. That final pass is the only place the rectangle is guaranteed to lie wholly
+    on the faction's own land, and `territory.test.ts` asserts it on a 21×21 sweep.
+  - **Do not reintroduce the covariance half-length/half-width.** For a bent or crescent claim the
+    covariance half-length far exceeds the real extent, which is why sizing from it spilled. And do
+    not clamp into the region's **bounding box** either: an L-shaped claim's box contains its own
+    notch, which is not its land. Neither the box nor the covariance is a subset of the claim; the
+    verified rectangle is.
   - **Too small to read means not drawn, never scaled up.** Scaling up to reach `TERRITORY_LABEL_FONT_MIN`
     is the one operation that would push the text outside its claim. Zooming in grows the size, so a
+    hidden name returns on its own.
+- The label is anchored at `labelX`/`labelY` (that deepest cell), **not** the centroid: a centroid
+  lands in the concave notch of an L-shaped claim, which is not its own land. `angle` /
+  `elongation` come from the cell positions' covariance; rotation only applies past elongation 1.5,
+  because a near-circular region has an unstable axis. The screen angle negates the graph angle
+  (screen y is flipped) and normalises to ±90° so text is never upside-down.
+- **The name is brightened, not the raw faction colour.** The territory fill is that same faction
+  colour composited translucently over a dark backdrop, so the raw colour goes muddy on top of it.
+  `brightenColor()` (also `mapShared.ts`) mixes toward white by `TERRITORY_LABEL_LIGHTEN`, which
+  keeps the hue — so the name still reads as *that* faction's colour. It is computed once per label in
+  a `useMemo`, never per frame.sh the text outside its claim. Zooming in grows the size, so a
     hidden name returns on its own.
 - The label is anchored at `labelX`/`labelY` (that deepest cell), **not** the centroid: a centroid
   lands in the concave notch of an L-shaped claim, which is not its own land. `angle` / `elongation`
   come from the cell positions' covariance; rotation only applies past elongation 1.5, because a
   near-circular region has an unstable axis. The screen angle negates the graph angle (screen y is
-  flipped) and normalises to ±90° so text is never upside-down. `halfLength` / `halfWidth` and the
-  region bbox were **removed** — they existed only to feed the sizing and clamp that are gone.
+  flipped) and normalises to ±90° so text is never upside-down. The covariance half-length/half-width
+  and the region bbox were **removed** — they existed only to feed the sizing and clamp that are
+  gone, and neither is a subset of the claim.
 - **The name is brightened, not the raw faction colour.** The territory fill is that same faction colour
   composited translucently over a dark backdrop, so the raw colour goes muddy on top of it.
   `brightenColor()` (also `mapShared.ts`) mixes toward white by `TERRITORY_LABEL_LIGHTEN`, which keeps
@@ -624,6 +656,75 @@ similar angles, so particles flow along one shared field instead of scattering.
 - Opacities are written straight to the DOM rather than through React state — a per-frame
   `setState` would re-render the whole map.
 - The graph→viewport mapping assumes **camera angle 0** (both camera animations pass `angle: 0`).
+
+### Income Split, Abilities & Troop Purchases
+
+- **The shares are 30% king / 40% administrator / 30% everyone else** (shared equally), all in
+  `server/income.ts`. The administrator takes the largest cut because they are the one actually
+  running the place. **The three shares always sum to `income`.**
+- **No administrator means nobody is paid** — this deliberately inverts the old rule, which routed
+  a vacant administrator's share to the king. Paying a king who is not present is worse than paying
+  nobody, so the gold stays with the place. This check runs **first**, because it is the only branch
+  that zeroes the total.
+- A vacant **king** or an empty **"everyone else"** bucket has its share absorbed by whoever is
+  present (the multiplier is applied once to the combined portion, never twice). When the
+  scale-back leaves a remainder and there is nobody else, that remainder goes to the administrator —
+  returning `others: 0` there made gold **vanish**, which is exactly what the sum-equals-income test
+  caught.
+- `jing` is **經濟 / Economy** and scales a leader's cut: `share × (1 + (jing − INCOME_JING_MIDPOINT)
+  / CHAR_ABILITY_MAX)`. It is not 智謀 and not intelligence.
+- **`tong` is 統領 / Leadership and now does exactly one thing: it scales the size of a single troop
+  purchase**, with the *same* formula jing uses for income — `CHAR_BUY_TROOP_MAX × (1 + (tong −
+  INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`. `tongPurchaseMultiplier` is asserted to return the
+  same value as `jingIncomeMultiplier` for the same input, so the two cannot drift apart.
+  - **`tong` no longer reduces defection.** The `AMBITION_KING_TONG_REDUCE` multiply in
+    `loyaltyCheck.ts` is gone; leadership is not loyalty.
+  - **`tong` no longer defends.** That is 體魄 / `ti` now (`BATTLE_DEF_TI_MULT`). Both use
+    `× (1 + x/30)`, but they answer different questions: `wu` is "how hard they hit", `ti` is "how
+    well they hold", and `tong` is "how many troops can they buy at once".
+- **`ti` is 體魄 / Physique**, 5–30 uniform, the defence term in **leader-vs-leader** battle only.
+  Migration `20261012000000_add_character_ti` adds the column and backfills **17**, not 0: a flat 0
+  would make every pre-existing leader helpless in defence and lose nearly every fight they were
+  about to win. Do not run `prisma migrate reset` against this database.
+
+### Building effects — one definition, four consumers
+
+`src/lib/placeEffects.ts` owns **what every building level actually does**, the upgrade price,
+and a place's per-round output. `build.ts`, `economy.ts`, `battle.ts` **and the place popup** all read
+it, so the popup cannot quote a number the simulation does not use. A preview that restates the
+rules separately will drift from them; that is the whole reason the module exists.
+
+| building | per level | consumed by |
+|---|---|---|
+| 堡壘 `fortress` | +20% defence | `fortressDefenceMult()` in **both** battle paths |
+| 市場 `market` | +5 gold | `placeIncome()` in the economy phase |
+| 兵營 `barracks` | +3 recruits | `placeRecruits()` in the economy phase |
+
+- Cost is `BUILDING_UPGRADE_COST_BASE × MULT^level` (100, 200, 400, 800, 1600) and the cap is
+  `BUILDING_MAX_LEVEL = 5`. **Both used to be inline** — the cap was a bare `5` in `build.ts` and the
+  cost a literal expression. They are exported now so the popup shows the same numbers.
+- Each building's effect carries its **unit** with it (`percent` / `gold` / `troops`), so the popup
+  never has to guess how to render it.
+- The popup also shows what the administrator **actually** pockets, by calling `splitIncome()`
+  itself rather than printing "40%". With no administrator nobody is paid, so a printed ratio would
+  read as though he still got paid. This needed `kingId` on the faction payload, because the king's
+  cut comes off the top first.
+
+### The defection row names all three parties
+
+A `DEFECTION` event now carries `oldFactionName` and `placeName` alongside the ids, and the row
+reads "left *X* · at *Y* · joined/founded *Z*". Two of the three write sites previously stored
+**neither** the old faction's name nor the place's, so the log could only say "某某 defected" — the
+most useful part was left for the player to guess.
+
+- `oldFactionName` comes from the `faction` relation already included on the character query, and
+  `placeName` from a newly included `place: { select: { name: true } }`.
+- The `joined_nearby` site has no faction name in scope (roads carry only `factionId`), so it costs
+  one `findUnique`. That branch is rare and the lookup is not on a hot path.
+- `reason` distinguishes `created_new_faction` from joining an existing one, so the row says
+  建立/加入了 accordingly rather than always "joined".
+- A faction renders as **plain text** (`factionNode`), never a link: there is no faction popup to
+  open, and falling back to an id would leak a raw `cmus...` string into the UI.
 
 ### Battle Report & Economy Events
 
@@ -762,6 +863,26 @@ absolutely positioned panel would scroll away with the rows.
   `CHAR_AMBITION_MAX`, `CHAR_MAX_AGE_MAX` — age tops out far above the ability stats), so
   edge lengths are **not comparable across axes**. Read the shape, not the absolute numbers.
 - Axis labels reuse the existing `character.*` i18n keys; do not add radar-specific ones.
+
+### Avatar: blinking, talking, and speed
+
+- `blinkAmount(t)` and `talkAmount(t)` are **pure exports**, so both curves are testable without a
+  DOM. Blink is a **triangle** over 0.14s every 4s — a linear ramp reads as squinting, not blinking.
+- Talking is three mouth movements then a **pause**. The pause is the point: without one the mouth
+  opens on a metronome and looks broken rather than like speech.
+- Both scale about their **own centre**, and the mouth pivots from its **top edge** so it opens
+  downward. An eye group that scales about its own origin slides the eyes upward as it shuts, which
+  reads as a rendering glitch.
+- All three animations ride the **existing** rAF loop and write `transform` only — a per-frame
+  `setState` would re-render the face and every call site. `applyFace(0)` also runs on mount, on
+  cleanup and under `prefers-reduced-motion`, so a still avatar is drawn in its settled frame
+  rather than its un-animated default.
+- **Speed is a fourth cue**, not a fourth costume piece: 1/2/3 motion lines behind the head, in its
+  own colour ramp (`SPEED_TIER_COLOR`). It deliberately does **not** reuse the gold/steel/hemp
+  `TIER_MATERIAL` the three abilities share — otherwise it reads as part of the ability set. The
+  lines are drawn *before* the head so they trail behind it.
+- `avatarCues()` returns **four** rows now (wu / tong / jing / speed), so the hover tooltip explains
+  the speed lines too. `AvatarCharacter` gained `speed`.
 
 ### Leader Avatars (`src/components/LeaderAvatar.tsx`)
 

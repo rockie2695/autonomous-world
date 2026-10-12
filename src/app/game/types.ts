@@ -40,6 +40,9 @@ export interface WorldState {
     color: string;
     alive: boolean;
     collapsing: boolean;
+    /** 君王 id；地方彈窗要靠它重算「這個地方實際給行政官多少」/
+        King id; the place popup needs it to recompute what this place really pays its admin */
+    kingId: string | null;
   }>;
   characters: Array<{
     id: string;
@@ -47,6 +50,7 @@ export interface WorldState {
     factionId: string | null;
     wu: number;
     tong: number;
+  ti: number;
     jing: number;
     speed: number;
     loyalty: string;

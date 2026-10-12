@@ -16,8 +16,8 @@
 // ============================================================================
 
 import { prisma } from '@/lib/prisma';
-import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
+import { BUILDING_MAX_LEVEL, upgradeCost } from '@/lib/placeEffects';
 
 /**
  * 處理所有總督的建築升級。
@@ -55,12 +55,11 @@ export async function build(
 
     // 檢查當前等級 / Check current level
     const currentLevel = place[building];
-    if (currentLevel >= 5) continue; // 最高等級 / Max level
-
-    // 計算費用 / Calculate cost
-    const cost =
-      CONFIG.BUILDING_UPGRADE_COST_BASE *
-      Math.pow(CONFIG.BUILDING_UPGRADE_COST_MULT, currentLevel);
+    // 最高等級與費用都讀共用模組，UI 顯示的數字因此不可能和實際升級脫節 /
+    // Max level and cost both come from the shared module, so the popup can never quote a
+    // price the simulation does not charge
+    if (currentLevel >= BUILDING_MAX_LEVEL) continue;
+    const cost = upgradeCost(currentLevel);
 
     // 檢查總督是否負擔得起 / Check if administrator can afford it
     if (place.administrator.gold < cost) continue;

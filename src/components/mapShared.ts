@@ -222,6 +222,14 @@ export interface LabelFontFit {
   fontMax: number;
   /** 可讀下限；比它小就寧可不要這個名字 / Below this the name is unreadable, so drop it */
   fontMin: number;
+  /**
+   * 沿主軸的可用長度（半長，螢幕像素）。給了它就**不用**圓，改用這個矩形。
+   * Half-extent along the principal axis, in screen pixels. Supplying it makes the solve use
+   * the verified rectangle instead of the circle.
+   */
+  availAlongPx?: number;
+  /** 垂直主軸的可用半寬（螢幕像素）/ Half-extent across the axis, in screen pixels */
+  availAcrossPx?: number;
 }
 
 /** 勢力名字字級的求解結果 / Solved faction-name font size */
@@ -233,36 +241,42 @@ export interface LabelFontSolution {
 }
 
 /**
- * 解出「整塊文字都還在內切圓裡」的最大字級。
- * Solve the largest font size whose **whole text box** still fits the inscribed circle.
+ * 解出「整塊文字都還在自己領地裡」的最大字級。
+ * Solve the largest font size whose **whole text box** still sits on the claim.
  *
- * 名字要留在自己的領地裡，唯一的保證就是內切圓：`labelRadius` 是那個位置到最近異主
- * 格的距離，所以一個以它為圓心、半對角線不超過半徑的矩形，必定整塊落在領地內。這也
- * 是為什麼**不需要**再夾位置——圓心就是安全的錨點，旋轉也不影響（圓是旋轉對稱的）。
+ * **有矩形就用矩形，沒有才退回圓。** 圓只代表「錨點附近最寬多少」，對細長的領地小得可憐，
+ * 名字沿長軸明明可以跑很遠卻被迫縮成一小撮——那正是「沒有把領地用滿」的原因。矩形是沿主軸
+ * 走出領地為止、並且驗證過整塊都還是自己人，所以用它既用得滿又不會跑到別人地盤上。
  *
- * 用半對角線而不是把文字當成正方形，是因為名字的長寬比很偏：一個四字名在 100px 下大約
- * 400×100px，半對角線讓它可以長到接近 2r 卻仍然只有 r/4 厚，正好把細長的領地用滿。
+ * **Use the rectangle when given, and the circle only as the fallback.** The circle reports
+ * "how wide it is at the roomiest point", which is tiny for an elongated claim — so a name that
+ * could run a long way along the axis was forced tiny. That is precisely why the claim looked
+ * underused. The rectangle is measured by walking along the principal axis until the claim ends
+ * and verified to lie wholly inside it, so it fills the claim without ever crossing over.
  *
- * The inscribed circle is the only *guarantee* the name stays on its own claim:
- * `labelRadius` is that point's distance to the nearest differently-owned cell, so a box
- * centred there whose half-diagonal does not exceed the radius is inside by construction.
- * That is also why no position clamp is needed — the circle centre is a safe anchor, and
- * rotation does not matter, because a circle is rotation-invariant.
- *
- * The half-diagonal (rather than treating the text as a square) matters because names are
- * strongly non-square: a four-glyph CJK name measures about 400×100px at 100px, so this lets
- * it run nearly 2r long while staying only r/4 thick, which is what a thin claim can hold.
+ * 圓本身仍然有用：它是「最寬裕的一點」的度量，也是矩形縮到極小時的下限保證。
+ * The circle still earns its place: it measures the roomiest point, and it is the guarantee
+ * behind the rectangle once it has shrunk small.
  *
  * @param m - 量測結果與上限 / The measurements and bounds
  * @returns 字級，以及是否大到看得懂 / The font size and whether it is legible
  */
 export function solveLabelFontSize(m: LabelFontFit): LabelFontSolution {
   const diag = Math.hypot(m.widthAt100, m.heightAt100);
-  if (!(diag > 0) || !(m.radiusPx > 0)) return { fontSize: 0, legible: false };
+  const hasRect = m.availAlongPx !== undefined && m.availAcrossPx !== undefined;
+  const solved = hasRect
+    ? // 矩形：長與厚各自受限，取小。半長 = w100·fs/200，所以 fs ≤ 200·availAlong/w100 /
+      // Rectangle: length and thickness each have a cap. Half-length is w100·fs/200, so
+      // fs ≤ 200·availAlong/w100
+      Math.min(
+        (200 * m.availAlongPx! * m.fit) / m.widthAt100,
+        (200 * m.availAcrossPx! * m.fit) / m.heightAt100
+      )
+    : // 圓：半對角線受限。hypot(w, h) ≤ 2r，所以 fs ≤ 200 · r · fit / hypot(w100, h100)
+      // Circle: the half-diagonal is the cap
+      (200 * m.radiusPx * m.fit) / diag;
 
-  // hypot(w, h) ≤ 2r with w = widthAt100 · fs/100, so
-  // fs ≤ 200 · r · fit / hypot(widthAt100, heightAt100).
-  const solved = (200 * m.radiusPx * m.fit) / diag;
+  if (!(diag > 0) || !(solved > 0)) return { fontSize: 0, legible: false };
   const fontSize = Math.min(m.fontMax, solved);
   return { fontSize, legible: fontSize >= m.fontMin };
 }

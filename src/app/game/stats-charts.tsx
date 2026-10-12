@@ -1003,6 +1003,7 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
 export const RADAR_AXES = [
   { key: 'wu', label: 'character.wu', max: CONFIG.CHAR_ABILITY_MAX },
   { key: 'tong', label: 'character.tong', max: CONFIG.CHAR_ABILITY_MAX },
+  { key: 'ti', label: 'character.ti', max: CONFIG.CHAR_ABILITY_MAX },
   { key: 'jing', label: 'character.jing', max: CONFIG.CHAR_ABILITY_MAX },
   { key: 'speed', label: 'character.speed', max: CONFIG.CHAR_SPEED_MAX },
   { key: 'ambition', label: 'character.ambition', max: CONFIG.CHAR_AMBITION_MAX },

@@ -61,8 +61,8 @@ export const CONFIG = {
   PLACE_EPITHET_NAME_RATE: 0.35, // 地名使用稱號風格的機率 / Chance a place name uses the epithet style
 
   // ── 角色 / Characters ────────────────────────────────────────────────────
-  // 屬性 (wu/tong/jing/speed) 使用均勻分佈 5-30。
-  // Stats (wu/tong/jing/speed) use uniform distribution 5-30.
+  // 屬性 (wu/tong/ti/jing/speed) 使用均勻分佈 5-30。
+  // Stats (wu/tong/ti/jing/speed) use uniform distribution 5-30.
   //
   // 常態分佈（Normal Distribution / Gaussian Distribution）
   // 又稱高斯分佈，特徵：
@@ -82,8 +82,8 @@ export const CONFIG = {
   CHAR_MAX_AGE_MIN: 50, // 最小隨機最大年齡（因年老死亡）/ Min random maxAge (death from old age)
   CHAR_MAX_AGE_MAX: 80, // 最大隨機最大年齡 / Max random maxAge
 
-  CHAR_ABILITY_MIN: 5, // wu, tong, jing 最小值 / Min value for wu, tong, jing
-  CHAR_ABILITY_MAX: 30, // wu, tong, jing 最大值 / Max value for wu, tong, jing
+  CHAR_ABILITY_MIN: 5, // wu, tong, ti, jing 最小值 / Min value for wu, tong, ti, jing
+  CHAR_ABILITY_MAX: 30, // wu, tong, ti, jing 最大值 / Max value for wu, tong, ti, jing
 
   CHAR_SPEED_MIN: 5, // 最小速度 (v1.1) / Min speed (v1.1)
   CHAR_SPEED_MAX: 30, // 最大速度 (v1.1) / Max speed (v1.1)
@@ -131,7 +131,7 @@ export const CONFIG = {
   AMBITION_DEFECT_BASE_MULT: 0.5, // 叛變的基礎野心乘數 / Base ambition multiplier for defection
   AMBITION_DIFF_LOYALTY_MULT: 1.2, // 忠誠與國王不同時的乘數 / Multiplier when loyalty differs from king
   AMBITION_FRIEND_DEFECT_MULT: 1.5, // 朋友最近叛變時的乘數 / Multiplier when friend recently defected
-  AMBITION_KING_TONG_REDUCE: 0.01, // 國王的 tong 降低野心 / King's tong reduces ambition
+  // (AMBITION_KING_TONG_REDUCE was removed: tong no longer suppresses defection.)
   AMBITION_LARGE_FACTION_MULT: 0.8, // 大勢力降低野心成長 / Large factions reduce ambition growth
   AMBITION_LARGE_FACTION_THRESHOLD: 500, // 「大」= 500+ 角色 / "Large" = 500+ characters
   AMBITION_NO_PROMOTION_ROUNDS: 20, // 未晉升回合數 → 野心上升 / Rounds without promotion → ambition up
@@ -153,19 +153,38 @@ export const CONFIG = {
   DISCONTENT_DEFECT_MULT: 1.3, // 不滿使叛變機率增加 30% / Discontent increases defection by 30%
 
   // ── 經濟 / Economy ───────────────────────────────────────────────────────
-  // 收入分配：國王 40%、行政官 30%、其他 30%
-  // Income distribution: king 40%, admin 30%, others 30%
+  // 收入分配：君王 30%、行政官 40%、其他 30%（平分）
+  // 沒有行政官時誰都不拿；沒有其他人或沒有君王時，缺席者的份額由在場者接手
+  // 詳見 server/income.ts
+  //
+  // Income distribution: king 30%, administrator 40%, everyone else 30% (shared equally).
+  // With no administrator nobody is paid; a vacant king or an empty "others" bucket has its
+  // share absorbed by whoever is present. See server/income.ts.
   PLACE_BASE_INCOME: 10, // 每回合每個地點基礎金錢 / Base gold per round per place
   PLACE_MARKET_INCOME_PER_LV: 5, // 每級市場額外金錢 / Extra gold per market level
-  INCOME_KING_SHARE: 0.4, // 國王的收入份額（可被 jing 放大）/ King's cut of place income (scaled by jing)
-  INCOME_ADMIN_SHARE: 0.3, // 行政官的收入份額（可被 jing 放大）/ Administrator's cut (scaled by jing)
+  INCOME_KING_SHARE: 0.3, // 君王的收入份額（可被 jing 放大）/ King's cut of place income (scaled by jing)
+  INCOME_ADMIN_SHARE: 0.4, // 行政官的收入份額（可被 jing 放大；金額最大，因為實際管事）/ Administrator's cut (scaled by jing; the largest, since they actually run the place)
   INCOME_OTHER_SHARE: 0.3, // 其他角色共享 / Shared among other characters
-  // jing（經濟）以「平均」為基準放大或縮小領導者的份額：一般將領與舊規則完全相同，
+  // jing（經濟）以「平均」為基準放大或縮小領導者的份額：一般將領的倍率是 1.0，
   // 高 jing 多拿、低 jing 少拿。17.5 是 jing 均勻分佈 (5–30) 的平均值。
-  // jing (economy) scales a leader's cut around the average: an average leader is
-  // unchanged from the old rule, a high-jing one pockets more, a low-jing one less.
+  // jing (economy) scales a leader's cut around the average: an average leader's multiplier
+  // is 1.0, a high-jing one pockets more, a low-jing one less.
   // 17.5 is the mean of jing's uniform 5–30 distribution.
   INCOME_JING_MIDPOINT: 17.5,
+
+  // ── 購兵數量 / Troop purchase size ──────────────────────────────────────────
+  // tong（統領）以「平均」為基準放大或縮小**購兵量**，公式與 jing 對收入的完全相同：
+  //   購買上限 = 基礎上限 × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)
+  // 也就是說 tong 決定一個將領「一次買得到幾個兵」，而不是他防禦多強或部下多忠誠。
+  //
+  // tong (leadership) scales the **size of one troop purchase** around the average, with
+  // exactly the formula jing uses for income:
+  //   purchase cap = base cap × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)
+  // So tong decides how many troops a leader can buy at once — not how well they defend
+  // (that is 體魄 / ti) and not how loyal their subordinates are.
+  //
+  // 17.5 是 tong 均勻分佈 (5–30) 的平均值 / 17.5 is the mean of tong's uniform 5–30 range
+  INCOME_TONG_MIDPOINT: 17.5,
 
   // 建築成本（指數成長：base × 2^level）
   // Building costs (exponential: base × 2^level)
@@ -180,11 +199,18 @@ export const CONFIG = {
 
   // ── 戰鬥 / Battle ────────────────────────────────────────────────────────
   // atk = attacker.troops × (1 + wu/30) × rand(0.85, 1.15)
-  // def = defender.troops × (1 + tong/30) × (1 + fortress×0.2) × rand(0.85, 1.15)
+  // def = defender.troops × (1 + ti/30) × (1 + fortress×0.2) × rand(0.85, 1.15)
+  //
+  // 防守端用**體魄 (ti)**，不是統領 (tong)。兩者公式相同（都走 `× (1 + x/30)`），但講的是
+  // 不同的事：wu 是「打得多痛」，ti 是「守得多穩」。tong 現在只影響購兵數量。
+  //
+  // Defence uses **體魄 (ti)**, not leadership (tong). The two share a formula — both are
+  // `× (1 + x/30)` — but they answer different questions: wu is "how hard they hit", ti is
+  // "how well they hold". tong now only affects how many troops a leader can buy.
   BATTLE_RANDOM_MIN: 0.85, // 隨機變異下限 / Random variance lower bound
   BATTLE_RANDOM_MAX: 1.15, // 隨機變異上限 / Random variance upper bound
   BATTLE_ATK_WU_MULT: 1 / 30, // wu 對攻擊力的貢獻 / Wu contribution to attack power
-  BATTLE_DEF_TONG_MULT: 1 / 30, // tong 對防禦力的貢獻 / Tong contribution to defense power
+  BATTLE_DEF_TI_MULT: 1 / 30, // 體魄對防禦力的貢獻 / 體魄 contribution to defense power
   BATTLE_FORTRESS_DEF_MULT: 0.2, // 堡壘等級防禦加成（每級 20%）/ Fortress level defense bonus (20% per level)
 
   // ── 信號 / Signals ───────────────────────────────────────────────────────
@@ -572,7 +598,7 @@ export const CONFIG = {
    * The legibility floor. A name **solved below this is not drawn**, rather than being
    * scaled up until it reads — scaling up is exactly what would push it off its claim.
    */
-  TERRITORY_LABEL_FONT_MIN: 8,
+  TERRITORY_LABEL_FONT_MIN: 6,
   /**
    * 名字朝白色調亮的混合比例（0–1）。底下的領地填色是同一個勢力色疊在深色背景上的
    * 半透明色塊，原色壓在上面會整個暗掉；往白色混可以保持色相又把亮度拉起來。

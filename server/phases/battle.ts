@@ -29,6 +29,7 @@ import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
+import { fortressDefenceMult } from '@/lib/placeEffects';
 import { buildBattleReport } from '../battleReport';
 import { grantAdmin } from '../adminAssign';
 
@@ -126,7 +127,7 @@ export async function battle(
       );
       const def =
         place.garrison *
-        (1 + place.fortress * CONFIG.BATTLE_FORTRESS_DEF_MULT) *
+        fortressDefenceMult(place.fortress) *
         defRandom;
 
       if (atk > def) {
@@ -299,7 +300,7 @@ export async function battle(
     include: {
       characters: {
         where: { alive: true },
-        select: { id: true, factionId: true, wu: true, tong: true, speed: true, troops: true, name: true },
+        select: { id: true, factionId: true, wu: true, tong: true, ti: true, speed: true, troops: true, name: true },
       },
     },
   });
@@ -352,8 +353,8 @@ export async function battle(
         );
         const def =
           defender.troops *
-          (1 + defender.tong * CONFIG.BATTLE_DEF_TONG_MULT) *
-          (1 + place.fortress * CONFIG.BATTLE_FORTRESS_DEF_MULT) *
+          (1 + defender.ti * CONFIG.BATTLE_DEF_TI_MULT) *
+          fortressDefenceMult(place.fortress) *
           defRandom;
 
         if (atk > def) {

@@ -1426,6 +1426,27 @@ garrison += PLACE_BASE_RECRUIT(2) + barracks × PLACE_BARRACKS_RECRUIT_PER_LV(3)
 - `maxBuyable = floor(gold / CHAR_BUY_TROOP_PRICE(2))`；若 `maxBuyable ≥ 10` 才購買
 - `buyCount = rng.int(10, min(100, maxBuyable))`；花費 `buyCount × 2` 金，`troops += buyCount`
 
+##### 建築效果共用模組 / Shared building effects
+
+`src/lib/placeEffects.ts` 是這些數字的**唯一**來源：每級效果（連同單位）、升級費用、每回合產出。
+`build.ts`、`economy.ts`、`battle.ts` 與地方彈窗全部讀它，所以彈窗不可能顯示一個模擬並沒有用到的數字。
+預覽若另外重寫一份規則，兩者遲早會對不上——這正是這個模組存在的理由。
+
+| 建築 | 每級 | 誰在用 |
+|---|---|---|
+| 堡壘 `fortress` | +20% 防禦 | `fortressDefenceMult()`，**兩條**戰鬥路徑都用 |
+| 市場 `market` | +5 金 | `placeIncome()` |
+| 兵營 `barracks` | +3 名徵兵 | `placeRecruits()` |
+
+- 費用 = `BUILDING_UPGRADE_COST_BASE × MULT^level`（100/200/400/800/1600），上限 `BUILDING_MAX_LEVEL = 5`。
+  這兩者**過去都是內嵌寫死**（上限是 `build.ts` 裡一個光禿禿的 `5`），現在都匯出來，彈窗才不會
+  顯示一個模擬並沒有用到的價格。
+- 每個建築的效果**連單位一起帶著走**（`percent` / `gold` / `troops`），彈窗因此不必自己猜怎麼排版。
+- 彈窗顯示行政官**實際**拿到多少，是直接呼叫 `splitIncome()`；沒有行政官時是一分不發，所以印
+  「40%」會讓人以為他照樣有錢。這需要勢力資料帶上 `kingId`，因為君王的份額先被扣掉。
+- `src/lib/placeEffects.test.ts` 鎖的是**規則**（等比費用、線性累加、等級 0 的防禦倍率必須
+  恰好是 1），而不是某個常數。
+
 #### 建築 / Buildings（`server/phases/build.ts`）
 
 - 每地點每回合隨機挑一種建築升級；僅有總督的地點可升級；總督付錢
@@ -1601,6 +1622,24 @@ createPortal(<div className="fixed z-[110] pointer-events-none">…</div>, docum
 `radarPoints(values, size, radius)`（尺寸不同，所以 size/radius 要參數化）。新增雷達的
 呼叫端請走這些共用元件，不要複製整段 SVG。
 
+##### 頭像動畫與叛離事件 / Avatar animation and defection rows
+
+- `blinkAmount(t)` 與 `talkAmount(t)` 都是**純匯出函式**，不碰 DOM 就能測。眨眼是**三角波**
+  （0.14 秒、每 4 秒一次）——線性淡入淡出看起來像瞇眼，不像眨眼。說話是一次話裡三次開合
+  然後**停頓**；少了停頓，嘴會像壞掉的節拍器而不是在說話。
+- 眼睛與嘴都從**自己的中心**縮放，嘴以**上緣**為樞紐往下張開。從元素原點縮放會讓眼睛閉上時
+  整個往上跑，看起來像渲染錯誤。
+- 三個動畫（呼吸、眨眼、說話）共用既有的 rAF 迴圈、只寫 `transform`；逐幀 `setState` 會重繪
+  整張臉與每個呼叫端。掛載、清除與 `prefers-reduced-motion` 時都會畫一次 `applyFace(0)`，
+  所以靜止的頭像是停在它收斂後的那一格，而不是未動畫的預設格。
+- **速度是第四個線索**：身後 1/2/3 條動勢線，用自己的色階（`SPEED_TIER_COLOR`），刻意**不**
+  沿用三個屬性共用的金／鋼／麻，否則它看起來又是一件戲服。線畫在頭部**之前**才會像拖在身後。
+  `avatarCues()` 因此回傳**四**列，hover 提示也會說明速度線代表什麼。
+- `DEFECTION` 事件現在帶 `oldFactionName` 與 `placeName`，列會寫出「離開了 X · 在 Y · 加入了 Z」
+  （或「建立了新勢力 Z」）。三個寫入點中有**兩個**原本連勢力名與地名都沒存，所以日誌只能寫
+  「某某 叛離了原勢力」，把最該說清楚的資訊留給玩家自己猜。勢力名以純文字顯示、不可點擊，
+  也**絕不**退回顯示 id——那會把 `cmus...` 這種原始字串洩漏到介面上。
+
 ##### 將領頭像 / Leader Avatar（`src/components/LeaderAvatar.tsx`）
 
 每位將領的頭像是**程序化生成**的 SVG 半身像：從 `character.id` 播種，用多種特徵拼出來。
@@ -1676,14 +1715,28 @@ rendering all 27 combinations:
 - **一個地方要有住在這裡的角色才算被掌握**：`place.characters` 為空時，連國王的份也不發——否則一座
   空城照樣把收益送給遠方的國王。作法是把空位視為未填補（`kingId` / `adminId` 都是 `null`），
   於是三個分配分支都不會執行。
-- 收益分配：君王 40%、行政官 30%、其他人 30%；`jing`（經濟）會放大領導者實拿的金額（見 `server/income.ts`）。
-  **當君王與行政官是同一個人**時，他理所當然拿到兩份（40% + 30%），事件日誌必須合併成一行，
+- 收益分配：**君王 30%、行政官 40%、其他人 30%**；`jing`（經濟）會放大領導者實拿的金額（見 `server/income.ts`）。行政官拿最大的一份，因為實際管事的是他。
+  **當君王與行政官是同一個人**時，他理所當然拿到兩份（30% + 40%），事件日誌必須合併成一行，
   否則會出現「某某 得 3 金 · 某某 得 2 金」這種看起來像重複的紀錄。
 - **徵兵**（`PLACE_BASE_RECRUIT` + `barracks × PLACE_BARRACKS_RECRUIT_PER_LV`）加的是**地方的駐軍**，
   不會變成任何角色的個人兵力。
 - **領導者的個人兵力只能買**：`CHAR_BUY_TROOP_PRICE` 每兵 2 金，一次買 10–100，前提是可負擔至少 10 兵
   （即 20 金）。戰鬥只會讓兵力下降：獲勝 `CHAR_FATIGUE_PER_WIN`（×0.9），撤退或陣亡歸零。
   新生成的角色 `troops: 0`。
+
+### 缺位時的分配，以及 tong 的新角色 / Vacancies, and tong's new role
+
+- **沒有行政官 → 誰都不拿。** 舊規則是「總督份額歸國王」，現在相反。行政官是實際管事的人，
+  沒有他代表這個地方沒有人治理，把錢轉給遠方的國王等於付給一個不在場的人；錢留在地方上。
+- **沒有其他人 → 行政官拿 70%**（30% + 40%）。倍率只作用一次，所以不會被重複放大。
+- **沒有君王 → 行政官拿 100%**（40% + 30% + 30%）。
+- 三份加起來**永遠等於 income**。縮放回來之後的餘額在沒有其他人時歸行政官——早期版本直接回傳
+  `others: 0`，那筆錢會憑空消失，是測試抓出來的。
+- **tong（統領）現在只影響購兵量**：
+  `上限 = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`，
+  與 `jingIncomeMultiplier` 完全同形（測試直接斷言兩者對同一輸入給出同一答案）。
+- **tong 不再降低叛變機率**（`AMBITION_KING_TONG_REDUCE` 的用法已移除），也**不再負責防禦**——
+  防禦改由新的**體魄 (ti)** 負責。
 
 ### `INCOME` 事件 / The `INCOME` event
 
@@ -2148,6 +2201,16 @@ Two layers, each a pure module plus a thin renderer, sitting under the map: atmo
 - **不用 `lighter` 混合**：疊加會讓交叉處發亮，但底下的地圖本來就亮，那會吃掉道路的對比。
 - **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。要更亮，先調 `LIGHTNESS` / `MAX_ALPHA`，不要先動 `SATURATION`。
 - 色相是**量化**的，所以整層只需要 `HUE_STEPS` 個預先建好的填色字串，每幀零配置。
+
+### 體魄 (ti)：防禦屬性 / Physique: the defence attribute
+
+- `ti` 與其他屬性同樣是 5–30 的均勻分佈，遷移時既有角色一律回填 **17**（略低於中位數）。
+  回填 0 會讓所有舊角色在防禦上毫無作用，幾乎輸掉每一場本來該贏的仗。
+- 防守端：`def = troops × (1 + ti/30) × (1 + fortress×0.2) × rand(0.85, 1.15)`。
+  這個位置**只適用於將領對將領**；地方守軍走的是另一條公式，堡壘加成不變。
+- 原本這個位置用的是 `tong`。兩者公式相同（都走 `× (1 + x/30)`），但講的是不同的事：
+  `wu` 是「打得多痛」、`ti` 是「守得多穩」，而 `tong` 現在只管購兵量。
+- 設定鍵從 `BATTLE_DEF_TONG_MULT` 改名為 `BATTLE_DEF_TI_MULT`，避免留下誤導性的舊名。
 
 ### 戰鬥回饋只在戰報裡 / Battle feedback lives only in the report
 

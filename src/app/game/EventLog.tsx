@@ -275,6 +275,15 @@ export function EventLog({
         </button>
       );
     };
+    /**
+     * 勢力名稱。勢力沒有可點擊的彈窗，所以純文字即可——但**必須**用存下來的名字，
+     * 絕不能退回顯示 id：那會把 `cmus...` 這種原始字串洩漏到介面上。
+     * A faction name, as plain text: there is no faction popup to open. It must use the
+     * stored name, never fall back to an id — that would leak a raw `cmus...` string
+     * into the UI.
+     */
+    const factionNode = (_id: unknown, name: unknown): ReactNode => text(name);
+
     const placeNode = (id: unknown, name: unknown): ReactNode => {
       const label = typeof name === 'string' ? name : '?';
       if (typeof id !== 'string') return label;
@@ -311,8 +320,51 @@ export function EventLog({
           character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
-      case 'DEFECTION':
-        return fillTemplate(t('events.defectionDesc'), { character: leaderNode(p.charId, p.charName) });
+      case 'DEFECTION': {
+        // 叛離要說清楚三件事：**離開哪個勢力**、**人在哪個地方**、**加入了哪個勢力**
+        // （加入既有勢力，或自己建立一個新的）。原本只寫「某某 叛離了原勢力」，等於
+        // 把最關鍵的資訊留給玩家自己猜。
+        //
+        // A defection has to answer three things: which faction was **left**, which **place**
+        // they left from, and which faction they **joined** — an existing one, or a brand-new
+        // one they founded. The row used to say only "某某 defected", leaving the most useful
+        // part for the player to guess.
+        const oldName = typeof p.oldFactionName === 'string' ? p.oldFactionName : null;
+        const newName = typeof p.newFactionName === 'string' ? p.newFactionName : null;
+        const founded = p.reason === 'created_new_faction';
+        return (
+          <>
+            {fillTemplate(t('events.defectionDesc'), {
+              character: leaderNode(p.charId, p.charName),
+            })}
+            {oldName && (
+              <>
+                {' · '}
+                {fillTemplate(t('events.defectionLeft'), {
+                  faction: factionNode(p.oldFactionId, oldName),
+                })}
+              </>
+            )}
+            {typeof p.placeName === 'string' && p.placeName && (
+              <>
+                {' · '}
+                {fillTemplate(t('events.defectionAt'), {
+                  place: placeNode(p.placeId, p.placeName),
+                })}
+              </>
+            )}
+            {newName && (
+              <>
+                {' · '}
+                {fillTemplate(
+                  founded ? t('events.defectionFounded') : t('events.defectionJoined'),
+                  { faction: factionNode(p.newFactionId, newName) }
+                )}
+              </>
+            )}
+          </>
+        );
+      }
       case 'FACTION_COLLAPSE':
         return fillTemplate(t('events.collapseDesc'), { faction: text(p.factionName) });
       case 'FACTION_ELIMINATED':

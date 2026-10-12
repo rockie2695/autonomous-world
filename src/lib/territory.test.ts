@@ -499,6 +499,42 @@ describe('factionRegions', () => {
     }
   });
 
+  it('should give a label rectangle whose every sampled point is owned', () => {
+    // The label is sized against halfAlong/halfAcross, a rectangle measured along the
+    // principal axis. The property that must hold unconditionally is **containment**: every
+    // point of that rectangle is this faction's own land.
+    //
+    // Whether the rectangle beats the inscribed circle is deliberately NOT asserted here. It
+    // only wins on an elongated claim, where the circle is the narrowest part; on a compact
+    // blob the rectangle is legitimately smaller, and asserting "always bigger" would be
+    // asserting something false about the geometry rather than about the code.
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    const regions = factionRegions(field);
+    expect(regions.length).toBeGreaterThan(0);
+
+    for (const region of regions) {
+      expect(region.halfAlong).toBeGreaterThanOrEqual(0);
+      expect(region.halfAcross).toBeGreaterThanOrEqual(0);
+
+      const ax = Math.cos(region.angle);
+      const ay = Math.sin(region.angle);
+      // A dense sweep: 21x21, well above the density the search itself uses, because
+      // "contained" must not depend on the sampling density that chose the rectangle.
+      let leaks = 0;
+      for (let i = 0; i <= 20; i++) {
+        for (let j = 0; j <= 20; j++) {
+          const u = -region.halfAlong + (2 * region.halfAlong * i) / 20;
+          const v = -region.halfAcross + (2 * region.halfAcross * j) / 20;
+          const gx = region.labelX + ax * u - ay * v;
+          const gy = region.labelY + ay * u + ax * v;
+          if (factionAt(field, gx, gy) !== region.key) leaks++;
+        }
+      }
+      expect(leaks).toBe(0);
+    }
+  });
+
   it('should report a usable elongation, and treat a circle as maximally round', () => {
     // Elongation only decides whether to rotate the text, so it has to be finite and
     // >= 1. A perfectly symmetric region has no meaningful axis and must not produce NaN
