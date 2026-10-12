@@ -1489,7 +1489,7 @@ function LeaderDetail({
         <LeaderAvatar
           character={char}
           factionColor={faction ? faction.color : null}
-          size={168}
+          size={216}
           className="rounded-[14px]"
           breathe
         />

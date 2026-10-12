@@ -519,6 +519,15 @@ export function LeaderAvatar({
   });
 
   const robe = factionColor ?? '#475569';
+  /**
+   * A darker tone from the *same* skin pool, for shading.
+   *
+   * Deriving it from SKIN_TONES rather than writing a second list of shadow colours keeps
+   * every face inside one palette, and keeps the "no hardcoded colour outside the trait pools"
+   * rule intact — the pools are content, and the shade is drawn from them.
+   */
+  const skinShade =
+    SKIN_TONES[Math.max(0, SKIN_TONES.indexOf(skin) - 2)] ?? skin;
   const wu = TIER_MATERIAL[traits.wuTier];
   const tong = TIER_MATERIAL[traits.tongTier];
   const jing = TIER_MATERIAL[traits.jingTier];
@@ -667,7 +676,11 @@ export function LeaderAvatar({
                 : 'M20 88.5 L30 88 L30.5 90.5 L20.5 91 Z';
         return (
           <g key={`ti-${mirror ? 'r' : 'l'}`}>
-            <path d={band} fill={tiColor.main} opacity="0.92" />
+            {/* 深色外框：四段階級本來靠顏色辨識，但麻/鋼這類低階色在深色衣袍上幾乎看不見，
+                一圈外框讓輪廓在任何尺寸都站得住 / A dark rim. The three bands were read from
+                colour alone, but hemp and steel all but vanish against a dark robe — the rim
+                keeps the silhouette legible at every size. */}
+            <path d={band} fill={tiColor.main} stroke="#0b1220" strokeWidth="1.2" strokeOpacity="0.55" opacity="0.95" />
             {/* 高階才有的甲片脊線 / Only the heavy band carries a ridge, so it cannot be
                 mistaken for a plain strip */}
             {tier === 'high' && (
@@ -747,12 +760,65 @@ export function LeaderAvatar({
 
       {/* ── 頭部（呼吸時微幅後仰）/ The head, which tilts slightly while breathing ── */}
       <g ref={headRef}>
-      {/* 耳 / Ears */}
-      <circle cx={50 - faceRx + 1} cy="46" r="3.2" fill={skin} />
-      <circle cx={50 + faceRx - 1} cy="46" r="3.2" fill={skin} />
+      {/* 耳（帶耳廓細節，不再是兩個圓）/ Ears, with a little inner fold so they are not
+          two bare circles stuck on the sides */}
+      {[-1, 1].map((side) => (
+        <g key={side < 0 ? 'ear-l' : 'ear-r'}>
+          <ellipse
+            cx={50 + side * (faceRx - 0.5)}
+            cy="46"
+            rx="3.4"
+            ry="4.6"
+            fill={skin}
+          />
+          <path
+            d={`M${50 + side * (faceRx - 0.5)} 43.4 q${side * -1.6} 0.6 ${side * -1.5} 2.8`}
+            stroke={skinShade}
+            strokeWidth="0.9"
+            fill="none"
+            strokeLinecap="round"
+          />
+        </g>
+      ))}
 
-      {/* 頭 / Head */}
+      {/* 頭 / Head. The jaw is drawn as a separate tapered shape over the skull ellipse:
+          a single ellipse reads as a ball, and the taper is what turns it into a face. */}
       <ellipse cx="50" cy="43" rx={faceRx} ry="17.5" fill={skin} />
+      <path
+        d={`M${50 - faceRx + 1.2} 47 Q50 63 ${50 + faceRx - 1.2} 47 Q${50 + faceRx * 0.42} 55.5 50 55.5 Q${50 - faceRx * 0.42} 55.5 ${50 - faceRx + 1.2} 47 Z`}
+        fill={skin}
+      />
+
+      {/* 顴骨與下顎的體積陰影 / Cheek and jaw volume. Two soft crescents are what make a flat
+          disc read as a lit head; they use the skin pool's own darker tones, so no new colour
+          is introduced and every face stays within its own palette. */}
+      <path
+        d={`M${50 - faceRx + 3.5} 44 Q${50 - faceRx + 5} 52 ${50 - faceRx * 0.34} 53.6`}
+        stroke={skinShade}
+        strokeWidth="2.4"
+        fill="none"
+        strokeLinecap="round"
+        opacity="0.5"
+      />
+      <path
+        d={`M${50 + faceRx - 3.5} 44 Q${50 + faceRx - 5} 52 ${50 + faceRx * 0.34} 53.6`}
+        stroke={skinShade}
+        strokeWidth="2.4"
+        fill="none"
+        strokeLinecap="round"
+        opacity="0.5"
+      />
+
+      {/* 鼻 / Nose. A cartoon face with no nose has to be read entirely from the eyes, and
+          it comes out blank. Two short strokes read as a bridge plus a nostril shadow. */}
+      <path
+        d="M50 46.4 q-1.5 2.4 -0.3 3.4"
+        stroke={skinShade}
+        strokeWidth="1.3"
+        fill="none"
+        strokeLinecap="round"
+        opacity="0.85"
+      />
 
       {/* 鬍（先畫，壓在下緣）/ Facial hair, drawn first so it sits under the jaw */}
       {facialHair === 'beard' && (

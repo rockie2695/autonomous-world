@@ -173,6 +173,8 @@ autonomous-world/
 - Each character has: **Martial (wu)**, **Leadership (tong)**, **Economy (jing)**, **Speed**
 - Stats range 5-30, with speed using normal distribution (μ=17, σ=5)
 - Characters age each round and eventually die of old age (50-80 years)
+- A newly spawned leader starts with **1 soldier** (`CHAR_START_TROOPS`), so a new general is never
+  completely empty on arrival
 - Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
 - Characters spawned in a round never move in that round (they stay put until the next round)
 - On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removed admin's ambition **increases** by `AMBITION_ADMIN_REPLACED_DELTA` (1), logged as an `ADMIN_REMOVED` event + an `AmbitionEvent`
@@ -248,8 +250,14 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Defection rows name all three parties** — the faction left, the place left from, and the faction
   joined (or founded), instead of only "某某 defected"
 - **The avatar blinks, talks and shows speed** — the mouth opens and closes with a pause so it reads
-  as speech rather than a metronome, the eyes blink, and speed appears as one to three motion lines
-  behind the head in its own colour (deliberately not the gold/steel/hemp the abilities share)
+  as speech rather than a metronome, the eyes blink, and speed appears as one to three motion
+  lines **to the left of** the head in its own colour (deliberately not the gold/steel/hemp the
+  abilities share). They sit on the left because the original placement was inside the head's own
+  bounding box and was therefore hidden entirely
+- **體魄 (Physique) has its own avatar cue** — a forearm guard, which is the one body region left once
+  head, shoulders and chest are taken, so all four abilities stay separable at a glance. It
+  degrades like the others: heavy bracer → plain vambrace → bare forearm wrap. Every tier cue carries a
+  dark rim, because hemp and steel all but vanish against a dark robe
 - **Leader table sorting** — the 將領數 table head sorts: click a column, click again to reverse.
   Switching columns starts from that column's own sensible direction (numbers descending, names A→Z),
   and opening a leader from the table keeps a **back** action to return to it
@@ -494,6 +502,13 @@ docker compose logs -f
 # Stop services
 docker compose down
 ```
+
+- **The chart x axis is the round number**, not the index. A faction's series only gains an entry in
+  the round it first appears, so plotting by array index drew every faction as if it had existed since
+  round 0. The stats route now carries a per-faction `rounds[]`, and the chart resolves the real offset
+  (`startOffsetOf()`). The same bug made the crosshair read a world index against a faction-local array,
+  land on `undefined`, fall through `?? 0`, and report a real faction as **zero troops** — the readout now
+  goes through `valueAt()` / `hasValueAt()`, and a round lists only factions that existed then
 
 ## Contributing
 
