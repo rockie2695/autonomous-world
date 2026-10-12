@@ -83,13 +83,23 @@ export async function GET(request: NextRequest) {
   // 解壓縮並提取統計資料 / Decompress and extract stats
   const rounds: number[] = [];
   const factionDataMap = new Map<string, {
-    id: string;
-    name: string;
-    color: string;
-    troops: number[];
-    gold: number[];
-    territories: number[];
-    characters: number[];
+  id: string;
+  name: string;
+  color: string;
+  troops: number[];
+  gold: number[];
+  territories: number[];
+  characters: number[];
+  /**
+   * The absolute round number each value above belongs to.
+   *
+   * A faction's series is NOT dense from the world's first round: it only gains an entry in
+   * the round it first appears, so its array starts at index 0 while the world starts at,
+   * say, round 12. Plotting by array index therefore drew every faction as if it had existed
+   * since the beginning, and the x axis read 0,1,2 instead of 12,13,14. Carrying the round
+   * per point lets the chart place the series on the world's own round axis.
+   */
+  rounds: number[];
   }>();
 
   // 世界整體時間序列 / World-wide time series
@@ -146,15 +156,20 @@ export async function GET(request: NextRequest) {
           factionDataMap.set(faction.id, {
             id: faction.id,
             name: faction.name,
-            color: faction.color,
-            troops: [],
+        color: faction.color,
+        rounds: [],
+        troops: [],
             gold: [],
             territories: [],
             characters: [],
           });
         }
-        const fd = factionDataMap.get(faction.id)!;
-        fd.troops.push(factionTroops.get(faction.id) ?? 0);
+      const fd = factionDataMap.get(faction.id)!;
+      // 記下這一筆屬於哪一回合，前端才知道要把折線畫在正確的回合位置 /
+      // Record which round this point belongs to, so the chart can place it on the
+      // world's round axis rather than on its own array index
+      fd.rounds.push(snapshot.round);
+      fd.troops.push(factionTroops.get(faction.id) ?? 0);
         fd.gold.push(factionGold.get(faction.id) ?? 0);
         fd.territories.push(factionTerritories.get(faction.id) ?? 0);
         fd.characters.push(factionCharacters.get(faction.id) ?? 0);

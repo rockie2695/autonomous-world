@@ -126,7 +126,7 @@ export async function spawnCharacters(
         maxAge,
         placeId: place.id,
         factionId: place.factionId,
-        troops: 0,
+        troops: CONFIG.CHAR_START_TROOPS,
         gold: 0,
         alive: true,
         isKing: false,

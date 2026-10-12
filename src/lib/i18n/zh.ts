@@ -244,7 +244,7 @@ export const zh = {
     cue: {
       wu: { high: '頭盔', mid: '額帶', low: '舊疤' },
       tong: { high: '金肩章', mid: '素鋼肩章', low: '麻補丁肩帶' },
-      ti: { high: '重鎧', mid: '皮甲', low: '破布衣' },
+      ti: { high: '護腕', mid: '素膀鑴', low: '布繌臂' },
       jing: { high: '算盤', mid: '方孔銅錢', low: '空錢袋' },
       speed: { high: '疾風三線', mid: '雙線', low: '單線' },
     },

@@ -53,6 +53,8 @@ export interface AvatarCharacter {
   tong: number;
   /** 經濟：決定頸前的算盤／銅錢／錢袋 / Economy: picks abacus, cash coin, or pouch */
   jing: number;
+  /** 體魄：三段護具 decides the arm guard / Physique: picks the bracer, vambrace or wrap */
+  ti: number;
   /** 速度：身後動勢線的數量 / Speed: how many motion lines trail the head */
   speed: number;
   ambition: number;
@@ -295,6 +297,8 @@ export interface AvatarTraits {
   tongTier: AbilityTier;
   /** 經濟三段 → 算盤／銅錢／空錢袋 / Economy band -> abacus, cash coin, empty pouch */
   jingTier: AbilityTier;
+  /** 體魄三段 → 護腕／素臂鐔／赤膊布纏 / Physique band -> bracer, plain vambrace, bare forearm wrap */
+  tiTier: AbilityTier;
   /** 速度三段 → 身後的動勢線數量（1/2/3）/ Speed band -> how many motion lines trail the head */
   speedTier: AbilityTier;
   /** 疤長在哪一邊（由 id 決定，兩邊都有疤的隊伍看起來會很整齊）/ Which side the scar sits on (id-seeded, so a unit is not symmetric to a fault) */
@@ -303,26 +307,27 @@ export interface AvatarTraits {
 
 /** 頭像提示中的一列 / One row of the avatar tooltip */
 export interface AvatarCue {
-  stat: 'wu' | 'tong' | 'jing' | 'speed';
+  stat: 'wu' | 'tong' | 'jing' | 'ti' | 'speed';
   tier: AbilityTier;
 }
 
 /**
- * 由特徵取出提示要顯示的三列，**不含任何文字**。
- * Pull the three tooltip rows out of the traits, with **no strings**.
+ * 由特徵取出提示要顯示的列，**不含任何文字**。
+ * Pull the tooltip rows out of the traits, with **no strings**.
  *
  * 文字交給 i18n，所以這個對應關係可以在沒有 DOM、也沒有翻譯表的情況下測試。
  * The wording belongs to i18n, which keeps this mapping testable without a DOM
  * and without a translation table.
  *
  * @param traits - 已解析的特徵 / The resolved traits
- * @returns 依 武力／統領／經濟 順序的三列 / The three rows, in wu / tong / jing order
+ * @returns 依 武力／統領／經濟／體魄／速度 順序的五列 / The five rows, in wu / tong / jing / ti / speed order
  */
 export function avatarCues(traits: AvatarTraits): AvatarCue[] {
   return [
     { stat: 'wu', tier: traits.wuTier },
     { stat: 'tong', tier: traits.tongTier },
     { stat: 'jing', tier: traits.jingTier },
+    { stat: 'ti', tier: traits.tiTier },
     { stat: 'speed', tier: traits.speedTier },
   ];
 }
@@ -377,7 +382,8 @@ export function deriveAvatarTraits(character: AvatarCharacter): AvatarTraits {
     wuTier: tierFor(character.wu),
     tongTier: tierFor(character.tong),
     jingTier: tierFor(character.jing),
-  speedTier: tierFor(character.speed),
+    tiTier: tierFor(character.ti),
+    speedTier: tierFor(character.speed),
     scarRight,
   };
 }
@@ -516,6 +522,7 @@ export function LeaderAvatar({
   const wu = TIER_MATERIAL[traits.wuTier];
   const tong = TIER_MATERIAL[traits.tongTier];
   const jing = TIER_MATERIAL[traits.jingTier];
+  const tiColor = TIER_MATERIAL[traits.tiTier];
 
   // 頭部：y 25.5–60.5。刻意讓頭略小、脖子略短，舊版脖子長到像一根柱子 /
   // Head spans y 25.5–60.5. Deliberately smaller head and shorter neck — the
@@ -630,6 +637,56 @@ export function LeaderAvatar({
                 strokeWidth="1.1"
                 strokeDasharray="2 2"
                 opacity={0.9}
+              />
+            )}
+          </g>
+        );
+      })}
+
+      {/* ── 體魄：前臂護具 / Physique: the forearm guard ──
+          位置在肩章**之下**、衣袍的外緣，是四個部位（頭／肩／胸／臂）裡唯一還空著的
+          一塊，所以四項能力可以一眼分開而不會互相蓋掉。同一個物件逐級劣化，同時也變窄：
+          重甲護腕（金）→ 素臂鐔（鋼）→ 布纏臂（麻）。
+          The Physique cue sits *below* the shoulder board on the robe's outer edge — the only
+          free body region left once head / shoulders / chest are taken, so all four abilities
+          stay separable at a glance. One object degrading and narrowing: heavy bracer (gold)
+          → plain vambrace (steel) → thin forearm wrap (hemp). */}
+      {[false, true].map((mirror) => {
+        const tier = traits.tiTier;
+        const band =
+          tier === 'high'
+            ? mirror
+              ? 'M66 85 L84 86 L83 94 L65 93 Z'
+              : 'M16 86 L34 85 L35 93 L17 94 Z'
+            : tier === 'mid'
+              ? mirror
+                ? 'M68 86.5 L82 87 L81.5 92 L67.5 91.5 Z'
+                : 'M18 87 L32 86.5 L32.5 91.5 L18.5 92 Z'
+              : mirror
+                ? 'M70 88 L80 88.5 L79.5 91 L69.5 90.5 Z'
+                : 'M20 88.5 L30 88 L30.5 90.5 L20.5 91 Z';
+        return (
+          <g key={`ti-${mirror ? 'r' : 'l'}`}>
+            <path d={band} fill={tiColor.main} opacity="0.92" />
+            {/* 高階才有的甲片脊線 / Only the heavy band carries a ridge, so it cannot be
+                mistaken for a plain strip */}
+            {tier === 'high' && (
+              <path
+                d={mirror ? 'M68 88.5 L82 89' : 'M18 89 L32 88.5'}
+                stroke={tiColor.dark}
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+            )}
+            {/* 低階是布纏，縫線讓「破」看得見 / The low wrap is stitched, which is what makes
+                "worn" legible rather than merely thinner */}
+            {tier === 'low' && (
+              <path
+                d={mirror ? 'M70.5 89.5 L79.5 90' : 'M20.5 90 L29.5 89.5'}
+                stroke={tiColor.dark}
+                strokeWidth="1"
+                strokeDasharray="2 2"
+                opacity="0.9"
               />
             )}
           </g>
@@ -758,13 +815,17 @@ export function LeaderAvatar({
         fill="none"
       />
 
-      {/* 速度：身後的動势線，數量階速度分段 /
-          Speed: motion lines behind the head, one to three by band. Drawn *before* the head
-          so they read as trailing behind it, and deliberately pale: they are a rating mark,
-          not another costume piece. */}
-      <g aria-hidden="true" stroke={SPEED_TIER_COLOR[speedTier]} strokeWidth="1.4" strokeLinecap="round" opacity="0.75" fill="none">
+      {/* 速度：頭**左側**的動勢線，數量階速度分段 /
+          Speed: motion lines to the **left** of the head, one to four by band.
+          舊版畫在 x 27-41，正好落在頭的範圍（x 25-75）裡，所以整條被頭擋住，等於沒有畫。
+          現在整組移到 x 4-21（頭緣在 25），並且加粗，方向收攏向頭、像一道拖曳的尾。
+          Deliberately left of the head rather than behind it: the old x 27-41 sat entirely
+          inside the head's own x 25-75 and was therefore fully occluded. The fan converges
+          toward the head so the streaks read as motion trails. Pale on purpose — this is a
+          rating mark, not another costume piece. */}
+      <g aria-hidden="true" stroke={SPEED_TIER_COLOR[speedTier]} strokeWidth="1.8" strokeLinecap="round" opacity="0.75" fill="none">
         {SPEED_LINES[speedTier].map((dy, i) => (
-          <path key={i} d={`M${34 - i * 2.5} ${dy} H${41 - i * 2.5}`} />
+          <path key={i} d={`M${4 + i * 2} ${dy} H21`} />
         ))}
       </g>
 

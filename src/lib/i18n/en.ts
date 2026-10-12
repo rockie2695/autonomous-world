@@ -245,7 +245,7 @@ export const en = {
     cue: {
     wu: { high: 'Helmet', mid: 'Headband', low: 'Old scar' },
     tong: { high: 'Gold board', mid: 'Plain steel board', low: 'Patched hemp strap' },
-    ti: { high: 'Heavy plate', mid: 'Leather armour', low: 'Ragged tunic' },
+    ti: { high: 'Bracer', mid: 'Plain vambrace', low: 'Bare forearm wrap' },
     jing: { high: 'Abacus', mid: 'Cash coin', low: 'Empty pouch' },
       speed: { high: 'Three streaks', mid: 'Two streaks', low: 'One streak' },
     },

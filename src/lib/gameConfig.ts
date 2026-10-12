@@ -79,6 +79,8 @@ export const CONFIG = {
   // 野心使用常態分佈 μ=17, σ=5（截斷至 5-30）。
   // Ambition uses normal distribution μ=17, σ=5 (clamped to 5-30).
   CHAR_START_AGE: 20, // 所有角色起始年齡為 20 / All characters start at age 20
+  CHAR_START_TROOPS: 1, // 新角色至少帶 1 名士兵，避免剛出現時完全無人 /
+    // A new leader starts with at least 1 soldier, so they are never completely empty on arrival
   CHAR_MAX_AGE_MIN: 50, // 最小隨機最大年齡（因年老死亡）/ Min random maxAge (death from old age)
   CHAR_MAX_AGE_MAX: 80, // 最大隨機最大年齡 / Max random maxAge
 

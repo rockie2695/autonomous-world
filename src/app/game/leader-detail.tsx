@@ -128,7 +128,7 @@ export function DetailModal({
 }
 
 /** 勢力排行可排序的欄位 / the sortable columns of the faction ranking */
-type FactionSortKey = 'name' | 'king' | 'territories' | 'members' | 'troops' | 'gold';
+type FactionSortKey = 'name' | 'status' | 'king' | 'territories' | 'members' | 'troops' | 'gold';
 
 /** 排行表的一列 / one row of the ranking */
 interface FactionRow {
@@ -141,19 +141,34 @@ interface FactionRow {
 }
 
 /**
+ * 勢力的三段狀態排序值：存歿 0 → 崩解中 1 → 已滅亡 2。
+ * 三段而不是兩段，是因為「正在崩解」跟「已經沒了」是不同的事，排序上要能排在兩者之間。
+ *
+ * Rank the three-state faction status: alive 0 → collapsing 1 → destroyed 2.
+ * Three states rather than two, because "collapsing" and "already gone" are different
+ * things and must be able to sort between alive and destroyed.
+ */
+function statusRank(faction: WorldState['factions'][0]): number {
+  if (!faction.alive) return 2;
+  return faction.collapsing ? 1 : 0;
+}
+
+/**
  * 依欄位比較兩列。只回方向無關的順序，升降由呼叫端乘上 ±1。
  * Compare two rows by column; direction-agnostic, the caller applies ±1.
  */
-function compareFactionRows(a: FactionRow, b: FactionRow, key: FactionSortKey): number {
+  function compareFactionRows(a: FactionRow, b: FactionRow, key: FactionSortKey): number {
   switch (key) {
-    case 'name':
-      return a.faction.name.localeCompare(b.faction.name);
-    case 'king':
-      return (a.kingName ?? '').localeCompare(b.kingName ?? '');
-    default:
-      return a[key] - b[key];
+  case 'name':
+  return a.faction.name.localeCompare(b.faction.name);
+  case 'king':
+  return (a.kingName ?? '').localeCompare(b.kingName ?? '');
+  case 'status':
+  return statusRank(a.faction) - statusRank(b.faction);
+  default:
+  return a[key] - b[key];
   }
-}
+  }
 
 export function FactionRanking({
   factions,
@@ -179,7 +194,10 @@ export function FactionRanking({
     if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else {
       setSortKey(key);
-      setSortDir(key === 'name' || key === 'king' ? 'asc' : 'desc');
+      // 名字與君主用 A→Z；狀態用存歿優先（ascending 就是 rank 由小到大）；
+      // 數字欄位一律大的先 / names and king go A→Z, status puts the living first (ascending
+      // is simply the smaller rank first), and every numeric column starts largest-first
+      setSortDir(key === 'name' || key === 'king' || key === 'status' ? 'asc' : 'desc');
     }
   };
 
@@ -273,6 +291,9 @@ export function FactionRanking({
               {(
                 [
                   ['name', 'faction.name', 'left'],
+                  // 沿用 general.status，不在 faction 區塊再抄一份 /
+                  // Reuses general.status rather than duplicating the string into faction
+                  ['status', 'general.status', 'left'],
                   ['king', 'faction.king', 'left'],
                   ['territories', 'faction.territories', 'right'],
                   ['members', 'faction.characters', 'right'],

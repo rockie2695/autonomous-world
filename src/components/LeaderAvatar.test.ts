@@ -11,10 +11,11 @@ import {
 /** 一位沒有特殊資料的普通將領 / An ordinary leader with no special data */
 function leader(overrides: Partial<AvatarCharacter> = {}): AvatarCharacter {
   return {
-    id: 'char-abc',
-    wu: 12,
-    tong: 12,
-    jing: 12,
+    id: 'char-abc',
+    wu: 12,
+    tong: 12,
+    jing: 12,
+    ti: 12,
 speed: 18,
 
     ambition: 10,
@@ -189,14 +190,14 @@ describe('deriveAvatarTraits', () => {
 });
 
 describe('avatarCues', () => {
-  it('should always return exactly four rows, in wu / tong / jing / speed order', () => {
-    // 提示只有三列，順序固定；少一列代表某個能力沒有被渲染 /
-    // The tooltip is exactly four rows in a fixed order; a missing row means
+  it('should always return exactly five rows, in wu / tong / jing / ti / speed order', () => {
+    // 提示只有五列，順序固定；少一列代表某個能力沒有被渲染 /
+    // The tooltip is exactly five rows in a fixed order; a missing row means
     // one ability never got a cue
     for (let i = 0; i < 20; i++) {
       const rows = avatarCues(deriveAvatarTraits(leader({ id: `c-${i}` })));
-      expect(rows).toHaveLength(4);
-      expect(rows.map((row) => row.stat)).toEqual(['wu', 'tong', 'jing', 'speed']);
+      expect(rows).toHaveLength(5);
+      expect(rows.map((row) => row.stat)).toEqual(['wu', 'tong', 'jing', 'ti', 'speed']);
     }
   });
 
@@ -292,5 +293,46 @@ describe('talkAmount', () => {
 describe('AvatarCharacter', () => {
   it('should carry speed so the avatar can show it', () => {
     expect(leader({ speed: 30 }).speed).toBe(30);
+  });
+});
+
+describe('tiTier', () => {
+  it('should band on the same thresholds as the other abilities', () => {
+    // ti is a real defence stat, so it must use the shared 5-30 banding verbatim
+    // rather than its own scale.
+    expect(deriveAvatarTraits(leader({ ti: 30 })).tiTier).toBe('high');
+    expect(deriveAvatarTraits(leader({ ti: 25 })).tiTier).toBe('high');
+    expect(deriveAvatarTraits(leader({ ti: 24 })).tiTier).toBe('mid');
+    expect(deriveAvatarTraits(leader({ ti: 18 })).tiTier).toBe('mid');
+    expect(deriveAvatarTraits(leader({ ti: 17 })).tiTier).toBe('low');
+    expect(deriveAvatarTraits(leader({ ti: 5 })).tiTier).toBe('low');
+  });
+
+  it('should not be derived from any other stat', () => {
+    const a = deriveAvatarTraits(leader({ wu: 30, tong: 30, jing: 30, ti: 5 }));
+    const b = deriveAvatarTraits(leader({ wu: 30, tong: 30, jing: 30, ti: 5 }));
+    expect(a.tiTier).toBe('low');
+    expect(b.tiTier).toBe('low');
+  });
+
+  it('should still report on a king, because a body is not headwear', () => {
+    const t = deriveAvatarTraits(leader({ ti: 30, isKing: true }));
+    expect(t.crown).toBe(true);
+    expect(t.tiTier).toBe('high');
+  });
+});
+
+describe('avatarCues', () => {
+  it('should report five rows: wu, tong, jing, ti and speed', () => {
+    const rows = avatarCues(deriveAvatarTraits(leader()));
+    expect(rows.map((r) => r.stat)).toEqual(['wu', 'tong', 'jing', 'ti', 'speed']);
+  });
+
+  it('should carry the ti band through, with no strings in the mapping', () => {
+    const rows = avatarCues(deriveAvatarTraits(leader({ ti: 28 })));
+    const ti = rows.find((r) => r.stat === 'ti');
+    expect(ti?.tier).toBe('high');
+    // The mapping holds data only; the wording belongs to i18n.
+    expect(Object.keys(ti as object)).toEqual(['stat', 'tier']);
   });
 });

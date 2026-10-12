@@ -62,6 +62,14 @@ interface ChartSeries {
   values: number[];
   color: string;
   label: string;
+  /**
+   * Absolute round number per value, when the series is not dense from the world's first
+   * round (a faction that appeared in round 12 starts at index 0 of `values`). Without it the
+   * x axis has to guess, and it guesses the array index — which is why the axis used to read
+   * 0,1,2 for a faction that really existed at rounds 12,13,14. Absent means "dense from the
+   * start", which is what the world-wide series are.
+   */
+  rounds?: number[];
 }
 
 /** 可圖表化的勢力欄位 / Per-faction fields that can be charted */
@@ -86,6 +94,8 @@ interface StatsPayload {
     gold: number[];
     territories: number[];
     characters: number[];
+  /** 每個值的絕對回合 / the absolute round each value belongs to */
+  rounds: number[];
   }>;
   world: Record<WorldStatKey, number[]>;
 }
@@ -244,6 +254,35 @@ function LineChart({
     CHART_PAD + (i / Math.max(rounds.length - 1, 1)) * plotW;
   const yScale = (v: number) => CHART_H - CHART_PAD - (v / maxVal) * plotH;
 
+  /**
+   * Where a series' first value belongs on the shared axis.
+   *
+   * A faction founded in round 12 has `values` starting at index 0, so `xScale(0)` would
+   * put it at the world's first round and the axis would read 0,1,2 for rounds that are
+   * really 12,13,14. Looking the first round up in the world's own `rounds` array gives the
+   * offset the series was missing. Series without `rounds` (the world-wide ones) are dense
+   * from the start, so they correctly start at 0.
+   */
+  const startOffsetOf = (s: ChartSeries): number => {
+    const first = s.rounds?.[0];
+    if (first === undefined) return 0;
+    const idx = rounds.indexOf(first);
+    return idx === -1 ? 0 : idx;
+  };
+  const xOf = (s: ChartSeries, i: number) => xScale(startOffsetOf(s) + i);
+  /**
+   * Read a series at a *world* round index.
+   *
+   * Same reason as `xOf`: `hover.index` is an index into the world's `rounds`, but a faction's
+   * `values` only covers the rounds from the one it appeared in. Indexing `values` directly
+   * therefore read the wrong round's number — often `undefined`, which fell through to `0` and
+   * reported a real faction's troops as zero.
+   */
+  const valueAt = (s: ChartSeries, worldIndex: number): number =>
+    s.values[worldIndex - startOffsetOf(s)] ?? 0;
+  const hasValueAt = (s: ChartSeries, worldIndex: number): boolean =>
+    worldIndex - startOffsetOf(s) >= 0 && worldIndex - startOffsetOf(s) < s.values.length;
+
   // 提示的游標位置與回合索引 / Tooltip pointer position and snapped round index
   const [hover, setHover] = useState<{ index: number; x: number; y: number } | null>(null);
 
@@ -289,7 +328,7 @@ function LineChart({
         {series.map((s, si) => (
           <g key={si} className="group/series">
             <polyline
-              points={s.values.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
+              points={s.values.map((v, i) => `${xOf(s, i)},${yScale(v)}`).join(' ')}
               fill="none"
               stroke={s.color}
               strokeWidth={1.5}
@@ -298,7 +337,7 @@ function LineChart({
               className="pointer-events-none transition-[stroke-width] duration-200 group-hover/series:[stroke-width:3]"
             />
             <polyline
-              points={s.values.map((v, i) => `${xScale(i)},${yScale(v)}`).join(' ')}
+              points={s.values.map((v, i) => `${xOf(s, i)},${yScale(v)}`).join(' ')}
               fill="none"
               stroke="transparent"
               strokeWidth={14}
@@ -316,7 +355,7 @@ function LineChart({
           return (
             <circle
               key={si}
-              cx={xScale(last)}
+              cx={xOf(s, last)}
               cy={yScale(s.values[last] ?? 0)}
               r={3}
               fill={s.color}
@@ -338,20 +377,35 @@ function LineChart({
               strokeWidth={1}
               strokeDasharray="3 3"
             />
-            {series.map((s, si) => (
-              <circle
-                key={si}
-                cx={xScale(hover.index)}
-                cy={yScale(s.values[hover.index] ?? 0)}
-                r={3.5}
-                fill={s.color}
-                stroke="var(--color-ds-void)"
-                strokeWidth={1.5}
-              />
-            ))}
+            {series.map((s, si) =>
+              hasValueAt(s, hover.index) ? (
+                <circle
+                  key={si}
+                  cx={xScale(hover.index)}
+                  cy={yScale(valueAt(s, hover.index))}
+                  r={3.5}
+                  fill={s.color}
+                  stroke="var(--color-ds-void)"
+                  strokeWidth={1.5}
+                />
+              ) : null
+            )}
           </g>
         )}
       </svg>
+      {/* x 軸：絕對回合標籤 / x axis: absolute round labels
+          這裡印的是回合**數字**，不是序列索引：索引從 0 開始，但回合可能從 12 才開始，
+          所以索引標籤會把第 12 回合說成「0」。首尾各一個、中間再取一個就夠讀了。
+          These are round *numbers*, not series indices: an index starts at 0 while the round
+          may start at 12, so an index label called round 12 "0". First, middle and last is
+          enough to read the axis. */}
+      <div className="flex justify-between px-1 mt-1 text-[10px] text-gray-500 font-orbitron">
+        <span>{rounds[0] ?? ''}</span>
+        {rounds.length > 2 && (
+          <span>{rounds[Math.floor((rounds.length - 1) / 2)]}</span>
+        )}
+        <span>{rounds[rounds.length - 1] ?? ''}</span>
+      </div>
       {/* hover 時的數值面板 / the value readout while hovering */}
       {hover && (
         <ChartTooltip
@@ -359,11 +413,16 @@ function LineChart({
           x={hover.x}
         flip={hover.x > CHART_TIP_FLIP_AT}
           y={hover.y}
-          rows={series.map((s) => ({
-            label: s.label,
-            color: s.color,
-            value: s.values[hover.index] ?? 0,
-          }))}
+          rows={series
+            // 只顯示該回合確實存在的勢力，否則讀者會看到一個從未存在過的勢力報 0 /
+            // Only series that actually existed in that round, or the reader sees a faction
+            // that was never there reporting zero
+            .filter((s) => hasValueAt(s, hover.index))
+            .map((s) => ({
+              label: s.label,
+              color: s.color,
+              value: valueAt(s, hover.index),
+            }))}
         />
       )}
       <ChartLegend series={series} />
@@ -1396,7 +1455,14 @@ export function StatsCharts({
   const { factions, rounds, world } = data;
 
   const factionSeries = (key: FactionStatKey): ChartSeries[] =>
-    factions.map((f) => ({ values: f[key], color: f.color, label: f.name }));
+    factions.map((f) => ({
+      values: f[key],
+      // The faction's own rounds ride along, so its line is drawn on the world's round
+      // axis instead of being squashed into 0..n from the round it was founded
+      rounds: f.rounds,
+      color: f.color,
+      label: f.name,
+    }));
 
   const worldSeries = (key: WorldStatKey): ChartSeries[] => [
     { values: world[key] ?? [], color: '#22d3ee', label: t('stats.title') },
