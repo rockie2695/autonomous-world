@@ -1534,6 +1534,93 @@ useEffect(() => {
       const rect = canvas.getBoundingClientRect();
       ctx.clearRect(0, 0, rect.width, rect.height);
 
+      // ── 星系：放大到一定比例後，地點不再只是一個點，而是「星中心 + 軌道環」 ──
+      // Star systems: past a zoom threshold a place stops being a dot and reads as a
+      // star system — a pulsing core inside an orbital ring with motes on it.
+      //
+      // 畫在聚光燈**之前**：星系是裝飾，聚光燈是資訊（本回合建立／被攻擊），
+      // 資訊必須永遠蓋得住裝飾。
+      // Drawn BEFORE the spotlight rings: a star system is decoration, a spotlight is
+      // information (created / attacked this round), and information has to stay legible
+      // on top of decoration.
+      //
+      // 它跑在既有的 rAF 迴圈裡，**沒有**新增第二個迴圈 \u2014 這一點是刻意的：地圖只有
+      // 一個動畫迴圈是效能與正確性的前提。
+      // It rides the existing rAF loop and adds no second one: the map having exactly one
+      // animation loop is what keeps it cheap and keeps the pause rules enforceable.
+      if (sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO) {
+        // \u53ea\u753b\u8996\u7a97\u5167\u7684\u7bc0\u9ede\uff1a2000 \u500b\u7bc0\u9ede\u6642\u5927\u90e8\u5206\u90fd\u5728\u8996\u7a97\u5916\uff0c
+        // \u753b\u5b83\u4eec\u53ea\u662f\u6d6a\u8cbb\u3002\u8a18\u88e1\u7528 graph \u5ea7\u6a19\u78ba\u5beb\u6a94\u7a2d\u843d\u5728\u8996\u7a97\u5916\u5206 / Only nodes
+        // inside the viewport \u2014 at 2000 nodes most of the world is off-screen at any moment.
+        const tl = sigma.viewportToGraph({ x: 0, y: 0 });
+        const br = sigma.viewportToGraph({ x: rect.width, y: rect.height });
+        const minX = Math.min(tl.x, br.x);
+        const maxX = Math.max(tl.x, br.x);
+        const minY = Math.min(tl.y, br.y);
+        const maxY = Math.max(tl.y, br.y);
+
+        const orbitPhase = (t / CONFIG.MAP_STAR_ORBIT_PERIOD_MS) * Math.PI * 2;
+        const corePulse = 0.5 + 0.5 * Math.sin((t / CONFIG.MAP_STAR_PULSE_MS) * Math.PI);
+
+        for (const node of graph.nodes()) {
+          const attrs = graph.getNodeAttributes(node) as {
+            x: number;
+            y: number;
+            size: number;
+            color?: string;
+          };
+          if (attrs.x < minX || attrs.x > maxX) continue;
+          if (attrs.y < minY || attrs.y > maxY) continue;
+
+          const nodeRadius = sigma.scaleSize(attrs.size);
+          // \u5c0f\u5230\u8a72\u7576\u5c0d\u7576\u5730\u9ede\u5c31\u7565\u904e\uff0c\u9084\u6709\u7d50\u69cb\u69cb\u5713\u53ea\u6703\u96d6\u5e87\u4e0b\u3001\u5beb\u51fa\u4e00\u584a\u6a5f\u96fe /
+          // Below this the node is a speck and the structure just smears, so skip it.
+          if (nodeRadius < CONFIG.MAP_STAR_MIN_RADIUS_PX) continue;
+
+          const color = attrs.color ?? CONFIG.MAP_MOVE_DOT_FALLBACK;
+          const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y });
+          const ringRadius = nodeRadius + CONFIG.MAP_STAR_RING_GAP;
+
+          // \u8f2a\u9053\u73af / The orbital ring
+          ctx.beginPath();
+          ctx.arc(vp.x, vp.y, ringRadius, 0, Math.PI * 2);
+          ctx.strokeStyle = color;
+          ctx.globalAlpha = CONFIG.MAP_STAR_RING_ALPHA;
+          ctx.lineWidth = CONFIG.MAP_STAR_RING_WIDTH;
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+
+          // \u884c\u661f\u9ede\uff1a\u6bcf\u500b\u661f\u7cfb\u4e0a\u51e0\u9ede\u5c0f\u712a\u78c1\u570b\u5728\u8f2a\u9053\u4e0a\u63cf\u570b\u5179 /
+          // Orbiting motes: a few specks circling the orbit on every star system
+          const orbitR = ringRadius * CONFIG.MAP_STAR_ORBIT_RATIO;
+          ctx.fillStyle = color;
+          for (let k = 0; k < CONFIG.MAP_STAR_ORBIT_DOTS; k++) {
+            const a =
+              orbitPhase + (k / CONFIG.MAP_STAR_ORBIT_DOTS) * Math.PI * 2;
+            ctx.beginPath();
+            ctx.arc(
+              vp.x + orbitR * Math.cos(a),
+              vp.y + orbitR * Math.sin(a),
+              1.4,
+              0,
+              Math.PI * 2
+            );
+            ctx.fill();
+          }
+
+          // \u661f\u4e2d\u5fc3\u7684\u67d4\u5149\u8207\u547c\u5438 / The core: a soft halo that breathes
+          ctx.beginPath();
+          ctx.arc(vp.x, vp.y, nodeRadius * (1 + 0.3 * corePulse), 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = CONFIG.MAP_STAR_CORE_GLOW;
+          ctx.globalAlpha = 0.3 + 0.35 * corePulse;
+          ctx.fill();
+          ctx.shadowBlur = 0;
+          ctx.globalAlpha = 1;
+        }
+      }
+
       // 聚光燈：脈動發光環（半徑用 scaleSize 隨鏡頭縮放，永遠畫在節點圓外）
       // Spotlight: pulsing glow ring (radius uses scaleSize so it tracks zoom
       // and always sits outside the node circle)

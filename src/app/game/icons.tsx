@@ -75,6 +75,23 @@ export function EventGlyph({ type }: { type: string }) {
     case 'CHARACTER_MOVED':
       body = <path d="M5 12h14M13 6l6 6-6 6" />;
       break;
+    case 'CHILD_BORN':
+      // 父子：大式圓圓（父）配一個小圓（子） / Father as the larger disc, child as the small one
+      body = (
+        <>
+          <circle cx="12" cy="10" r="5" />
+          <circle cx="12" cy="19" r="2.6" />
+        </>
+      );
+      break;
+    case 'KING_INHERITED':
+      body = (
+        <>
+          <path d="M5 9h14l-1.4 8.4a2 2 0 0 1-2 1.6H8.4a2 2 0 0 1-2-1.6Z" />
+          <path d="m5 9 3.5-3L12 8l3.5-2L19 9" />
+        </>
+      );
+      break;
     case 'DEATH':
     case 'BATTLE_DEATH':
       body = (

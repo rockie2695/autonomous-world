@@ -15,7 +15,7 @@
 // faction power. The character radar is its own panel and ignores the type toggle.
 // ============================================================================
 
-import { useState, useEffect, useRef, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { t } from '@/lib/i18n';
 import { CONFIG } from '@/lib/gameConfig';
 import { apiFetch } from '@/lib/api';
@@ -1090,9 +1090,26 @@ function radarPoints(values: number[], size: number, radius: number): string {
 }
 
 /** 某個軸在雷達圖上的角度 / The angle of one axis on the radar */
-function radarAngle(index: number): number {
-  return -Math.PI / 2 + (index / RADAR_AXES.length) * Math.PI * 2;
-}
+  function radarAngle(index: number): number {
+    return -Math.PI / 2 + (index / RADAR_AXES.length) * Math.PI * 2;
+  }
+
+  /**
+   * The axis the cursor is pointing closest to.
+   *
+   * Inverted from the formula rather than looping over the axes and taking the nearest
+   * one: the axes are evenly spaced, so the pointer angle maps straight onto an axis
+   * index by rounding. The modulo handles negative and out-of-range values.
+   *
+   * @param dx - cursor offset from the centre, horizontally
+   * @param dy - cursor offset from the centre, vertically
+   * @returns the axis index
+   */
+  function nearestRadarAxis(dx: number, dy: number): number {
+    const step = (Math.PI * 2) / RADAR_AXES.length;
+    const raw = Math.round((Math.atan2(dy, dx) + Math.PI / 2) / step);
+    return ((raw % RADAR_AXES.length) + RADAR_AXES.length) % RADAR_AXES.length;
+  }
 
 /** 同心格線：四條軸線各畫四圈 / Concentric grid: four rings along each of the six axes */
 function RadarGrid({ size, radius }: { size: number; radius: number }) {
@@ -1166,6 +1183,15 @@ function characterRadarValues(
  * ability stats), so edge lengths are not comparable across axes — the usual
  * radar caveat: read the shape, not the absolute numbers.
  */
+/**
+ * The enlarged copy of the radar, opened by clicking the sidebar one.
+ *
+ * Enlarged radar geometry. These are viewBox units like HOVER_RADAR_*: the on-screen
+ * size comes from the w-full container, so this only sets the drawing coordinates.
+ */
+const RADAR_BIG_SIZE = 320;
+const RADAR_BIG_RADIUS = 132;
+
 function CharacterRadar({
   characters,
   factions,
@@ -1197,7 +1223,47 @@ function CharacterRadar({
 
   const worldAverage = means(living);
 
+  /**
+   * Hover 讀值：游標指向哪一條軸，就顯示各勢力在那一條軸上的平均。
+   *
+   * 直接在 render 期間算，不放進 effect：在 effect 裡同步 setState 會觸發
+   * cascading-render 規則，而且這裡根本沒有「外部系統」需要同步。
+   *
+   * Computed during render rather than in an effect: setState in an effect trips the
+   * cascading-render rule, and there is no external system here to synchronise with.
+   */
+  const [hoverAxis, setHoverAxis] = useState<number | null>(null);
+  const [enlarged, setEnlarged] = useState(false);
+
+  const hoverRows = useMemo(() => {
+    if (hoverAxis === null) return null;
+    const axis = RADAR_AXES[hoverAxis];
+    return {
+      axis,
+      rows: bySize.map(({ faction, members, values }) => ({
+        label: faction.name,
+        color: faction.color,
+        count: members.length,
+        value: (values ?? [])[hoverAxis] ?? 0,
+      })),
+      worldValue: (worldAverage ?? [])[hoverAxis] ?? 0,
+    };
+  }, [hoverAxis, bySize, worldAverage]);
+
+  /** 指標軸換成整個雷達圖，點一下就開 / The same radar, scaled up; a click opens it */
+  const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width === 0) return;
+    // The viewBox is not the pixel width, so the cursor is converted into viewBox space
+    // before the offset is taken; otherwise the readout points at the wrong axis.
+    const scale = RADAR_SIZE / Math.max(rect.width, 1);
+    const dx = (event.clientX - rect.left) * scale - RADAR_SIZE / 2;
+    const dy = (event.clientY - rect.top) * scale - RADAR_SIZE / 2;
+    setHoverAxis(nearestRadarAxis(dx, dy));
+  };
+
   return (
+    <>
     <ChartFrame title={t('stats.attributes')}>
       {living.length === 0 || bySize.length === 0 ? (
         <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
@@ -1205,9 +1271,29 @@ function CharacterRadar({
         <>
           <svg
             viewBox={`0 0 ${RADAR_SIZE} ${RADAR_SIZE}`}
-            className="w-full max-w-[240px] mx-auto"
             role="img"
             aria-label={t('stats.attributes')}
+            onPointerMove={handlePointerMove}
+            onPointerLeave={() => setHoverAxis(null)}
+            onClick={() => setEnlarged(true)}
+            tabIndex={0}
+            onFocus={() => setHoverAxis(0)}
+            onBlur={() => setHoverAxis(null)}
+            onKeyDown={(e) => {
+              // The radar has to be readable without a pointer: arrow keys walk the axes,
+              // Enter opens the enlarged copy.
+              if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                setHoverAxis((prev) => ((prev ?? -1) + 1) % RADAR_AXES.length);
+              } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                setHoverAxis((prev) => ((prev ?? 1) - 1 + RADAR_AXES.length) % RADAR_AXES.length);
+              } else if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setEnlarged(true);
+              }
+            }}
+            className="w-full max-w-[240px] mx-auto focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60 rounded cursor-zoom-in"
           >
             <RadarGrid size={RADAR_SIZE} radius={RADAR_RADIUS} />
             {/* 勢力多邊形 / Faction polygons */}
@@ -1262,9 +1348,110 @@ function CharacterRadar({
               </li>
             )}
           </ul>
+          {/* 游標指向哪一條軸，就把那條軸的各勢力平均一次列清楚。這正是雷達圖單獨讀不出來的
+              資訊：形狀看得出強弱，數字要靠這裡才拿得到 /
+              Whichever axis the cursor points at, its per-faction means are listed here.
+              This is exactly the information a radar hides: the shape shows strength,
+              the number needs this readout. */}
+          {hoverRows && (
+            <div
+              className={`mt-2 rounded-md border border-white/10 ${GM_PANEL} px-2 py-1.5`}
+              role="status"
+              aria-live="polite"
+            >
+              <div className="flex items-baseline justify-between gap-2 mb-1">
+                <span className="text-[13px] text-gray-200">{t(hoverRows.axis.label)}</span>
+                <span className="text-[10px] text-gray-500 font-mono">
+                  {t('stats.worldAverage')} {hoverRows.worldValue.toFixed(1)}
+                </span>
+              </div>
+              <ul className="space-y-0.5">
+                {hoverRows.rows.map((row) => (
+                  <li
+                    key={row.label}
+                    className="flex items-center gap-1.5 text-[13px] text-gray-400 font-mono"
+                  >
+                    <span
+                      className="w-2 h-2 rounded-[1px] shrink-0"
+                      style={{ backgroundColor: row.color }}
+                    />
+                    <span className="flex-1 truncate">{row.label}</span>
+                    <span className="text-gray-200">{row.value.toFixed(1)}</span>
+                    <span className="text-gray-500 text-[10px]">({row.count})</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </>
       )}
     </ChartFrame>
+    {/* 點擊放大：面板本身是捲動容器，絕對定位的面板會跟著捲走，所以用 DetailModal /
+        Click to enlarge. The panel is a scroll container, so an absolutely positioned
+        overlay would scroll away with it — DetailModal handles the portal. */}
+    <DetailModal
+      open={enlarged}
+      onClose={() => setEnlarged(false)}
+      title={t('stats.attributes')}
+    >
+      <svg
+        viewBox={`0 0 ${RADAR_BIG_SIZE} ${RADAR_BIG_SIZE}`}
+        className="w-full max-w-[420px] mx-auto"
+        role="img"
+        aria-label={t('stats.attributes')}
+      >
+        <RadarGrid size={RADAR_BIG_SIZE} radius={RADAR_BIG_RADIUS} />
+        {bySize.map(({ faction, values }) => (
+          <polygon
+            key={faction.id}
+            points={radarPoints(values ?? [], RADAR_BIG_SIZE, RADAR_BIG_RADIUS)}
+            fill={faction.color}
+            fillOpacity={0.14}
+            stroke={faction.color}
+            strokeWidth={1.5}
+            strokeLinejoin="round"
+          />
+        ))}
+        {worldAverage && (
+          <polygon
+            points={radarPoints(worldAverage, RADAR_BIG_SIZE, RADAR_BIG_RADIUS)}
+            fill="none"
+            stroke="var(--color-ds-cyan)"
+            strokeWidth={1}
+            strokeDasharray="3 2"
+          />
+        )}
+        <RadarAxisLabels size={RADAR_BIG_SIZE} radius={RADAR_BIG_RADIUS} />
+      </svg>
+      {/* 放大版把每條軸的數值都列出來：形狀在這個大小已經好讀，但「多少」仍然要文字 /
+          The enlarged copy lists every axis value: the shape is readable at this size,
+          but "how much" still needs text. */}
+      <ul className="mt-3 space-y-1">
+        {bySize.map(({ faction, members, values }) => (
+          <li key={faction.id} className="text-[13px] text-gray-300 font-mono">
+            <span className="inline-flex items-center gap-1.5 mb-0.5">
+              <span
+                className="w-2 h-2 rounded-[1px]"
+                style={{ backgroundColor: faction.color }}
+              />
+              {faction.name}
+              <span className="text-gray-500">({members.length})</span>
+            </span>
+            <span className="block pl-3.5 text-gray-500">
+              {RADAR_AXES.map((axis, i) => (
+                <span key={axis.key} className="mr-2 inline-block">
+                  {t(axis.label)}
+                  <span className="text-gray-300">
+                    {(values ?? [])[i]?.toFixed(1) ?? '0'}
+                  </span>
+                </span>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </DetailModal>
+    </>
   );
 }
 

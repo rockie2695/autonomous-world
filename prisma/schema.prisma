@@ -149,6 +149,7 @@ model Character {
   alive             Boolean  @default(true)
   isKing            Boolean  @default(false)
   diedAtRound       Int?
+    parentId          String?                    // 父親；null = 非所生 / Father; null = not a child
   signalCooldown    Int      @default(0)     // Rounds before can send signal again / 再次發送訊號的冷卻回合數
   lastPromotedRound Int?                     // Last round when made administrator / 上次晉升為管理者回合
   adminAmbitionRevertRound Int?              // Round when temporary admin ambition -1 reverts / 行政官野心暫時 -1 的回復回合
@@ -163,6 +164,8 @@ model Character {
   discontentsB   Discontent[]   @relation("DiscontentB")
   signalsSent    Signal[]
   ambitionEvents AmbitionEvent[]
+  father            Character?  @relation("Family", fields: [parentId], references: [id])
+  offspring         Character[] @relation("Family")
 }
 
 // Loyalty is a tag only — it does NOT directly affect defection probability.

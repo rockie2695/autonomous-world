@@ -277,6 +277,8 @@ export const en = {
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
+  tab: 'Places',
+  selectPrompt: 'Select a place on the map to see its details',
     name: 'Place Name',
     owner: 'Owner',
     unowned: 'Unowned',
@@ -290,6 +292,7 @@ export const en = {
     upgradeCost: 'Upgrade',
     adminHas: 'Administrator has',
     maxLevel: 'Already at max level',
+    perLevel: 'Per level',
     perRound: 'Yield per round',
     recruitsToGarrison: 'Recruits (into the garrison)',
     incomeTotal: 'Total income',
@@ -310,6 +313,10 @@ export const en = {
       incomeDesc: '{place} earned {gold} gold, recruited {recruits} troops (garrison {total})',
       incomeLeader: '{leader} received {gold} gold (now {total})',
       troopsBought: '{leader} bought {bought} troops at {place} for {cost} gold ({gold} gold and {troops} troops left)',
+      childBornDesc: '{father} had a child: {character}',
+      loadOlder: 'Load {count} older events',
+      newEvents: 'New events ▼',
+      kingInheritedDesc: '{character} succeeded {father} as king',
       reportTitle: 'Battle report',
       reportAttack: 'Attack',
       reportDefence: 'Defence',

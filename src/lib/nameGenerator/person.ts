@@ -184,3 +184,90 @@ export function generateUniquePersonName(
   }
   return null;
 }
+
+/**
+ * 取一個人名的「姓」部分。 / The surname part of a person name.
+ *
+ * 公司不同的名字結構就不同，所以該成結構需要分別處理：
+ * - classic 風格是 `[姓][名]`，姓就是第一个字 / classic is `surname + given`, so the surname is the first character
+ * - 稱號風格是 `[稱號]·[外來名]`，姓相当於「·」之前的稱號 / epithet is `epithet·foreign`,
+ *   where the part before the separator plays the role of the surname
+ *
+ * 子女要綟父間的姓，就必須能分別邊两種風格，否則「綟父姓」不截然有意。
+ * A child inherits the surname, so both styles have to be told apart — otherwise the rule
+ * is quietly meaningless for half the population.
+ *
+ * @param name - 完整的人名 / A full person name
+ * @returns 姓部分 / the surname part
+ */
+export function surnameOf(name: string): string {
+  const sep = name.indexOf(EPITHET_SEPARATOR);
+  return sep === -1 ? name.slice(0, 1) : name.slice(0, sep);
+}
+
+/**
+ * 用從父的姓生一個子女的名字：姓相同，名不同。
+ * A child name from the father: same surname, different given name.
+ *
+ * 子女不能跟父間同名，所以名字部分必須排除父亲的名字。
+ * A child cannot share the father's full name, so the given part is rejected against it.
+ *
+ * @param rng - 种子 RNG / Seeded RNG
+ * @param fatherName - 父間的完整名字 / the father's full name
+ * @param taken - 已使用的名字 / names already in use
+ * @returns 唯一的子女名，或 null（命名空間耗尽） / a unique child name, or null when exhausted
+ */
+export function generateChildName(
+  rng: Rng,
+  fatherName: string,
+  taken: ReadonlySet<string>
+): string | null {
+  const sep = fatherName.indexOf(EPITHET_SEPARATOR);
+
+  const build = (): string => {
+    if (sep !== -1) {
+      // 稱號風格：沿用父亲的稱號，只换外來名 / Epithet style: keep the father's epithet, change only the foreign name
+      const epithet = fatherName.slice(0, sep);
+      const given = rng.pick([...FOREIGN_GIVEN_NAMES]) ?? '蓋爾';
+      return `${epithet}${EPITHET_SEPARATOR}${given}`;
+    }
+    // 字長風格：沿用姓，重抽名 / Classic style: keep the surname, redraw the given name
+    const surname = surnameOf(fatherName);
+    const given1 = rng.pick(GIVEN_CHARS) ?? '飛';
+    return rng.chance(0.2)
+      ? `${surname}${given1}${rng.pick(GIVEN_CHARS) ?? '雲'}`
+      : `${surname}${given1}`;
+  };
+
+  // 階機快速路徑 / Fast random path
+  for (let attempt = 0; attempt < 64; attempt++) {
+    const name = build();
+    if (name !== fatherName && !taken.has(name)) return name;
+  }
+
+  // 確定性掃描：姓固定，只走名的空間 / Deterministic scan: the surname is fixed, so walk the given-name space
+  if (sep !== -1) {
+    const epithet = fatherName.slice(0, sep);
+    const start = rng.int(0, FOREIGN_GIVEN_NAMES.length - 1);
+    for (let i = 0; i < FOREIGN_GIVEN_NAMES.length; i++) {
+      const given = FOREIGN_GIVEN_NAMES[(start + i) % FOREIGN_GIVEN_NAMES.length];
+      const name = `${epithet}${EPITHET_SEPARATOR}${given}`;
+      if (name !== fatherName && !taken.has(name)) return name;
+    }
+    return null;
+  }
+
+  const surname = surnameOf(fatherName);
+  const start = rng.int(0, GIVEN_CHARS.length - 1);
+  for (let i = 0; i < GIVEN_CHARS.length; i++) {
+    const name = `${surname}${GIVEN_CHARS[(start + i) % GIVEN_CHARS.length]}`;
+    if (name !== fatherName && !taken.has(name)) return name;
+  }
+  for (let i = 0; i < GIVEN_CHARS.length; i++) {
+    for (let j = 0; j < GIVEN_CHARS.length; j++) {
+      const name = `${surname}${GIVEN_CHARS[i]}${GIVEN_CHARS[j]}`;
+      if (name !== fatherName && !taken.has(name)) return name;
+    }
+  }
+  return null;
+}

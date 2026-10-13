@@ -276,6 +276,8 @@ export const zh = {
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
+  tab: '地點',
+  selectPrompt: '在地圖上點選一個地方看詳情',
     name: '地方名稱',
     owner: '所屬勢力',
     unowned: '無主之地',
@@ -289,6 +291,7 @@ export const zh = {
     upgradeCost: '升級費用',
     adminHas: '行政官現有',
     maxLevel: '已達最高等級',
+    perLevel: '每級庫效果',
     perRound: '每回合產出',
     recruitsToGarrison: '徵兵（加入駐軍）',
     incomeTotal: '總收入',
@@ -309,6 +312,10 @@ connections: '連接道路',
       incomeDesc: '{place} 收益 {gold} 金、徵兵 {recruits}（駐軍 {total}）',
       incomeLeader: '{leader} 得 {gold} 金（現有 {total} 金）',
       troopsBought: '{leader} 於 {place} 購兵 {bought} 名，花費 {cost} 金（餘 {gold} 金，兵 {troops}）',
+      childBornDesc: '{father}的子喣出生：{character}',
+      loadOlder: '載入更早的 {count} 絆',
+      newEvents: '新消息 ▼',
+      kingInheritedDesc: '{character}接任了父亲 {father} 的王位',
       reportTitle: '戰報',
       reportAttack: '進攻',
       reportDefence: '防守',

@@ -14,7 +14,7 @@
 // if a name becomes a clickable button.
 // ============================================================================
 
-import { useState, useMemo, Fragment, type ReactNode } from 'react';
+import { useState, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { t } from '@/lib/i18n';
 import { BattleReport, type BattleReportData } from './BattleReport';
@@ -80,12 +80,14 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   CHARACTER_SPAWNED: 'character',
   CHARACTER_MOVED: 'character',
   DEATH: 'character',
+  CHILD_BORN: 'character',
   DEFECTION: 'character',
   BUILDING_UPGRADE: 'economy',
   INCOME: 'economy',
   TROOPS_BOUGHT: 'economy',
   FACTION_COLLAPSE: 'faction',
   FACTION_ELIMINATED: 'faction',
+  KING_INHERITED: 'faction',
   ADMIN_ASSIGNED: 'admin',
   ADMIN_REMOVED: 'admin',
   AMBITION_RECOVERED: 'admin',
@@ -244,6 +246,124 @@ export function EventLog({
     [events, categoryFilter, infoFilter, factionFilter, factionOfEvent]
   );
 
+  /**
+   * 舊的在上、新的在下（聊天式）。
+   *
+   * 來源 API 是新到舊，所以直接畫會讓最新的一條在最上面；使用者要往**上**捲才看得到
+   * 最新的訊息。這裡反轉成由舊到新，於是「往上捲 = 看更早」與「最新在底部」一致。
+   * Oldest on top, newest at the bottom, chat-style.
+   *
+   * The API returns newest-first, so drawing it as-is puts the newest row at the very top
+   * and makes the reader scroll *up* to reach it. Reversing puts the newest at the bottom,
+   * so "scroll up for older" and "new messages arrive below" are the same gesture.
+   */
+  const ordered = useMemo(() => [...filtered].reverse(), [filtered]);
+
+  /**
+   * 顯示的是 `ordered` 的**最後** visibleCount 筆，而不是前 visibleCount 筆。
+   * 取尾端代表一開始看到的是最新的那一段，往上捲才把更早的補進來——若取前端，
+   * 一進去看到的會是最舊的事件，等於要捲很久才看得到剛發生的事。
+   *
+   * The window is the LAST visibleCount entries, not the first: that way the reader lands on
+   * the newest events and scrolling up brings in older ones. Taking the head would open on
+   * the oldest events and bury whatever just happened.
+   */
+  const shown = useMemo(
+    () => ordered.slice(Math.max(0, ordered.length - visibleCount)),
+    [ordered, visibleCount]
+  );
+  const hasOlder = ordered.length > visibleCount;
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  /** 往上捲載入更早的事件時，記下捲動錨點，否則畫面會整段往上跳 / Scroll anchor captured
+   *  before older events are prepended, or the viewport jumps */
+  const anchorRef = useRef<{ height: number; top: number } | null>(null);
+  /**
+   * 是否貼在底部。這裡必須用 state 而不是每次去量 DOM：onScroll 是事件處理器，在那裡
+   * setState 沒有問題，但在 effect 裡同步 setState 會觸發 cascading-render 規則。
+   *
+   * Whether the reader is pinned to the bottom. This has to be state rather than a DOM read
+   * at decision time: setState in an event handler is fine, setState in an effect is not.
+   */
+  const [pinnedToBottom, setPinnedToBottom] = useState(true);
+  const [pendingNew, setPendingNew] = useState(false);
+
+  const atBottom = (el: HTMLDivElement | null) => {
+    if (!el) return true;
+    // 留一點餘裕：像素完全相等時使用者多半只是在底部附近 / A little slack, because
+    // sitting exactly at the bottom is rare and "nearly there" should still count
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  };
+
+  const loadOlder = () => {
+    const el = scrollRef.current;
+    if (el) anchorRef.current = { height: el.scrollHeight, top: el.scrollTop };
+    setPage((p) => ({
+      key: filterKey,
+      count: (p.key === filterKey ? p.count : CONFIG.EVENT_LOG_PAGE_SIZE) +
+        CONFIG.EVENT_LOG_PAGE_SIZE,
+    }));
+  };
+
+  // 補上更早的事件之後，把視線釘回原本那筆上。少了這一步，捲到頂會看到畫面整片跳走。
+  // Re-anchor after older rows are prepended; without this the view jumps on every load.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const anchor = anchorRef.current;
+    if (!el || !anchor) return;
+    anchorRef.current = null;
+    const delta = el.scrollHeight - anchor.height;
+    if (delta !== 0) el.scrollTop = anchor.top + delta;
+  }, [shown]);
+
+  /**
+   * 初次開啟時捷到最底，讓最新的一條可見。
+   *
+   * 日誌是由旧到新（最新在底下），所以初始位置会落在最謝。這一次性的捷動用
+   * layout effect：用景覺經過 DOM 已經排版，扇動位置才有意怛（用了 effect 時容器可能還沒有高度）。
+   *
+   * Scroll to the bottom once, on first open, so the newest row is visible. The log runs
+   * oldest-to-newest, so the initial position lands on the oldest. This is a layout
+   * effect because the container has to be measured after layout; in a plain effect it
+   * can still have zero height.
+   */
+  const didInitialScrollRef = useRef(false);
+  useLayoutEffect(() => {
+    if (didInitialScrollRef.current) return;
+    if (shown.length === 0) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    didInitialScrollRef.current = true;
+    el.scrollTop = el.scrollHeight;
+  }, [shown]);
+
+  /**
+   * 新回合帶來新事件時：讀者本來就在底部就直接捲到底，不在底部就不要硬拉，給一個提示就好。
+   * When a new round brings events: auto-scroll only if the reader was already at the bottom.
+   * Yanking someone away from what they were reading is the thing chat UIs are careful about.
+   */
+  const newestKey = ordered.length > 0 ? ordered[ordered.length - 1].id : '';
+  const [seenNewest, setSeenNewest] = useState('');
+
+  // 在 render 期間比較，而不是在 effect 裡 setState：這是 React 說的「adjusting state
+  // when a prop changes」，本專案的 useChangedKeys 也是這麼做的。effect 裡同步 setState
+  // 會被 cascading-render 規則擋下。
+  //
+  // Compared during render rather than set in an effect: this is React's documented
+  // "adjusting state when a prop changes", and the same idiom useChangedKeys uses here.
+  if (newestKey !== '' && newestKey !== seenNewest) {
+    setSeenNewest(newestKey);
+    if (!pinnedToBottom) setPendingNew(true);
+  }
+
+  // 這個 effect 只動 DOM（捲動），不 setState / This effect only writes to the DOM; it
+  // never sets state, which is what keeps it clear of the cascading-render rule.
+  useEffect(() => {
+    if (!pinnedToBottom) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [newestKey, pinnedToBottom]);
+
   const filtersActive =
     factionFilter !== 'all' ||
     categoryFilter.size !== EVENT_CATEGORIES.length ||
@@ -307,6 +427,16 @@ export function EventLog({
           character: leaderNode(p.charId, p.charName),
           from: placeNode(p.fromPlaceId, p.fromPlaceName),
           to: placeNode(p.toPlaceId, p.toPlaceName),
+        });
+      case 'CHILD_BORN':
+        return fillTemplate(t('events.childBornDesc'), {
+          character: leaderNode(p.charId, p.charName),
+          father: leaderNode(p.fatherId, p.fatherName),
+        });
+      case 'KING_INHERITED':
+        return fillTemplate(t('events.kingInheritedDesc'), {
+          character: leaderNode(p.charId, p.charName),
+          father: leaderNode(p.fatherId, p.fatherName),
         });
       case 'DEATH':
         return fillTemplate(t('events.deathDesc'), { character: leaderNode(p.charId, p.charName) });
@@ -604,7 +734,30 @@ export function EventLog({
       </div>
 
       {/* 所有回合的事件，高度加倍以便瀏覽 / All rounds' events, doubled height for browsing */}
-      <div className="space-y-0.5 max-h-80 overflow-y-auto ds-gm-scroll">
+      <div
+        ref={scrollRef}
+        onScroll={() => {
+          const el = scrollRef.current;
+          if (!el) return;
+          // 貼底狀態在事件裡更新：setState 放在事件處理器沒有 cascading-render 的問題，
+          // 後面「要不要自動捲底」與「要不要顯示新訊息提示」都以它為準 /
+          // Pinned-to-bottom is tracked here, in the event handler, where setState is fine.
+          // Both the auto-scroll and the "new events" pill read it.
+          const nowPinned = atBottom(el);
+          setPinnedToBottom(nowPinned);
+          // 使用者自己捲到底，代表已經追上最新消息，提示就沒必要了 /
+          // Scrolling to the bottom by hand means the reader has caught up, so the pill goes
+          if (nowPinned) setPendingNew(false);
+
+          // 捲到接近頂端就把更早的事件補上來 / Scrolling near the top pulls in older events.
+          // 46px 是一列的高度上下：真的碰到 0 會在彈回時反覆觸發 /
+          // 46px is about a row: firing at exactly 0 re-triggers on every bounce back
+          if (hasOlder && el.scrollTop < 46) {
+            loadOlder();
+          }
+        }}
+        className="space-y-0.5 max-h-80 overflow-y-auto ds-gm-scroll"
+      >
         {isLoading && (
           <div className="space-y-1.5 pt-1" aria-busy="true" aria-label={t('general.loading')}>
             {[92, 78, 85, 64, 90].map((w, i) => (
@@ -621,7 +774,21 @@ export function EventLog({
         {!isLoading && events.length > 0 && filtered.length === 0 && (
           <p className="text-gray-400 text-xs">{t('events.filteredOut')}</p>
         )}
-        {filtered.slice(0, visibleCount).map((event) => (
+        {/* 更早的事件在**上方**，因為新的在下方。往上捲到頂會自動載入，這顆按鈕只是
+            給不能捲（鍵盤、觸控板慣性）的人一個明確入口 /
+            Older rows sit ABOVE, because newer ones arrive below. Scrolling to the top loads
+            them automatically; this button is the explicit affordance for anyone who cannot
+            scroll (keyboard, trackpad inertia). */}
+        {hasOlder && (
+          <button
+            type="button"
+            onClick={loadOlder}
+            className={`${GM_BTN} w-full mb-2 py-2 text-xs font-orbitron tracking-wider`}
+          >
+            {t('events.loadOlder', { count: ordered.length - visibleCount })}
+          </button>
+        )}
+        {shown.map((event) => (
           <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:auto_44px]">
             <EventGlyph type={event.type} />
             {/* 回合徽章：所有回合的事件需標示來源回合 / Round badge: all-rounds events need their source round */}
@@ -653,18 +820,26 @@ export function EventLog({
             )}
           </div>
         ))}
-        {filtered.length > visibleCount && (
+      </div>
+      {/* 讀者不在底部時，新事件不會把人硬拉下去，只在底部給一個提示；有焦點時也不能
+          搶走焦點，所以用 pointer-events-none 的非互動容器以外的獨立按鈕 /
+          When the reader is not at the bottom, new events do not yank them down — they get a
+          pill at the bottom instead. The pill is a real button so keyboard users reach it. */}
+      {pendingNew && (
+        <div className="flex justify-center -mt-1 mb-1">
           <button
             type="button"
-            onClick={() =>
-              setPage({ key: filterKey, count: visibleCount + CONFIG.EVENT_LOG_PAGE_SIZE })
-            }
-            className={`${GM_BTN} w-full mt-2 py-2 text-xs font-orbitron tracking-wider`}
+            onClick={() => {
+              const el = scrollRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+              setPendingNew(false);
+            }}
+            className={`${GM_BTN} rounded-full px-3 py-1 text-[10px] font-orbitron tracking-wider`}
           >
-            載入更多（{filtered.length - visibleCount}）
+            {t('events.newEvents')}
           </button>
-        )}
-      </div>
+        </div>
+      )}
       {openReport && (
         <BattleReport
           charName={openReport.charName}

@@ -39,6 +39,7 @@ import { recalculateLayout, shouldRecalculate } from './graph/layout';
 import { spawnPlaces } from './phases/spawnPlaces';
 import { spawnCharacters } from './phases/spawnCharacters';
 import { ageAndDeath } from './phases/ageAndDeath';
+import { childbirth } from './phases/childbirth';
 import { economy } from './phases/economy';
 import { signals } from './phases/signals';
 import { relationships } from './phases/relationships';
@@ -63,6 +64,7 @@ export interface RoundResult {
   events: number;             // 產生的事件數 / Number of events generated
   charactersSpawned: number;
   charactersDied: number;
+  charactersBorn: number;
   battlesFought: number;
   defections: number;
 }
@@ -101,6 +103,7 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   // 追蹤結果 / Track results
   let charactersSpawned = 0;
   let charactersDied = 0;
+  let charactersBorn = 0;
   let battlesFought = 0;
   let defections = 0;
 
@@ -115,6 +118,17 @@ export async function runRound(worldId: string): Promise<RoundResult> {
 
   // ── 階段 3：年齡和死亡 / Phase 3: Age and Death ─────────────────────────
   charactersDied = await ageAndDeath(worldId, currentRound, rng);
+
+  // ── 階段 3.5：生育 / Phase 3.5: Childbirth ───────────────────────────────
+  // 必須在階段 3（老化與死亡）**之後**：若在本回合才生下的孩子立刻繼承剛死的王位，
+  // 那個孩子出生的瞬間就會成為君王，等於「生育」變成復活術。先老化死亡、判斷繼承，
+  // 再生子，繼承判斷才只看得到**上一回合就存在**的孩子。
+  // Must run AFTER phase 3 (age and death): a child conceived in the same round must not
+  // inherit from a parent who just died, or the child would become king the instant it was
+  // born and childbirth would be a resurrection spell. Age and death decide inheritance
+  // first, so the heir search only ever sees children that already existed.
+  const bornIds = await childbirth(worldId, currentRound, rng);
+  charactersBorn = bornIds.length;
 
   // ── 階段 4：經濟 / Phase 4: Economy ───────────────────────────────────
   await economy(worldId, currentRound, rng);
@@ -186,6 +200,7 @@ export async function runRound(worldId: string): Promise<RoundResult> {
     events: 0, // TODO: 從 Event 表統計實際事件數 / Count actual events from Event table
     charactersSpawned,
     charactersDied,
+    charactersBorn,
     battlesFought,
     defections,
   };

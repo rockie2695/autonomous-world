@@ -5,6 +5,8 @@ import {
   generatePersonNames,
   generateUniquePersonName,
   generateEpithetPersonName,
+  surnameOf,
+  generateChildName,
 } from './person';
 import { EPITHET_COUNT, EPITHET_SEPARATOR, epithetAt } from './epithet';
 
@@ -210,5 +212,80 @@ describe('Person Name Generator', () => {
       const uniqueNames = new Set(names);
       expect(uniqueNames.size).toBeLessThanOrEqual(100);
     });
+  });
+});
+
+describe('surnameOf', () => {
+  it('should take the first character of a classic name', () => {
+    expect(surnameOf('張飛')).toBe('張');
+    expect(surnameOf('張飛雲')).toBe('張');
+  });
+
+  it('should take the part before the separator in an epithet name', () => {
+    const name = generateEpithetPersonName(createRng('epithet-probe'));
+    expect(name).toContain(EPITHET_SEPARATOR);
+    expect(surnameOf(name)).toBe(name.split(EPITHET_SEPARATOR)[0]);
+  });
+
+  it('should return the whole name when there is no separator', () => {
+    expect(surnameOf('王')).toBe('王');
+  });
+});
+
+describe('generateChildName', () => {
+  it('should keep the surname and differ in the given name', () => {
+    const taken = new Set<string>();
+    for (let i = 0; i < 300; i++) {
+      const father = generatePersonName(createRng('father-' + i));
+      const child = generateChildName(createRng('child-' + i), father, taken);
+      expect(child).not.toBeNull();
+      // 同姓不同名：姓必須一致，名字必須不同 / same surname, different given name
+      expect(surnameOf(child as string)).toBe(surnameOf(father));
+      expect(child).not.toBe(father);
+    }
+  });
+
+  it('should never reuse the name of a living character', () => {
+    const taken = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const father = generatePersonName(createRng('taken-father-' + i));
+      const child = generateChildName(createRng('taken-child-' + i), father, taken);
+      if (child === null) continue;
+      expect(taken.has(child)).toBe(false);
+      taken.add(child);
+    }
+  });
+
+  it('should produce a different name from the father every time', () => {
+    const father = generatePersonName(createRng('no-clone'));
+    for (let i = 0; i < 100; i++) {
+      expect(generateChildName(createRng('c-' + i), father, new Set())).not.toBe(father);
+    }
+  });
+
+  it('should return null when the name space is exhausted', () => {
+    // 把這個稱號可搭配的外來名全部佔滿，快速路徑與確定性掃描都只能空手 /
+    // Occupy every foreign given name available to this epithet, so both the
+    // 64-try fast path and the deterministic scan come up empty.
+    const father = generateEpithetPersonName(createRng('exhaust'));
+    const epithet = surnameOf(father);
+    const taken = new Set<string>([father]);
+    for (let i = 0; i < 4000; i++) {
+      const given = generateEpithetPersonName(createRng('probe-' + i)).split(
+        EPITHET_SEPARATOR
+      )[1];
+      if (given) taken.add(epithet + EPITHET_SEPARATOR + given);
+    }
+    expect(generateChildName(createRng('none-left'), father, taken)).toBeNull();
+  });
+
+  it('should keep a classic father on the classic style and an epithet father on the epithet style', () => {
+    // 稱號風格的父親不能生出傳統風格的孩子，反之亦然：那是換了一個人 /
+    // An epithet father must not produce a classic child and vice versa — that
+    // would be a different person, not an heir.
+    const father = generateEpithetPersonName(createRng('style-epithet'));
+    const child = generateChildName(createRng('style-child'), father, new Set());
+    expect(child).not.toBeNull();
+    expect(child as string).toContain(EPITHET_SEPARATOR);
   });
 });

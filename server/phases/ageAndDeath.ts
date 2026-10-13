@@ -85,7 +85,51 @@ export async function ageAndDeath(
   const deadKings = elderly.filter((c) => c.isKing);
 
   for (const king of deadKings) {
-    if (king.factionId) {
+    if (!king.factionId) continue;
+
+    /**
+     * 王位繼承：有子女時由**最年長**的子女繼承，沒有子女才走原本的崩解流程。
+     *
+     * Throne inheritance: the OLDEST child takes the throne; with no child the faction
+     * collapses exactly as it always did. Ordering by age is the first-born test, because a
+     * child born in round 5 is older than one born in round 10 by the same number of rounds.
+     *
+     * 「沒有子女就走原本行為」是刻意的：繼承只**增加**一條路徑，不能改掉原本沒有繼承者
+     * 時的規則，否則舊的崩解機制會被悄悄吃掉。
+     * "No children keeps the original behaviour" is deliberate: inheritance only ADDS a path,
+     * so it cannot quietly swallow the collapse rule when there is no heir.
+     */
+    const heir = await prisma.character.findFirst({
+      where: { parentId: king.id, alive: true },
+      orderBy: { age: 'desc' },
+      select: { id: true, name: true },
+    });
+
+    if (heir) {
+      await prisma.character.update({
+        where: { id: heir.id },
+        data: { isKing: true },
+      });
+      await prisma.faction.update({
+        where: { id: king.factionId },
+        data: { kingId: heir.id },
+      });
+
+      await prisma.event.create({
+        data: {
+          worldId,
+          round,
+          type: 'KING_INHERITED',
+          data: {
+            charId: heir.id,
+            charName: heir.name,
+            fatherId: king.id,
+            fatherName: king.name,
+            factionId: king.factionId,
+          },
+        },
+      });
+    } else {
       await prisma.faction.update({
         where: { id: king.factionId },
         data: { collapsing: true },

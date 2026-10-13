@@ -26,7 +26,6 @@ import {
   BUILDING_MAX_LEVEL,
   buildingPerLevel,
   buildingTotal,
-  nextUpgradeGain,
   placeIncome,
   placeRecruits,
   upgradeCost,
@@ -241,8 +240,21 @@ export default function GamePage() {
   const popup = popupStack.length > 0 ? popupStack[popupStack.length - 1] : null;
   const selectedPlace = popup && popup.kind === 'place' ? popup.place : null;
   const detailChar = popup && popup.kind === 'leader' ? popup.char : null;
-  const openPlace = (place: WorldState['places'][0]) =>
+  /**
+   * 點地圖上的地點時，除了把選取推到 stack，還要**切到「地點」分頁並打開面板**。
+   *
+   * 地點詳情現在是右欄分頁的內容，不再是浮動彈窗；所以只推 stack 的話，點了地圖節點
+   * 之後畫面不會有任何變化——選取已經發生了，卻沒有任何東西顯示它。
+   *
+   * Selecting a place now has to switch to the 地點 tab and open the panel as well. The
+   * place detail is the tab's content rather than a floating popup, so pushing the stack
+   * alone would leave the selection invisible: it would happen, and nothing would show it.
+   */
+  const openPlace = (place: WorldState['places'][0]) => {
     setPopupStack((stack) => [...stack, { kind: 'place', place }]);
+    setRightTab('places');
+    setRightPanelOpen(true);
+  };
   const openLeader = (char: WorldState['characters'][0]) =>
     setPopupStack((stack) => [...stack, { kind: 'leader', char }]);
   const closePopup = () => setPopupStack([]);
@@ -378,7 +390,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
   //
   // No panel open by default: the map is the subject on arrival, and a panel that is
   // already open would cover it.
-  const [rightTab, setRightTab] = useState<'characters' | 'events' | 'stats' | null>(null);
+  const [rightTab, setRightTab] = useState<SideTab | null>(null);
 
   /**
    * 面板只有在**已經選了分頁**時才算開啟。
@@ -935,30 +947,28 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
               />
             </>
           )}
+          {rightTab === 'places' && (
+            // The place detail is now the 地點 tab's content rather than a floating
+            // popup: it used to cover the map it was describing, and the rail already
+            // exists, so there was no reason for a second surface.
+            <PlaceDetail
+              place={selectedPlace}
+              factions={worldState?.factions ?? []}
+              characters={worldState?.characters ?? []}
+              roads={worldState?.roads ?? []}
+              places={worldState?.places ?? []}
+              onClose={closePopup}
+              canGoBack={popupStack.length > 1}
+              onBack={popupBack}
+              onOpenPlace={openPlace}
+              onOpenLeader={openLeader}
+            />
+          )}
         </MapSidePanel>
         </main>
 
       </div>
 
-      {/* ── 地方詳情彈窗 / Place Detail Panel ───────────────────────────────── */}
-      {/* 地點詳情彈窗（含淡出動畫）/ Place detail popup (with fade-out exit) */}
-      <AnimatePresence>
-        {selectedPlace && (
-          <PlaceDetail
-            key="place-detail"
-            place={selectedPlace}
-            factions={worldState?.factions ?? []}
-            characters={worldState?.characters ?? []}
-            roads={worldState?.roads ?? []}
-            places={worldState?.places ?? []}
-            onClose={closePopup}
-            canGoBack={popupStack.length > 1}
-            onBack={popupBack}
-            onOpenPlace={openPlace}
-            onOpenLeader={openLeader}
-          />
-        )}
-      </AnimatePresence>
 
       {/* 單一將領詳情：表格點列與事件日誌點人名共用 / Single-leader detail, shared by leader-table rows and event-log names */}
       <DetailModal
@@ -1072,7 +1082,7 @@ function useLoadMoreOnScroll(
   return sentinelRef;
 }
 
-type SideTab = 'characters' | 'events' | 'stats';
+type SideTab = 'characters' | 'events' | 'stats' | 'places';
 
 /** 將領表可排序的欄位 / the sortable columns of the leader table */
 type LeaderSortKey =
@@ -1154,6 +1164,16 @@ function useSideTabs(): Array<{ key: SideTab; label: string; icon: ReactNode }> 
         <>
           <path d="M5 20V11M12 20V5M19 20v-7" />
           <path d="M3.5 20.5h17" />
+        </>
+      ),
+    },
+    {
+      key: 'places' as const,
+      label: t('place.tab'),
+      icon: (
+        <>
+          <circle cx="12" cy="12" r="2.5" />
+          <ellipse cx="12" cy="12" rx="9" ry="4" />
         </>
       ),
     },
@@ -1938,7 +1958,7 @@ function PlaceDetail({
   onOpenPlace,
   onOpenLeader,
 }: {
-  place: WorldState['places'][0];
+  place: WorldState['places'][0] | null;
   factions: WorldState['factions'];
   characters: WorldState['characters'];
   roads: WorldState['roads'];
@@ -1949,6 +1969,62 @@ function PlaceDetail({
   onOpenPlace: (place: WorldState['places'][0]) => void;
   onOpenLeader: (char: WorldState['characters'][0]) => void;
 }) {
+/**
+ * Which building's per-level breakdown is expanded, or none.
+ *
+ * 建築列一開始只顯示「等級 + 目前效果」，每一級的效果表在 hover / focus / click
+ * 時才展開。全部攤開會把真正要看的兩個數字（現在幾級、升一級多少錢）埋掉。
+ * A building row shows only its level and current effect; the per-level table expands
+ * on hover, focus or click. Listing every level up front buried the two numbers the
+ * reader actually came for.
+ *
+ * 這個 state 必須在 `if (!place)` **之前**：hook 不能條件式呼叫，否則有選中／沒選中
+ * 會走不一樣的 hook 順序。
+ * This state must sit ABOVE the `if (!place)` guard: hooks cannot be called
+ * conditionally, and "a place is selected" vs "none" would otherwise change the order.
+ */
+/**
+ * Which building's per-level breakdown is expanded, or none.
+ *
+ * 建立列一開始只顯示「等級 + 目前效果」，每一級的效果表在 hover / focus / click
+ * 時才展開。全部擊開會把真正要看的兩個數字（現在幾級、升一級多少錢）埋掉。
+ * A building row shows only its level and current effect; the per-level table expands
+ * on hover, focus or click. Listing every level up front buried the two numbers the
+ * reader actually came for.
+ *
+ * 這個 state 必須在 `if (!place)` **之前**：hook 不能條件式呼叫，否則有選中／沒選中
+ * 會走不一樣的 hook 順序。
+ * This state must sit ABOVE the `if (!place)` guard: hooks cannot be called
+ * conditionally, and "a place is selected" vs "none" would otherwise change the order.
+ */
+const [pinnedBuilding, setPinnedBuilding] = useState<BuildingKind | null>(null);
+const [hoveredBuilding, setHoveredBuilding] = useState<BuildingKind | null>(null);
+
+/**
+ * Pinned wins over hovered. These are two separate states on purpose: a single "open"
+ * state cannot serve both, because hover opens the row and the click that follows then
+ * lands on an already-open row and immediately closes it again. Measured — the row
+ * expanded on mouse-enter and collapsed again on the very next click.
+ *
+ * 分成兩個狀態是必要的：單一個 open 無法同時服務 hover 與 click，因為 hover 開完後緊接的
+ * click 來到已開啟的列，立即把它關掉。分开來結果就是：鼠横移開伀默認開的那一列，
+ * 體素後仍可以固定住。
+ */
+const openBuilding = pinnedBuilding ?? hoveredBuilding;
+
+  // 還沒選地點時的空白狀態。這個面板現在是「地點」分頁的內容，所以「沒有選中」是一個
+  // 正常狀態，不是錯誤——原本它是浮動彈窗，根本不會在沒有選中時存在 /
+  // The no-place-selected state. This panel is now the 地點 tab's content, so "nothing
+  // selected" is a normal state rather than an error — as a floating popup it simply
+  // did not exist when nothing was selected.
+  if (!place) {
+    return (
+      <div className={`${GM_PANEL} px-3 py-10 text-center`}>
+        <p className="text-base text-gray-400">{t('place.selectPrompt')}</p>
+      </div>
+    );
+  }
+
   const faction = factions.find((f) => f.id === place.factionId);
   const placeChars = characters.filter(
     (c) => c.placeId === place.id && c.alive
@@ -1990,21 +2066,12 @@ function PlaceDetail({
 
   return (
     <motion.div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm"
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      transition={{ duration: 0.2 }}
-      onClick={onClose}
+      className={`relative w-full ${GM_MODAL} overflow-hidden`}
+      initial={{ opacity: 0, x: 28 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 28 }}
+      transition={{ duration: 0.2, ease: 'easeOut' }}
     >
-      <motion.div
-        className={`relative max-w-md w-full mx-4 ${GM_MODAL} overflow-hidden shadow-2xl shadow-black/60`}
-        initial={{ opacity: 0, scale: 0.95, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 12 }}
-        transition={{ duration: 0.2, ease: 'easeOut' }}
-        onClick={(e) => e.stopPropagation()}
-      >
         {/* 影像標頭 / Imagery header */}
         <div className="relative h-24 overflow-hidden">
           <Image
@@ -2076,52 +2143,133 @@ function PlaceDetail({
             </div>
           )}
 
-          {/* 建築資訊：每一級的效果、升級費用 / Buildings: what each level does, and what an upgrade costs */}
+          {/* 建築資訊：每棟一列，等級與目前效果常駐；每一級的效果表在 hover / focus /
+              click 時才展開，並把目前等級標成 active。新的互動（hover / focus / click）
+              同時取代了 hover 與 click，所以觸控也能用同一顆按鈕 /
+              Buildings: one compact row each, level and current effect always visible; the
+              per-level table expands on hover, focus or click with the current level marked
+              active. Hover, focus and click all toggle the same one-row disclosure, so touch
+              gets the identical control instead of a second one. */}
           <div>
             <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.buildings')}</div>
             <div className="space-y-1.5">
               {BUILDING_ROWS.map((row) => {
                 const level = place[row.kind];
                 const per = buildingPerLevel(row.kind);
-                const gain = nextUpgradeGain(row.kind, level);
                 const cost = level >= BUILDING_MAX_LEVEL ? null : upgradeCost(level);
+                const expanded = openBuilding === row.kind;
+                const affordable = adminChar !== null && adminChar.gold >= (cost ?? 0);
                 return (
                   <div
                     key={row.kind}
-                    className="rounded-lg bg-white/5 border border-white/10 px-2.5 py-1.5"
+                    className="rounded-lg bg-white/5 border border-white/10 overflow-hidden"
                   >
-                    <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-base text-gray-300">{t(row.labelKey)}</span>
-                      <span className="font-orbitron text-base text-cyan-300 tabular-nums">
-                        {t('place.level')} {level}/{BUILDING_MAX_LEVEL}
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      // 點擊＝固定，hover＝預覽。固定之後滑鼠移開也不會收起 / Click pins, hover only
+                      // previews, so a pinned row survives the pointer leaving the row
+                      onClick={() => setPinnedBuilding(pinnedBuilding === row.kind ? null : row.kind)}
+                      onMouseEnter={() => setHoveredBuilding(row.kind)}
+                      onMouseLeave={() =>
+                        setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
+                      }
+                      onFocus={() => setHoveredBuilding(row.kind)}
+                      onBlur={() =>
+                        setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
+                      }
+                      className={`w-full flex items-center gap-2 px-2.5 py-2 text-left transition-colors duration-150 ${
+                        expanded ? 'bg-cyan-400/10' : 'hover:bg-white/5'
+                      }`}
+                    >
+                      {/* 等級是主要資訊，所以用等寬字 + active 色，無論展開與否都在 /
+                          The level is the headline number, so it keeps the active colour
+                          whether or not the table is expanded */}
+                      <span
+                        className={`font-orbitron text-sm tabular-nums shrink-0 ${
+                          level > 0 ? 'text-cyan-300' : 'text-gray-500'
+                        }`}
+                      >
+                        {level}/{BUILDING_MAX_LEVEL}
                       </span>
-                    </div>
-                    {/* 目前等級帶來的總效果，以及「再升一級會多多少」/ The total this level
-                        already grants, and what one more level would add */}
-                    <div className="mt-0.5 text-sm text-gray-400">
-                      <span className="text-gray-200">{formatEffect(buildingTotal(row.kind, level), per.unit)}</span>
-                      {gain !== null && (
-                        <span className="text-emerald-300">
-                          {' · '}
-                          {t('place.nextLevel')} {formatEffect(gain, per.unit)}
-                        </span>
-                      )}
-                    </div>
-                    {cost !== null ? (
-                      <div className="mt-0.5 text-sm">
-                        <span className="text-gray-400">{t('place.upgradeCost')} </span>
-                        <span className={adminChar && adminChar.gold >= cost ? 'text-amber-300' : 'text-rose-300'}>
+                      <span className="text-base text-gray-200 shrink-0">{t(row.labelKey)}</span>
+                      <span className="flex-1 min-w-0" />
+                      <span className="text-sm text-gray-300 font-orbitron tabular-nums shrink-0">
+                        {formatEffect(buildingTotal(row.kind, level), per.unit)}
+                      </span>
+                      {cost !== null ? (
+                        <span
+                          className={`text-sm font-orbitron tabular-nums shrink-0 ${
+                            affordable ? 'text-amber-300' : 'text-rose-300'
+                          }`}
+                          title={adminChar ? `${t('place.adminHas')} ${adminChar.gold}` : undefined}
+                        >
                           {t('character.gold')} {cost}
                         </span>
-                        {adminChar && (
-                          <span className="text-gray-500">
-                            {' · '}
+                      ) : (
+                        <span className="text-sm text-amber-300 shrink-0">{t('place.maxLevel')}</span>
+                      )}
+                      {/* 展開時的箭頭：折疊方向本身就是提示，不需要文字 / A chevron is the
+                          affordance here; the direction already says "this opens" */}
+                      <Ic
+                        className={`w-4 h-4 shrink-0 text-gray-500 transition-transform duration-200 ${
+                          expanded ? 'rotate-180' : ''
+                        }`}
+                      >
+                        <path d="m6 9 6 6 6-6" />
+                      </Ic>
+                    </button>
+                    {expanded && (
+                      <div className="px-2.5 pb-2.5">
+                        <div className="grid grid-cols-3 gap-1">
+                          {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
+                            const active = lvl === level;
+                            const reached = lvl <= level;
+                            return (
+                              <div
+                                key={lvl}
+                                className={`rounded-md border px-1.5 py-1 text-center ${
+                                  active
+                                    ? 'border-cyan-400/70 bg-cyan-400/15'
+                                    : reached
+                                      ? 'border-white/10 bg-white/5'
+                                      : 'border-white/5 bg-transparent'
+                                }`}
+                              >
+                                <div
+                                  className={`font-orbitron text-[11px] leading-none ${
+                                    active ? 'text-cyan-200' : 'text-gray-500'
+                                  }`}
+                                >
+                                  L{lvl}
+                                </div>
+                                <div
+                                  className={`text-[13px] leading-tight mt-0.5 ${
+                                    active
+                                      ? 'text-cyan-100'
+                                      : reached
+                                        ? 'text-gray-300'
+                                        : 'text-gray-600'
+                                  }`}
+                                >
+                                  {formatEffect(buildingTotal(row.kind, lvl), per.unit)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {/* 升到下一級的增量只在列上重複一次，這裡說明各級之間的差別 /
+                            What one more level adds is already on the row; this line
+                            explains the spacing between the levels instead */}
+                        <div className="mt-1 text-[13px] text-gray-500">
+                          {t('place.perLevel')} {formatEffect(per.value, per.unit)}
+                        </div>
+                        {adminChar && cost !== null && (
+                          <div className="mt-0.5 text-[13px] text-gray-500">
                             {t('place.adminHas')} {adminChar.gold}
-                          </span>
+                          </div>
                         )}
                       </div>
-                    ) : (
-                      <div className="mt-0.5 text-sm text-amber-300">{t('place.maxLevel')}</div>
                     )}
                   </div>
                 );
@@ -2237,7 +2385,6 @@ function PlaceDetail({
             </div>
           </div>
         </div>
-      </motion.div>
     </motion.div>
   );
 }

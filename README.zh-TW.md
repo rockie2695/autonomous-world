@@ -491,3 +491,48 @@ MIT 授權條款 — 詳見 [LICENSE](LICENSE)。
 - 資料取得使用 [TanStack Query](https://tanstack.com/query)
 - 驗證使用 [Zod](https://zod.dev/)
 - 優化使用 [React Compiler](https://react.dev/learn/react-compiler)
+
+
+### 生育與王位繼承 / Childbirth & throne inheritance
+
+年齡落在 `CHILD_PARENT_AGE_MIN..CHILD_PARENT_AGE_MAX` 的存活將領，每回合有
+`CHILD_BIRTH_CHANCE` 的機率生下一名子女。子女一出生就是 `CHILD_START_AGE`（已成年），
+且直接加入父間的勝力與所在地——否則一名初生在無主之地的將領沒有地、沒有收入，等於生成了
+一個不存在的角色。父子／父女立即成為朋友（寫正的 `aId < bId` 約定）。
+A living leader aged within `CHILD_PARENT_AGE_MIN..CHILD_PARENT_AGE_MAX` has a
+`CHILD_BIRTH_CHANCE` per-round chance of a child. The child is born already mature at
+`CHILD_START_AGE` and joins the father's faction **and his place** — a newborn dropped on
+unowned land would never hold a place, never earn income, and so would be a character that
+effectively does not exist. Father and child become friends immediately.
+
+**同姓不同名需要一個姓的維度，而不是直接拼字。** 公司不同的名字結構就不同：
+classic 是 `[姓][名]`，姓就是第一個字；稱號風格是 `[稱號]·[外來名]`，姓相当於
+`·` 之前的部分。`surnameOf()` 分別處理這兩種，`generateChildName()` 沿用父姓、重抽名，
+并在命名空間耗尽時回傳 `null`（不影響其他父亲）。
+**The same surname needs a surname dimension, not string concatenation.** The two name styles
+are structurally different: classic is `surname + given`, epithet is `epithet·foreign` where the
+part before `·` plays the surname's role. `surnameOf()` tells them apart and
+`generateChildName()` keeps the father's surname, redraws the given name, and returns `null` when
+the name space is exhausted rather than colliding or blocking other fathers.
+
+**部分子不能綟父姓——那屬於邊個人。** `Character.parentId` 只存一個欄位，
+子女數直接數 `offspring` 關係，**不做冗餘計數欄位**（两份數据只會不一致）。
+**A child cannot inherit the father's surname and name — that would be a different person.**
+`Character.parentId` is the only new column; the child count is counted through the `offspring`
+relation, never denormalised into a counter that could disagree with it.
+
+**王位繼承：有子女由最年長的紙承，沒有子女才走原本的崩解。**
+按 `age desc` 取得就是長子，因為早下的子女一款就大一款年。
+**「沒有子女就走原本行為」是刻意的：繼承只律增加一條路徑。
+Ordering by age gives the first-born. "No children keeps the original behaviour" is deliberate:
+inheritance only **adds** a path, so it cannot quietly swallow the collapse rule when no heir exists.
+
+**生育必須跑在老化舍死的後面。** 若先生子下了回合、父亲亡名事发在此刻，
+那个子女出生的瞬間就成為君玉，「生育」变成存欽術。
+**Childbirth must run AFTER age and death.** A child conceived in the same round must not
+inherit from a parent who just died, or childbirth becomes a resurrection spell.
+
+**事件**：`CHILD_BORN`（填在 character 類別）與 `KING_INHERITED`（faction 類別），
+兩者都在 `EventLog.tsx` 的 `EVENT_CATEGORY` 與 `icons.tsx` 的 glyph switch 登記，否則會静默落到預記點。
+`CHILD_BORN` (category `character`) and `KING_INHERITED` (category `faction`) are registered in
+`EVENT_CATEGORY` and given glyphs, or they would silently fall through to the default dot.

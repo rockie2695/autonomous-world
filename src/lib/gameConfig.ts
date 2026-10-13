@@ -84,6 +84,23 @@ export const CONFIG = {
   CHAR_MAX_AGE_MIN: 50, // 最小隨機最大年齡（因年老死亡）/ Min random maxAge (death from old age)
   CHAR_MAX_AGE_MAX: 80, // 最大隨機最大年齡 / Max random maxAge
 
+  // ── 生育 / Childbirth ─────────────────────────────────────────────
+  // 年齡落在 [CHILD_PARENT_AGE_MIN, CHILD_PARENT_AGE_MAX] 之間的存活將領，
+  // 每回合有 CHILD_BIRTH_CHANCE 的機率生下一名成年子女。子女一出生就是
+  // CHILD_START_AGE 歲（已成年），並且已經繼承父親的勢力與所在地。
+  // A living leader aged within [CHILD_PARENT_AGE_MIN, CHILD_PARENT_AGE_MAX] has
+  // CHILD_BIRTH_CHANCE per round of having a child. A child is born already mature
+  // at CHILD_START_AGE and has already joined the father's faction and place.
+  CHILD_BIRTH_CHANCE: 0.06, // 每回合生子機率 / per-round chance of a child
+  CHILD_MIN_COUNT: 0, // 最少子女數 / minimum children
+  CHILD_MAX_COUNT: 3, // 最多子女數 / maximum children
+  CHILD_PARENT_AGE_MIN: 40, // 可生子的最小年齡 / youngest age that can father a child
+  CHILD_PARENT_AGE_MAX: 70, // 可生子的最大年齡 / oldest age that can father a child
+  CHILD_START_AGE: 20, // 子女出生年齡（成年）/ age a child is born at (already mature)
+  // 子女姓父亲的姓（傳統風格取首字；稱號風格取「·」之前的部分），名不同。
+  // A child takes the father's surname (first character in classic style, the part
+  // before "·" in epithet style) with a different given name.
+
   CHAR_ABILITY_MIN: 5, // wu, tong, ti, jing 最小值 / Min value for wu, tong, ti, jing
   CHAR_ABILITY_MAX: 30, // wu, tong, ti, jing 最大值 / Max value for wu, tong, ti, jing
 
@@ -278,6 +295,22 @@ export const CONFIG = {
   // ── 移動動畫 / Move Animation ──────────────────────────────────────────────
   MOVE_ANIM_DURATION: 1500, // 移動點行進時間（毫秒）/ Travel time of the move dot (ms)
   MOVE_ANIM_PAUSE: 2500, // 每週期停頓（毫秒）/ Pause between animation cycles (ms)
+
+  // ── 星系（放大地圖時的星系效果）/ Star systems ───────────────
+  // 放大進一個地點時，那個地點長得像一個星系（星中心優雨 + 輪道圓环）而不只是一個點。
+  // Zoomed in on a place, that place reads as a star system — a bright core with orbital
+  // rings — rather than a bare dot. The threshold is a zoom RATIO, and sigma's ratio is
+  // SMALLER when closer, so "zoomed in" is `camera.ratio <= MAP_STAR_ZOOM_RATIO`.
+  MAP_STAR_ZOOM_RATIO: 0.5,        // 放大到这個 ratio 以入就顯示星系效果 / Star systems appear at or below this ratio
+  MAP_STAR_RING_GAP: 6,// 輪道圈與節點圖的間距 / Gap between the node edge and the orbital ring (px)
+  MAP_STAR_RING_WIDTH: 1.2,       // 輪道圈素寬 / Orbital ring stroke width (px)
+  MAP_STAR_RING_ALPHA: 0.5,       // 輪道圈透明度 / Orbital ring opacity
+  MAP_STAR_CORE_GLOW: 7,          // 星中心的柔光 / Core glow blur (px)
+  MAP_STAR_ORBIT_DOTS: 3,         // 每個星系還下的行星點數 / Orbiting motes per star system
+  MAP_STAR_ORBIT_RATIO: 0.55,     // 行星點的輪道半徑…當會經過大小 / Orbit radius as a fraction of the ring radius
+  MAP_STAR_ORBIT_PERIOD_MS: 6000, // 行星點輪道一圈的時間 / One full orbit (ms)
+  MAP_STAR_PULSE_MS: 2400,        // 星中心萈明度的脆期 / Core brightness half-period (ms)
+  MAP_STAR_MIN_RADIUS_PX: 1.5,    // 小於這個尺寸就略過，避免米多小圃被光錐消掉 / Smaller than this and it is skipped
 
   /** 頭像呼吸：胸口在 SVG 單位的起伏量 / Avatar breathing: chest rise, in SVG units */
   AVATAR_BREATH_RISE: 0.012,

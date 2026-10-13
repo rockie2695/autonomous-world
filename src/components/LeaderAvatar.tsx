@@ -272,12 +272,30 @@ const SPEED_TIER_COLOR: Record<AbilityTier, string> = {
   low: '#94a3b8',
 };
 
-/** 每個速度分段畫幾條動勢線 / How many motion lines each speed band draws */
+/**
+ * 每個速度分段畫幾條動勢線 / How many motion lines each speed band draws.
+ *
+ * 1 / 2 / 3，與 `avatar.cue.speed` 的 one / two / three streaks 一致。高階原本是**四**條，
+ * 卻在提示裡寫 three streaks，圖和文字對不上來；現在是三條，兩邊一致。
+ * One / two / three, matching the `avatar.cue.speed` wording. The high band used to draw
+ * **four** while the tooltip said "three streaks", so the mark and its own label disagreed.
+ */
 const SPEED_LINES: Record<AbilityTier, readonly number[]> = {
-  high: [22, 28.5, 35, 41.5],
-  mid: [26, 33],
-  low: [29.5],
+  high: [24, 31, 38],
+  mid: [27.5, 34.5],
+  low: [31],
 };
+
+/**
+ * 能力識別圖形的放大倍率 / How much larger the ability cue shapes are drawn.
+ *
+ * 三段分級本來靠顏色與尺寸，但五項（頭／肩／胸／臂／速）在 100×100 的 viewBox 裡各佔一小塊，
+ * 縮到 40-56px 的列表縮圖時幾乎看不出差別。放大倍率讓每一項都能一眼認出，不用靠 tooltip。
+ * The five cues each own a small slice of a 100×100 viewBox, so at the 40-56px list sizes the
+ * three bands all but flatten into each other. One scale factor makes every cue legible
+ * without a tooltip.
+ */
+const TIER_CUE_SCALE = 1.45;
 
 export interface AvatarTraits {
   skin: string;
@@ -621,7 +639,12 @@ export function LeaderAvatar({
                 ? 'M80 80 L67 74.5'
                 : 'M20 80 L33 74.5';
         return (
-          <g key={mirror ? 'r' : 'l'}>
+          <g
+            key={mirror ? 'r' : 'l'}
+            /* 以每片肩章自己的中心放大，位置不變，只是變大 / Scale each board about its own
+               centre, so the placement on the shoulder is unchanged and only the size grows */
+            transform={`translate(${mirror ? 74 : 26} 78) scale(${TIER_CUE_SCALE}) translate(${mirror ? -74 : -26} -78)`}
+          >
             <path d={board} fill={tong.main} />
             <path d={edge} stroke={tong.dark} strokeWidth="1.2" opacity={0.75} fill="none" />
             {/* 只有將軍級有流蘇，階級感來自裝飾本身 /
@@ -675,7 +698,13 @@ export function LeaderAvatar({
                 ? 'M70 88 L80 88.5 L79.5 91 L69.5 90.5 Z'
                 : 'M20 88.5 L30 88 L30.5 90.5 L20.5 91 Z';
         return (
-          <g key={`ti-${mirror ? 'r' : 'l'}`}>
+          <g
+            key={`ti-${mirror ? 'r' : 'l'}`}
+            /* 以自己的中心放大：座標不變，所以護腕仍然長在同一條前臂上，只是變大。
+               Scaling about each band's own centre keeps the coordinates — and therefore the
+               placement on the arm — untouched, and only makes the cue read at a glance. */
+            transform={`translate(${mirror ? 74.5 : 25.5} 89) scale(${TIER_CUE_SCALE}) translate(${mirror ? -74.5 : -25.5} -89)`}
+          >
             {/* 深色外框：四段階級本來靠顏色辨識，但麻/鋼這類低階色在深色衣袍上幾乎看不見，
                 一圈外框讓輪廓在任何尺寸都站得住 / A dark rim. The three bands were read from
                 colour alone, but hemp and steel all but vanish against a dark robe — the rim
@@ -709,7 +738,9 @@ export function LeaderAvatar({
       {/* ── 經濟：頸前，算盤（多）→ 銅錢（一）→ 空錢袋（無）/ Economy: full, one, then none ──
           銅錢一定要挖方孔，那個方孔才是「認得出是銅錢」的關鍵。 */}
       {traits.jingTier === 'high' && (
-        <g>
+        <g
+          transform={`translate(50 84) scale(${TIER_CUE_SCALE}) translate(-50 -84)`}
+        >
           <rect x="36" y="76" width="28" height="16" rx="2.5" fill="#0b1220" opacity="0.45" />
           <rect
             x="36"
