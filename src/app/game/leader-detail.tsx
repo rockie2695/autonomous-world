@@ -265,14 +265,14 @@ export function FactionRanking({
 
             return (
               <div key={faction.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 transition-colors duration-150">
-                <span className="font-orbitron text-xs text-gray-400 w-4">{idx + 1}</span>
+                <span className="font-display text-xs text-gray-400 w-4">{idx + 1}</span>
                 <div
                   className="w-2.5 h-2.5 rounded-full shrink-0"
                   style={{ backgroundColor: faction.color }}
                 />
                 <span className="flex-1 text-sm text-gray-200 truncate">{faction.name}</span>
-                <span className="text-xs text-gray-400 font-orbitron">{factionPlaces.length}{t('ranking.territories')}</span>
-                <span className="text-xs text-gray-400 font-orbitron">{totalTroops}{t('ranking.troops')}</span>
+                <span className="text-xs text-gray-400 font-display">{factionPlaces.length}{t('ranking.territories')}</span>
+                <span className="text-xs text-gray-400 font-display">{totalTroops}{t('ranking.troops')}</span>
               </div>
             );
           })}
@@ -332,7 +332,7 @@ export function FactionRanking({
                 // paint until they scroll in
                 className="border-b border-white/5 hover:bg-white/5 transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:auto_37px]"
               >
-                <td className="py-2 pr-3 text-gray-400 font-orbitron">{idx + 1}</td>
+                <td className="py-2 pr-3 text-gray-400 font-display">{idx + 1}</td>
                 <td className="py-2 pr-3">
                   <span className="flex items-center gap-1.5">
                     <span
@@ -362,10 +362,10 @@ export function FactionRanking({
                 <td className="py-2 pr-3 text-gray-300">
                   {row.kingName ?? t('faction.noKing')}
                 </td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{row.territories}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{row.members}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{row.troops}</td>
-                <td className="py-2 text-gray-300 font-orbitron text-right">{row.gold}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{row.territories}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{row.members}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{row.troops}</td>
+                <td className="py-2 text-gray-300 font-display text-right">{row.gold}</td>
               </tr>
             ))}
           </tbody>

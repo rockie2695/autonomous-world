@@ -566,6 +566,114 @@ inherit from a parent who just died, or childbirth becomes a resurrection spell.
 
 MIT License — see [LICENSE](LICENSE) for details.
 
+### 顯像、提示與地點分頁（今日） / Avatar, tooltips and the place tab (today)
+
+**識別圖形的放大個數目前穫不調，每部位統一個個數（寫作統一的試驗結果）。** `TIER_CUE_SCALE_ARM` 1.0、`TIER_CUE_SCALE_CHEST` 1.0、基準 1.45。
+
+**對象圖用一個共用的 `clipPath` id，作用在**已存在**的胸口與頭部两個组上。** 衣袍與肩章直接落到底邊，不切它會透出圍換。共用 id 是安全的：
+裁剪圖形在每個頭像里完全一樣。先前曾試國斷增一個包裹组，結果 JSX 平衡失敗；直接加属性才是安全的做法。
+The avatar clips to a rounded plate via one shared clipPath id, attached as an ATTRIBUTE on
+the two groups that already exist (chest and head). The robe and shoulder boards run to the
+bottom edge and bled outside the plate without it. A shared id is safe: the clip shape is
+identical in every avatar. An earlier attempt that inserted a wrapper group unbalances the
+JSX — adding the attribute does not.
+
+**提示在游標面上半部時改贴在游標上方。** 提示原本以游標垂直置中，一靠近容器頂端，面板就有一半裁掉。現在量容器高度（`offsetParent` + `ResizeObserver`），
+游標在上半部就翻到上方。改在 `ChartTooltip` 內部，五個圖表呼叫點全部受益。
+The tooltip flips above the pointer when it is in the top half. It was vertically centred, so
+near the container top half of it was clipped away. The container height is now measured
+(`offsetParent` + `ResizeObserver`) inside `ChartTooltip`, so all five chart call sites
+inherit the behaviour with no signature change.
+
+**將領詳情：位置可點、動力色塊在左、電轉圖可交互。** 體轉圖在詳情彌窗里使用斷的 `interactive` 属性——將領表那一列的浮動預稿必須維持 `pointer-events-none`，
+否則面板會觸發那一列的 `mouseleave` 而閃烁消失；後者是窗口內的固定圖表，可以很自然地接受游標。游標指向哪一條輪就显示該值與同動力平均，并在輪尾圍一圈。
+Leader detail: 位置 is clickable, the faction swatch sits left of the name, and the radar takes
+the pointer. The radar uses a new `interactive` prop — the leader-table hover preview must
+stay `pointer-events-none` or it flickers away on that row mouseleave, while the modal copy can
+take the pointer freely. The tooltip names the hovered axis and shows the faction mean.
+
+**「地點」分頁沒选中時列出所有地點。** 只放一句提示等於進證回地圖自己點；面板已經在這裡，就該把它們摊開。依名稱排序，因為這個列表沒有位置內容。
+With nothing selected the 地點 tab lists every place instead of a one-line prompt: the panel
+is already there, so it should show them. Sorted by name, because the list has no spatial cue.
+
+**建立列改成「一級一點」，數字改在提示。** 後要上所有位座執的每一級效果表常驛時，在 19rem 寬的面板里把真正要看的「現在幾級」埋掉。現在每座下方是一排點（已達到填满、現在級為 active、未達到只剩外框），
+數字在游標停在點點上時的 tooltip 才出現。提示固定贴在點點上方：點點本來就在卡片底邊。
+Each building row is now a row of dots, one per level: reached levels filled, the current one
+in the active colour, unreached ones reduced to an outline. The numbers live in a tooltip on
+hover. The tooltip is anchored above the dots because the dots already sit at the card edge.
+
+**`cn` 是已安裝的包，不要自己寫一份。** `src/lib/utils.ts` 已經重新察出它。它有真正的 Tailwind 矛盾解析（`cn('p-2', 'p-4')` → `'p-4'`），
+手寫的版本只會把兩個串接在一起。在空白就擁斷寫一份、沒先確認實際存在是有過 / **`cn` is an installed package — do not hand-roll another.** `src/lib/utils.ts`
+already re-exports it, and it does real Tailwind conflict resolution, which a truthy-join
+cannot. Check whether a dependency is absent before writing a replacement for it.
+
+
+### 交易只用在「半寫入會永久毀掉東西」的地方 / Transactions only where a half-write destroys something
+
+`server/tx.ts` 提供 `inTransaction()`。**這個回合裡 90 個寫入點，只有兩個包進交易。**
+
+判斷標準只有一條：**之後有沒有任何一條程式路徑會把它修回來。** 沒有 → 必須交易。有 → 不必。
+
+A round is a simulation that may stop halfway — the next round resumes from wherever it
+stopped — so most partial writes are self-correcting. Wrapping all ~90 write sites would buy
+hundreds of transactions a round and no matching correctness. The test is one question: **does
+any later code path repair this?**
+
+**包起來的兩個 / The two that are wrapped**
+
+- `adminAssign.grantAdmin` / `revokeAdmin` — 崗位搬過了而野心沒扣，就永遠不會有回復的排程；
+  這個角色從此比規則允許的更沉靜，而且沒有任何東西會把那一點還給他。免職那邊的風險相反：
+  `+1` 入了帳卻沒清掉未到期的減免，排定的回復會再記一次 `+1`。
+  A seat that moves without the ambition delta is the worst kind of half-write: no revert is
+  ever scheduled, so the deduction is simply permanent. Revoking moves no seat — its risk is the
+  mirror image, a `+1` landing while the pending reduction is not cleared, so the scheduled
+  revert would credit a second `+1`.
+- `economy` 的單一地點發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以在兩次
+  `increment` 之間崩潰，不會有任何一筆錢移動到別處：它就是消失了，而沒有任何階段會對帳。
+  `splitIncome` is exact, so a crash between two increments moves the missing gold nowhere. It
+  ceases to exist, and no later phase reconciles totals.
+
+**刻意排除 / Deliberately excluded**
+
+- **回合快照** (`runRound.ts`) — 快照是「已完成的某一回合」的快取。把它放進回合的交易裡，
+  等於讓一個交易橫跨全部 14 個階段地開著。
+- **每筆事件列** — Event 是一行日誌。少一行損失的是敘事，不是狀態。
+
+**陷阱 / The trap.** `inTransaction` 的 `fn` **只**能使用傳進去的 `tx`。在 `fn` 裡呼叫模組層級的
+`prisma` 會逃出這筆交易，不會隨之回滾——這個輔助存在的理由就是把這個陷阱寫在程式碼裡。
+
+逾時是 `TX_TIMEOUT_MS`（20 秒），比 Prisma 預設的 5 秒寬，因為一個地點的發放可能超過它。
+
+### 顯示字型與前臂 / The display face and the forearm
+
+**Orbitron 換成 Chakra Petch，`font-orbitron` 改名為 `font-display`。**
+Orbitron 在這個介面上「不清楚」不是主觀問題，而是結構性的：字幅很寬、x-height 低、
+字形切角又特殊，而它最常出現的地方——事件列標頭、圖表刻度、`RND` 計數、eyebrow
+標籤——都是 11–13px 的小字，在那些尺寸下筆畫會糊成一團。Chakra Petch 保留科幻的方正感，
+但切角是「刀」而不是「面」，筆畫對比更高、字幅更窄；斜切的收尾也帶一點武備感，剛好補上
+奇幻那一半。它只有 latin，中文一律落到 `PingFang TC`，與舊設定相同。
+類別與 CSS 變數一起改名（`--font-orbitron` → `--font-display`、`.font-orbitron` →
+`.font-display`），因為留著舊名字會指向一個根本沒有載入的字型。
+Orbitron's illegibility here was structural: very wide, low x-height, unusual geometric cuts,
+and it spends most of its life at 11–13px in this UI, where those traits smear together.
+Chakra Petch keeps the squarish sci-fi feel with blade-like terminals, higher stroke contrast
+and narrower letterforms, and the angled cuts read as martial, which supplies the fantasy half.
+The class and CSS variable were renamed along with it, because keeping the old name would
+point at a font that is no longer loaded.
+
+**體魄現在畫在一條真的手臂上，三段共用同一個尺寸。**
+原本只有護具，直接浮在衣袍上，看起來像貼在布上的色條而不是四肢；現在手臂畫在**肩章之前**，
+肩章才壓在肩膀上而不是被手臂穿過去。手臂上緣刻意壓低——高一點就會從肩章的斜邊上方露出
+一塊皮膚，讀起來像脖子旁多了一塊。
+三段護具**不再各自縮小**：階級改由材質（金／鋼／麻）、深色外框與飾線（高階甲片脊線、
+低階縫線）表達。mid 與 low 原本比較小，結果低階的線索不是「弱」而是「幾乎看不見」——
+而 40px 的列表列上，那正是唯一承載體魄資訊的地方。
+The Physique cue now sits on a real limb rather than floating on cloth, and all three bands
+share **one size**. Rank is carried by material, the dark rim and the detailing (a ridge for
+the heavy band, stitching for the worn one), not by extent — a smaller mid/low guard made the
+low band's signal "almost invisible" rather than "weak", and at the 40px list size that is
+where the only ti signal lives.
+
 ## Acknowledgments
 
 - Built with [Next.js](https://nextjs.org/)

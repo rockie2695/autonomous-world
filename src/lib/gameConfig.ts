@@ -311,6 +311,18 @@ export const CONFIG = {
   MAP_STAR_ORBIT_PERIOD_MS: 6000, // 行星點輪道一圈的時間 / One full orbit (ms)
   MAP_STAR_PULSE_MS: 2400,        // 星中心萈明度的脆期 / Core brightness half-period (ms)
   MAP_STAR_MIN_RADIUS_PX: 1.5,    // 小於這個尺寸就略過，避免米多小圃被光錐消掉 / Smaller than this and it is skipped
+  // 行星對組：紅經地點的 id 准確定性提取，不存檔。完全是裝飾，
+  // 不參與收入、防徤，因為那需要寫入對應上的模擬寫法 /
+  // Planet and moons are derived from the place id, deterministically and with nothing
+  // stored: purely decorative, because giving them gameplay meaning would need a
+  // simulation for it, and a mock would only look like one.
+  MAP_STAR_PLANET_CHANCE: 0.55,   // 有行星的比例 / chance a star system has a planet
+  MAP_STAR_PLANET_RING_RATIO: 1.5, // 行星圈半徑異樂有間的倍數 / planet ring radius as a multiple of the gap
+  MAP_STAR_PLANET_RING_WIDTH: 1,  // 行星圈素寬 / planet ring stroke width (px)
+  MAP_STAR_MOON_MAX: 3,           // 最多幾個月球 / most moons a system may have
+  MAP_STAR_MOON_RATIO: 0.34,      // 月球輪道半徑（相對圖節半徑）/ moon orbit radius, as a fraction of the node radius
+  MAP_STAR_MOON_SIZE: 1.6,        // 月球半徑 / moon radius (px)
+  MAP_STAR_MOON_ORBIT_MS: 9000,   // 月球輪道一圈的時間 / one moon orbit (ms)
 
   /** 頭像呼吸：胸口在 SVG 單位的起伏量 / Avatar breathing: chest rise, in SVG units */
   AVATAR_BREATH_RISE: 0.012,

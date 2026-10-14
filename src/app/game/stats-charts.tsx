@@ -15,7 +15,7 @@
 // faction power. The character radar is its own panel and ignores the type toggle.
 // ============================================================================
 
-import { useState, useEffect, useMemo, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { t } from '@/lib/i18n';
 import { CONFIG } from '@/lib/gameConfig';
 import { apiFetch } from '@/lib/api';
@@ -107,7 +107,7 @@ interface StatsPayload {
 function ChartFrame({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="-mx-2 mb-3 rounded-md border border-transparent px-2 py-1.5 transition-colors duration-200 last:mb-0 hover:border-white/10 hover:bg-white/[0.03]">
-      <div className="text-sm text-gray-300 font-orbitron tracking-wider mb-2 uppercase">
+      <div className="text-sm text-gray-300 font-display tracking-wider mb-2 uppercase">
         {title}
       </div>
       {children}
@@ -170,11 +170,44 @@ function ChartTooltip({
    *  gets clipped by the panel */
   flip?: boolean;
 }) {
+  /**
+   * 量出容器的高度，才能判斷游標是不是落在**上半部**。
+   * Measure the container height, so we can tell whether the pointer sits in its top half.
+   *
+   * 提示原本以游標「垂直置中」，所以游標一靠近容器頂端，面板就有一半跑到容器外面被裁掉；
+   * 水平方向早就處理了（靠右翻左），垂直方向一直沒有人管。
+   * The panel is vertically centred on the pointer, so as the pointer nears the container's
+   * top, half of the panel leaves the container and is clipped. The horizontal case was
+   * always handled (flip to the left); the vertical one was not.
+   *
+   * 量的是**面板的容器**，不是面板本身：面板的位置正是我們要判斷的結果，拿它反推會循環。
+   * Measured on the panel's own container, never the panel: the panel's position IS the
+   * thing being decided, so measuring it would be circular.
+   */
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [containerHeight, setContainerHeight] = useState(0);
+  useLayoutEffect(() => {
+    const parent = panelRef.current?.offsetParent;
+    if (!parent) return;
+    const measure = () => setContainerHeight(parent.clientHeight);
+    measure();
+    // 面板只在 hover 時出現，掛著的时候容器高度仍可能改變（視窗縮放、捲動）
+    // The panel only exists on hover, and the container can still resize while it is up
+    const observer = new ResizeObserver(measure);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, []);
+
+  /** 游標在容器上半部 → 面板改貼在游標上方，否則會有一半被裁掉 /
+   *  Pointer in the top half → sit above it, or half the panel is clipped away */
+  const flipY = containerHeight > 0 && y < containerHeight / 2;
+
   return (
     <div
       // pointer-events-none：面板壓在圖表上，滑鼠不能被它吃掉，否則指標會抖 /
       // pointer-events-none: the panel sits over the chart and must not steal the
       // pointer, or the readout jitters
+      ref={panelRef}
       className="pointer-events-none absolute z-20 min-w-[9rem] rounded-lg border border-white/10 bg-gray-900/95 px-2.5 py-2 shadow-xl shadow-black/50 backdrop-blur-md"
       style={{
         left: x,
@@ -183,12 +216,18 @@ function ChartTooltip({
         // 圖表只有 240px 寬，提示最少 144px，所以 45% 之後就翻 /
         // Flip to the cursor's left when the right side has no room. The charts are
         // only ~240px wide and the panel is at least 144px, so flip past 45%.
-        transform: flip ? 'translate(calc(-100% - 12px), -50%)' : 'translate(12px, -50%)',
+        //
+        // 垂直方向同理：游標在上半部就貼在游標**上方**，下半部維持垂直置中 /
+        // Same on the vertical axis: above the pointer when it is in the top half, and
+        // vertically centred otherwise.
+        transform: `translate(${
+          flip ? 'calc(-100% - 12px)' : '12px'
+        }, ${flipY ? 'calc(-100% - 12px)' : '-50%'})`,
       }}
       role="tooltip"
     >
       {round !== undefined && (
-        <div className="mb-1 font-orbitron text-[11px] tracking-widest text-cyan-300/90">
+        <div className="mb-1 font-display text-[11px] tracking-widest text-cyan-300/90">
           {t('chart.round')} {round}
         </div>
       )}
@@ -399,7 +438,7 @@ function LineChart({
           These are round *numbers*, not series indices: an index starts at 0 while the round
           may start at 12, so an index label called round 12 "0". First, middle and last is
           enough to read the axis. */}
-      <div className="flex justify-between px-1 mt-1 text-[10px] text-gray-500 font-orbitron">
+      <div className="flex justify-between px-1 mt-1 text-[10px] text-gray-500 font-display">
         <span>{rounds[0] ?? ''}</span>
         {rounds.length > 2 && (
           <span>{rounds[Math.floor((rounds.length - 1) / 2)]}</span>
@@ -1475,12 +1514,35 @@ export function CharacterRadarHover({
   character,
   factionAverage,
   color,
+  interactive,
 }: {
   character: WorldState['characters'][0];
   factionAverage: number[] | null;
   color: string;
+  /**
+   * Hover an axis to read its value.
+   *
+   * 有兩個賞用此元件：將領表格那一列的浮動預稿，與將領詳情彌窗的電轉圖。
+   * 前者必須保持 pointer-events-none，否則游標一移上面板就會讓那一列先先觸發 mouseleave，
+   * 面板立即消失（閃烁）；後者是窗口內的固定圖表，可以很自然接受游標。
+   *
+   * Two callers share this: the leader-table hover preview, and the leader detail modal.
+   * The former must stay pointer-events-none or moving the cursor onto it fires that
+   * row mouseleave and the panel vanishes (flicker); the latter is a static chart in a
+   * modal and can take the pointer freely.
+   */
+  interactive?: boolean;
 }) {
   const values = characterRadarValues(character);
+
+  /**
+   * 游標指向的輪。在 render 期間算，不放 effect：在 effect 裡同步 setState 會觸發
+   * cascading-render 規則，而這裡根本沒有「外部系統」要同步。
+   * The axis the pointer points at. Computed during render rather than in an effect: a
+   * synchronous setState in an effect trips the cascading-render rule, and there is no
+   * external system here to synchronise with.
+   */
+  const [hover, setHover] = useState<{ axis: number; x: number; y: number } | null>(null);
   // 參考環只在「真的不一樣」時才畫：單人勢力的平均值會與本人完全相同，
   // 疊在資料多邊形上等於看不見，看起來像壞掉不如明說 /
   // Only draw the reference ring when it genuinely differs. In a one-member
@@ -1491,13 +1553,33 @@ export function CharacterRadarHover({
     factionAverage.some((value, i) => Math.abs(value - values[i]) > 1e-6);
 
   return (
-    <div className="pointer-events-none w-[196px]">
+    <div className={`relative w-[196px] ${interactive ? 'pointer-events-auto' : 'pointer-events-none'}`}>
       <div className="text-xs text-gray-200 font-medium truncate">{character.name}</div>
       <svg
         viewBox={`0 0 ${HOVER_RADAR_SIZE} ${HOVER_RADAR_SIZE}`}
         className="w-full"
         role="img"
         aria-label={`${character.name} ${t('stats.attributes')}`}
+        onPointerMove={
+          interactive
+            ? (e) => {
+                // viewBox 不等於像素寬度，先轉成 viewBox 座標再求輪形，
+                // 否則讀值會指向錯詟的輪 / The viewBox is not the pixel
+                // width, so convert into viewBox space or the readout names the wrong axis.
+                const rect = e.currentTarget.getBoundingClientRect();
+                const scale = HOVER_RADAR_SIZE / Math.max(rect.width, 1);
+                setHover({
+                  axis: nearestRadarAxis(
+                    (e.clientX - rect.left) * scale - HOVER_RADAR_SIZE / 2,
+                    (e.clientY - rect.top) * scale - HOVER_RADAR_SIZE / 2
+                  ),
+                  x: e.clientX - rect.left,
+                  y: e.clientY - rect.top,
+                });
+              }
+            : undefined
+        }
+        onPointerLeave={interactive ? () => setHover(null) : undefined}
       >
         <RadarGrid size={HOVER_RADAR_SIZE} radius={HOVER_RADAR_RADIUS} />
         <polygon
@@ -1518,7 +1600,48 @@ export function CharacterRadarHover({
           />
         )}
         <RadarAxisLabels size={HOVER_RADAR_SIZE} radius={HOVER_RADAR_RADIUS} />
+        {/* 指向的那一條輪圍一圈，讀者不用猜自己指到哪一條 /
+            Ring the axis the pointer is on, so the reader need not guess which one */}
+        {interactive && hover && (
+          <circle
+            cx={HOVER_RADAR_SIZE / 2 + Math.cos(radarAngle(hover.axis)) * HOVER_RADAR_RADIUS}
+            cy={HOVER_RADAR_SIZE / 2 + Math.sin(radarAngle(hover.axis)) * HOVER_RADAR_RADIUS}
+            r="2.5"
+            fill="var(--color-ds-cyan)"
+          />
+        )}
       </svg>
+      {/* 提示是窗口內的真實面板，所以寫在圖上方 /
+          The tooltip is a real panel in a modal, so it sits above the radar */}
+      {interactive && hover && (
+        <div
+          className="pointer-events-none absolute z-20 min-w-[8rem] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
+          style={{
+            left: hover.x,
+            top: hover.y,
+            // 游標在上半部就贴在上方，否則面板會有一半裁掉 /
+            // Above the pointer when it is in the top half, or half the panel is clipped
+            transform:
+              hover.y < 60
+                ? 'translate(-50%, calc(-100% - 10px))'
+                : 'translate(-50%, 10px)',
+          }}
+          role="tooltip"
+        >
+          <div className="text-[13px] font-medium text-gray-200">
+            {t(RADAR_AXES[hover.axis].label)}
+          </div>
+          <div className="font-mono tabular-nums text-sm text-cyan-200">
+            {values[hover.axis]}
+          </div>
+          {referenceDiffers && factionAverage && (
+            <div className="mt-0.5 font-mono tabular-nums text-[11px] text-gray-500">
+              {t('stats.factionAverage')}{' '}
+              {factionAverage[hover.axis]?.toFixed(1) ?? '—'}
+            </div>
+          )}
+        </div>
+      )}
       <div className="flex items-center gap-1 text-[10px] text-gray-500 font-mono">
         {referenceDiffers ? (
           <>
@@ -1555,7 +1678,7 @@ function ChartTypeSwitch({
           // 同上：選中態換成完整的 accent 按鈕，而不是在基底上加一個類別
           // Same reason: the selected state swaps in a complete accent button
           // min-h-11 = 44px 觸控目標下限 / 44px minimum touch target
-          className={`${value === ct ? GM_BTN_ACCENT : GM_BTN} min-h-11 px-2.5 py-1.5 text-[13px] font-orbitron tracking-wider transition-colors duration-200`}
+          className={`${value === ct ? GM_BTN_ACCENT : GM_BTN} min-h-11 px-2.5 py-1.5 text-[13px] font-display tracking-wider transition-colors duration-200`}
         >
           {t(CHART_TYPE_LABEL_KEYS[ct])}
         </button>

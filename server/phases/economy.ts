@@ -23,6 +23,7 @@ import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { splitIncome, tongPurchaseMultiplier } from '../income';
+import { inTransaction, type TxClient } from '../tx';
 import { placeIncome, placeRecruits } from '@/lib/placeEffects';
 
 /**
@@ -121,44 +122,46 @@ export async function economy(
     let adminGoldAfter = 0;
     let othersGold = 0;
 
-    if (kingId && split.king > 0) {
-      const king = await prisma.character.update({
-        where: { id: kingId },
-        data: { gold: { increment: split.king } },
-      });
-      kingGold = split.king;
-      kingGoldAfter = king.gold;
-    }
-
-    if (adminId && split.admin > 0) {
-      const admin = await prisma.character.update({
-        where: { id: adminId },
-        data: { gold: { increment: split.admin } },
-      });
-      adminGold = split.admin;
-      adminGoldAfter = admin.gold;
-    }
-
-    // 「其他人」平分剩下的 30%。splitIncome 已經保證三份加起來等於 income，所以這裡
-    // 不會多發錢。沒有行政官時三份都是 0，整段自然跳過。
-    //
-    // "Everyone else" splits the remaining 30%. splitIncome already guarantees the three
-    // shares sum to `income`, so this cannot pay out extra. With no administrator all three
-    // are 0 and this whole block is skipped, which is the point.
-    if (otherChars.length > 0 && split.others > 0) {
-      const perChar = Math.floor(split.others / otherChars.length);
-      if (perChar > 0) {
-        for (const char of otherChars) {
-          await prisma.character.update({
-            where: { id: char.id },
-            data: { gold: { increment: perChar } },
-          });
-        }
-        // 只記真正發出去的金額；除不盡的餘數留在地方上 /
-        // Record only what was actually paid; the remainder stays with the place
-        othersGold = perChar * otherChars.length;
+    await inTransaction(async (tx: TxClient) => {
+      if (kingId && split.king > 0) {
+        const king = await tx.character.update({
+          where: { id: kingId },
+          data: { gold: { increment: split.king } },
+        });
+        kingGold = split.king;
+        kingGoldAfter = king.gold;
       }
-    }
+
+      if (adminId && split.admin > 0) {
+        const admin = await tx.character.update({
+          where: { id: adminId },
+          data: { gold: { increment: split.admin } },
+        });
+        adminGold = split.admin;
+        adminGoldAfter = admin.gold;
+      }
+
+      // 「其他人」平分剩下的 30%。splitIncome 已經保證三份加起來等於 income，所以這裡
+      // 不會多發錢。沒有行政官時三份都是 0，整段自然跳過。
+      //
+      // "Everyone else" splits the remaining 30%. splitIncome already guarantees the three
+      // shares sum to `income`, so this cannot pay out extra. With no administrator all three
+      // are 0 and this whole block is skipped, which is the point.
+      if (otherChars.length > 0 && split.others > 0) {
+        const perChar = Math.floor(split.others / otherChars.length);
+        if (perChar > 0) {
+          for (const char of otherChars) {
+            await tx.character.update({
+              where: { id: char.id },
+              data: { gold: { increment: perChar } },
+            });
+          }
+          // 只記真正發出去的金額；除不盡的餘數留在地方上 /
+          // Record only what was actually paid; the remainder stays with the place
+          othersGold = perChar * otherChars.length;
+        }
+      }
+    });
 
     // ── 徵兵，同樣記下增加量與總量 ──
     // Recruit for the garrison, keeping both the increment and the new total.

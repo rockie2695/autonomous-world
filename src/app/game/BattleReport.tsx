@@ -56,7 +56,7 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-0.5">
       <span className="text-gray-400">{label}</span>
-      <span className="font-orbitron text-gray-100">{value}</span>
+      <span className="font-display text-gray-100">{value}</span>
     </div>
   );
 }
@@ -129,7 +129,7 @@ function AttackReplay({ report }: { report: BattleReportData }) {
       <div>
         <div className="mb-0.5 flex justify-between text-xs text-cyan-300">
           <span>{t('events.reportAttack')}</span>
-          <span className="font-orbitron">{report.attackPower.toFixed(0)}</span>
+          <span className="font-display">{report.attackPower.toFixed(0)}</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
           <div ref={attackRef} className="h-full rounded-full bg-cyan-400" style={{ width: 0 }} />
@@ -138,7 +138,7 @@ function AttackReplay({ report }: { report: BattleReportData }) {
       <div>
         <div className="mb-0.5 flex justify-between text-xs text-rose-300">
           <span>{t('events.reportDefence')}</span>
-          <span className="font-orbitron">{report.defencePower.toFixed(0)}</span>
+          <span className="font-display">{report.defencePower.toFixed(0)}</span>
         </div>
         <div className="h-2 w-full overflow-hidden rounded-full bg-white/5">
           <div ref={defenceRef} className="h-full rounded-full bg-rose-400" style={{ width: 0 }} />
@@ -197,7 +197,7 @@ export function BattleReport({ charName, placeName, report, onClose }: BattleRep
       >
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <div className="font-orbitron text-sm text-cyan-300">{t('events.reportTitle')}</div>
+            <div className="font-display text-sm text-cyan-300">{t('events.reportTitle')}</div>
             <div className="mt-0.5 text-gray-200">
               {charName} → {placeName}
             </div>

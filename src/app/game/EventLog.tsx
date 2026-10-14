@@ -317,25 +317,29 @@ export function EventLog({
   }, [shown]);
 
   /**
-   * 初次開啟時捷到最底，讓最新的一條可見。
+  /**
+   * 謹到底郣一端。只有該者本来就贴在底郣時才認。
    *
-   * 日誌是由旧到新（最新在底下），所以初始位置会落在最謝。這一次性的捷動用
-   * layout effect：用景覺經過 DOM 已經排版，扇動位置才有意怛（用了 effect 時容器可能還沒有高度）。
+   * 這里不能只做「初始捷一次」：事實測得到初次記憶化時只有部分列深度。
+   * 那時們就把「已捷到底」錯定下來，欄知暂時舊寫樣的卷高墝則讓該者停在太高的位置。
+   正確的是依於 pinnedToBottom：就算列綊綊到來，就算每一次都重新跟下去。
    *
-   * Scroll to the bottom once, on first open, so the newest row is visible. The log runs
-   * oldest-to-newest, so the initial position lands on the oldest. This is a layout
-   * effect because the container has to be measured after layout; in a plain effect it
-   * can still have zero height.
+   * Keep the reader at the bottom. Only when they are already pinned there.
+   *
+   * This deliberately does NOT fire just once: measured, the first paint had only some
+   * rows laid out, so a one-shot latch locked in a scroll position that was already too
+   * high once the remaining rows arrived. Following pinnedToBottom means every arriving
+   * row re-pins, which is also the correct chat behaviour.
+   *
+   * Loading older pages does not fight this: that path sets a scroll anchor and the reader
+   * is at the top at the time, so pinnedToBottom is false.
    */
-  const didInitialScrollRef = useRef(false);
   useLayoutEffect(() => {
-    if (didInitialScrollRef.current) return;
-    if (shown.length === 0) return;
+    if (!pinnedToBottom) return;
     const el = scrollRef.current;
     if (!el) return;
-    didInitialScrollRef.current = true;
     el.scrollTop = el.scrollHeight;
-  }, [shown]);
+  }, [shown, pinnedToBottom]);
 
   /**
    * 新回合帶來新事件時：讀者本來就在底部就直接捲到底，不在底部就不要硬拉，給一個提示就好。
@@ -698,7 +702,7 @@ export function EventLog({
                     return next;
                   })
                 }
-                className={`rounded-full px-2 py-0.5 text-[11px] font-orbitron tracking-wider transition-colors duration-150 ${
+                className={`rounded-full px-2 py-0.5 text-[11px] font-display tracking-wider transition-colors duration-150 ${
                   on
                     ? 'bg-cyan-500/15 text-cyan-300'
                     : 'bg-white/5 text-gray-500 hover:text-gray-300'
@@ -721,7 +725,7 @@ export function EventLog({
               onClick={() =>
                 setInfoFilter((previous) => ({ ...previous, [info]: !previous[info] }))
               }
-              className={`rounded-full px-2 py-0.5 text-[11px] font-orbitron tracking-wider transition-colors duration-150 ${
+              className={`rounded-full px-2 py-0.5 text-[11px] font-display tracking-wider transition-colors duration-150 ${
                 infoFilter[info]
                   ? 'bg-cyan-500/15 text-cyan-300'
                   : 'bg-white/5 text-gray-500 hover:text-gray-300'
@@ -783,7 +787,7 @@ export function EventLog({
           <button
             type="button"
             onClick={loadOlder}
-            className={`${GM_BTN} w-full mb-2 py-2 text-xs font-orbitron tracking-wider`}
+            className={`${GM_BTN} w-full mb-2 py-2 text-xs font-display tracking-wider`}
           >
             {t('events.loadOlder', { count: ordered.length - visibleCount })}
           </button>
@@ -792,7 +796,7 @@ export function EventLog({
           <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:auto_44px]">
             <EventGlyph type={event.type} />
             {/* 回合徽章：所有回合的事件需標示來源回合 / Round badge: all-rounds events need their source round */}
-            <span className="font-orbitron text-[10px] text-cyan-400/80 shrink-0 mt-1 tracking-wider">
+            <span className="font-display text-[10px] text-cyan-400/80 shrink-0 mt-1 tracking-wider">
               {String(event.round).padStart(4, '0')}
             </span>
             <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
@@ -813,7 +817,7 @@ export function EventLog({
                     report: (data.report ?? null) as BattleReportData | null,
                   });
                 }}
-                className="shrink-0 mt-0.5 rounded-full border border-cyan-400/30 px-1.5 py-0.5 text-[10px] font-orbitron tracking-wider text-cyan-300 hover:bg-cyan-500/10"
+                className="shrink-0 mt-0.5 rounded-full border border-cyan-400/30 px-1.5 py-0.5 text-[10px] font-display tracking-wider text-cyan-300 hover:bg-cyan-500/10"
               >
                 {t('events.reportOpen')}
               </button>
@@ -834,7 +838,7 @@ export function EventLog({
               if (el) el.scrollTop = el.scrollHeight;
               setPendingNew(false);
             }}
-            className={`${GM_BTN} rounded-full px-3 py-1 text-[10px] font-orbitron tracking-wider`}
+            className={`${GM_BTN} rounded-full px-3 py-1 text-[10px] font-display tracking-wider`}
           >
             {t('events.newEvents')}
           </button>

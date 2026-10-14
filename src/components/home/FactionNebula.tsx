@@ -128,7 +128,7 @@ export default function FactionNebula({ locale }: FactionNebulaProps) {
         <div className="mt-4">
           <p
             id={legendId}
-            className="font-orbitron text-ds-label font-semibold tracking-[0.2em] text-slate-400 uppercase"
+            className="font-display text-ds-label font-semibold tracking-[0.2em] text-slate-400 uppercase"
           >
             {t('home.world.legendTitle')}
           </p>

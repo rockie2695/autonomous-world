@@ -7,7 +7,7 @@
 // producing one child, who is born already mature.
 //
 // 規則（來自規格）/ Rules (from spec):
-// - 父��年齡須落在 [CHILD_PARENT_AGE_MIN, CHILD_PARENT_AGE_MAX] / Father must be aged within the window
+// - 父子年齡須落在 [CHILD_PARENT_AGE_MIN, CHILD_PARENT_AGE_MAX] / Father must be aged within the window
 // - 子女上限 CHILD_MAX_COUNT，下限 CHILD_MIN_COUNT / Bounded by CHILD_MAX_COUNT / CHILD_MIN_COUNT
 // - 子女與父親同姓、不同名 / Same surname as the father, different given name
 // - 子女一出生即成年，且已在父親的勢力與所在地 / Born mature, already in the father's faction and place

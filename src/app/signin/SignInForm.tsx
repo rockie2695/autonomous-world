@@ -43,7 +43,7 @@ const LABEL = 'block text-xs font-medium tracking-[0.08em] text-slate-400 upperc
 /** 主要按鈕 / the primary submit button */
 const SUBMIT =
   'w-full min-h-11 rounded-ds-control bg-gradient-to-r from-cyan-500 to-blue-600 ' +
-  'font-orbitron text-[0.9375rem] font-bold tracking-[0.06em] text-[#020617] ' +
+  'font-display text-[0.9375rem] font-bold tracking-[0.06em] text-[#020617] ' +
   'transition-[box-shadow,transform] duration-[260ms] ease-ds hover:-translate-y-px ' +
   'hover:shadow-[0_0_30px_rgba(34,211,238,0.35)] disabled:cursor-not-allowed ' +
   'disabled:opacity-60 disabled:hover:translate-y-0';
@@ -159,7 +159,7 @@ export function SignInForm({
   if (isSignedIn && hasPassword) {
     return (
       <div className="w-full max-w-md text-center">
-        <h1 className="font-orbitron text-2xl font-bold tracking-wide text-white">
+        <h1 className="font-display text-2xl font-bold tracking-wide text-white">
           {t('auth.alreadySignedIn')}
         </h1>
         <p className="mt-1.5 text-sm text-slate-400">{t('auth.alreadyHasPassword')}</p>
@@ -209,8 +209,8 @@ export function SignInForm({
               }}
               className={
                 mode === value
-                  ? 'min-h-11 rounded-[0.4rem] bg-cyan-500/15 font-orbitron text-xs font-bold tracking-[0.12em] text-cyan-300 uppercase transition-colors duration-200'
-                  : 'min-h-11 rounded-[0.4rem] font-orbitron text-xs font-bold tracking-[0.12em] text-slate-400 uppercase transition-colors duration-200 hover:text-slate-200'
+                  ? 'min-h-11 rounded-[0.4rem] bg-cyan-500/15 font-display text-xs font-bold tracking-[0.12em] text-cyan-300 uppercase transition-colors duration-200'
+                  : 'min-h-11 rounded-[0.4rem] font-display text-xs font-bold tracking-[0.12em] text-slate-400 uppercase transition-colors duration-200 hover:text-slate-200'
               }
             >
               {value === 'signin' ? t('auth.signInTab') : t('auth.registerTab')}
@@ -219,7 +219,7 @@ export function SignInForm({
         </div>
       )}
 
-      <h1 className="font-orbitron text-2xl font-bold tracking-wide text-white">
+      <h1 className="font-display text-2xl font-bold tracking-wide text-white">
         {isSignedIn
           ? t('auth.setPassword')
           : mode === 'signin'

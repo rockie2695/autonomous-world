@@ -195,7 +195,7 @@ export default async function HomePage() {
                 <div className="relative">
                   <p className={`${EYEBROW} mb-5`}>{t('home.hero.eyebrow')}</p>
 
-                  <h1 className="font-orbitron mb-6 text-[clamp(2.5rem,7.5vw,4.5rem)] leading-[1.08] font-bold tracking-tight">
+                  <h1 className="font-display mb-6 text-[clamp(2.5rem,7.5vw,4.5rem)] leading-[1.08] font-bold tracking-tight">
                     <span className="gradient-text-hero">{t('general.title')}</span>
                   </h1>
 
@@ -310,7 +310,7 @@ export default async function HomePage() {
           <div className="relative mx-auto max-w-6xl">
             <Reveal className="mb-10 max-w-2xl">
               <p className={`${EYEBROW} mb-4`}>{t('home.live.eyebrow')}</p>
-              <h2 className="font-orbitron text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
                 {t('home.live.title')}
               </h2>
               <div className={`${HAIRLINE} mt-5`} aria-hidden="true" />
@@ -348,7 +348,7 @@ export default async function HomePage() {
 
             <Reveal className="order-2 min-w-0 lg:order-1" delay={0.05}>
               <p className={`${EYEBROW} mb-4`}>{t('home.world.eyebrow')}</p>
-              <h2 className="font-orbitron text-3xl leading-tight font-bold text-white md:text-[2.5rem]">
+              <h2 className="font-display text-3xl leading-tight font-bold text-white md:text-[2.5rem]">
                 {t('home.world.title')}
               </h2>
               <div
@@ -383,7 +383,7 @@ export default async function HomePage() {
           <div className="mx-auto max-w-6xl">
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.featuresSection.eyebrow')}</p>
-              <h2 className="font-orbitron text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
                 {t('home.featuresSection.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
@@ -399,7 +399,7 @@ export default async function HomePage() {
                     <div className="mb-5 flex size-11 items-center justify-center rounded-lg border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 transition-colors duration-300 group-hover:bg-cyan-500/20 group-hover:text-cyan-200">
                       {feature.icon}
                     </div>
-                    <h3 className="font-orbitron mb-2.5 text-base font-semibold tracking-wide text-white">
+                    <h3 className="font-display mb-2.5 text-base font-semibold tracking-wide text-white">
                       {t(feature.titleKey)}
                     </h3>
                     <p className="text-base leading-relaxed text-slate-400">
@@ -434,7 +434,7 @@ export default async function HomePage() {
 
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.howItWorks.eyebrow')}</p>
-              <h2 className="font-orbitron text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
                 {t('home.howItWorks.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
@@ -455,13 +455,13 @@ export default async function HomePage() {
                 <Reveal key={step.step} delay={index * 0.05} className="h-full">
                   <div className={`${PANEL} h-full p-7 md:p-8`}>
                     <span
-                      className="font-orbitron block text-4xl font-bold text-cyan-500/25"
+                      className="font-display block text-4xl font-bold text-cyan-500/25"
                       aria-hidden="true"
                     >
                       {step.step}
                     </span>
                     <div className="my-5 h-px w-16 bg-[linear-gradient(90deg,transparent,var(--ds-line-cyan),transparent)]" aria-hidden="true" />
-                    <h3 className="font-orbitron mb-3 text-lg font-semibold text-white">
+                    <h3 className="font-display mb-3 text-lg font-semibold text-white">
                       {t(step.titleKey)}
                     </h3>
                     <p className="text-base leading-relaxed text-slate-400">
@@ -491,7 +491,7 @@ export default async function HomePage() {
           <div className="relative mx-auto max-w-6xl">
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.saga.eyebrow')}</p>
-              <h2 className="font-orbitron text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
                 {t('home.saga.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
@@ -510,7 +510,7 @@ export default async function HomePage() {
 
           <Reveal className="relative mx-auto max-w-3xl">
             <p className={`${EYEBROW} mb-5`}>{t('home.cta.eyebrow')}</p>
-            <h2 className="font-orbitron text-3xl font-bold text-white md:text-5xl">
+            <h2 className="font-display text-3xl font-bold text-white md:text-5xl">
               {t('home.cta.title')}
             </h2>
             <p className="mx-auto mt-6 max-w-xl text-base leading-relaxed text-slate-200 md:text-lg">
@@ -544,7 +544,7 @@ export default async function HomePage() {
         <div className="mx-auto max-w-6xl">
           <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             <div>
-              <p className="font-orbitron mb-1 block text-ds-label font-semibold tracking-[0.2em] text-slate-200 uppercase">
+              <p className="font-display mb-1 block text-ds-label font-semibold tracking-[0.2em] text-slate-200 uppercase">
                 {t('general.title')}
               </p>
               <p className="block text-ds-label leading-[1.6] text-slate-400">

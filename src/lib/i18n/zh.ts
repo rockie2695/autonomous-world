@@ -276,8 +276,8 @@ export const zh = {
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
+  allPlaces: '所有地方',
   tab: '地點',
-  selectPrompt: '在地圖上點選一個地方看詳情',
     name: '地方名稱',
     owner: '所屬勢力',
     unowned: '無主之地',

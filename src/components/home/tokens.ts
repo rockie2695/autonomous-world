@@ -17,7 +17,7 @@
 
 /** 導覽用的小標 / the small uppercase kicker above a heading */
 export const EYEBROW =
-  'font-orbitron text-ds-label font-semibold tracking-[0.24em] text-ds-cyan uppercase';
+  'font-display text-ds-label font-semibold tracking-[0.24em] text-ds-cyan uppercase';
 
 /** 標題下的漸層細線 / the gradient hairline under a heading */
 export const HAIRLINE =
@@ -27,7 +27,7 @@ export const HAIRLINE =
     the primary action's structure; colour stays with the call site */
 export const CTA_BASE =
   'group inline-flex min-h-11 items-center justify-center gap-2.5 rounded-ds-control px-6 ' +
-  'font-orbitron text-[0.9375rem] font-bold tracking-[0.06em] no-underline ' +
+  'font-display text-[0.9375rem] font-bold tracking-[0.06em] no-underline ' +
   'transition-[box-shadow,transform] duration-[260ms] ease-ds hover:-translate-y-px';
 
 /** 主行動鈕的配色：亮底深字，深字在亮漸層上才過得了 4.5:1

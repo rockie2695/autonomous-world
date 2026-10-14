@@ -277,8 +277,8 @@ export const en = {
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
+  allPlaces: 'All places',
   tab: 'Places',
-  selectPrompt: 'Select a place on the map to see its details',
     name: 'Place Name',
     owner: 'Owner',
     unowned: 'Unowned',

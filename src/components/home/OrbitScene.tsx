@@ -345,7 +345,7 @@ export default function OrbitScene({ label }: OrbitSceneProps) {
           The round is HTML, not canvas text: it stays legible at 375px */}
       {round !== null ? (
         <p className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
-          <span className="font-orbitron text-3xl font-bold text-cyan-200 tabular-nums sm:text-4xl">
+          <span className="font-display text-3xl font-bold text-cyan-200 tabular-nums sm:text-4xl">
             {round.toLocaleString('en-US')}
           </span>
         </p>

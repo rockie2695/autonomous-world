@@ -39,9 +39,9 @@ export const GM_KPI =
   'flex-none min-w-[6.5rem] border-l border-[rgba(34,211,238,0.22)] py-[0.15rem] pl-[1.1rem]';
 export const GM_KPI_FIRST = 'flex-none min-w-[6.5rem] border-l-0 py-[0.15rem] pl-0';
 export const GM_KPI_LABEL =
-  'font-orbitron text-xs font-semibold tracking-[0.14em] text-[rgba(165,243,252,0.92)] uppercase';
+  'font-display text-xs font-semibold tracking-[0.14em] text-[rgba(165,243,252,0.92)] uppercase';
 export const GM_KPI_VALUE =
-  'font-orbitron text-[clamp(1.3rem,2vw,1.65rem)] leading-[1.25] font-bold text-slate-50 ' +
+  'font-display text-[clamp(1.3rem,2vw,1.65rem)] leading-[1.25] font-bold text-slate-50 ' +
   'tabular-nums [text-shadow:0_0_18px_rgba(34,211,238,0.35)]';
 
 /** 面板與側軌 / panels and rails */
@@ -53,7 +53,7 @@ export const GM_PANEL =
   "before:absolute before:-top-px before:left-4 before:right-4 before:h-px before:pointer-events-none " +
   "before:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.55),transparent)] before:content-['']";
 export const GM_TITLE =
-  'font-orbitron text-sm font-semibold tracking-[0.14em] text-slate-400 uppercase';
+  'font-display text-sm font-semibold tracking-[0.14em] text-slate-400 uppercase';
 export const GM_RAIL = 'bg-[linear-gradient(180deg,rgba(2,6,23,0.74),rgba(2,6,23,0.56))] backdrop-blur-[10px]';
 
 /** HUD 按鈕 / HUD buttons。三條各自完整，沒有「基底 + 覆寫」的疊加關係，
@@ -145,7 +145,7 @@ export const GM_STAT =
   'px-2 py-[0.6rem] text-center ' +
   "before:absolute before:top-0 before:left-[18%] before:right-[18%] before:h-px " +
   "before:bg-[linear-gradient(90deg,transparent,rgba(34,211,238,0.55),transparent)] before:content-['']";
-export const GM_STAT_VALUE = 'font-orbitron text-xl leading-[1.3] font-bold text-slate-50 tabular-nums';
+export const GM_STAT_VALUE = 'font-display text-xl leading-[1.3] font-bold text-slate-50 tabular-nums';
 export const GM_STAT_LABEL = 'mt-[0.15rem] text-xs tracking-[0.08em] text-slate-400 uppercase';
 
 /** 對話框 / the detail modal */

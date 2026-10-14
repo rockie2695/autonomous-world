@@ -37,8 +37,8 @@ body {
   color: var(--color-text-primary);
 }
 
-.font-orbitron {
-  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', 'Noto Sans TC', sans-serif;
+.font-display {
+  font-family: var(--font-display, 'Chakra Petch'), 'PingFang TC', 'Microsoft JhengHei', 'Noto Sans TC', sans-serif;
 }
 
 /* ─── Starfield Background ────────────────────────────────────────────────── */
@@ -402,7 +402,7 @@ html {
 @layer components {
 
 .ds-eyebrow {
-  font-family: var(--font-orbitron, 'Orbitron'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+  font-family: var(--font-display, 'Chakra Petch'), 'PingFang TC', 'Microsoft JhengHei', sans-serif;
   font-size: 0.8125rem;
   font-weight: 600;
   letter-spacing: 0.24em;

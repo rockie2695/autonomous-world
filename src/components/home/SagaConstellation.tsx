@@ -245,10 +245,10 @@ export default function SagaConstellation({ locale }: SagaConstellationProps) {
             viewport={{ once: true, amount: 0.3 }}
             className="border-t border-cyan-400/25 pt-5"
           >
-            <span className="font-orbitron block text-[0.8125rem] tracking-[0.22em] text-cyan-400/90">
+            <span className="font-display block text-[0.8125rem] tracking-[0.22em] text-cyan-400/90">
               {era.step}
             </span>
-            <h3 className="font-orbitron mt-2 text-lg font-semibold text-white">
+            <h3 className="font-display mt-2 text-lg font-semibold text-white">
               {era.title}
             </h3>
             <p className="mt-2 text-[0.9375rem] leading-relaxed text-slate-400 md:text-base">

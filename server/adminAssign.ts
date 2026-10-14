@@ -27,8 +27,9 @@
 //   must first clear the character's seat anywhere else.
 // ============================================================================
 
-import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
+import { inTransaction, type TxClient } from './tx';
+
 
 /**
  * 判斷地點是否處於「行政官冷卻期」——AI 不得更換其領導。
@@ -82,12 +83,29 @@ export interface GrantAdminParams {
  * the expiry is extended instead of deducting twice.
  */
 export async function grantAdmin(params: GrantAdminParams): Promise<void> {
-  const { worldId, round, place, char, logEvent = true, eventData } = params;
+  await inTransaction((tx) => grantAdminTx(tx, params));
+}
 
+/**
+ * 實際寫入 / The body, run inside one transaction.
+ *
+ * 岗位搬過了而野心沒扣是最害的半寫入：它會永久沒有回歸的回毫。 /
+ * A seat that moves without the ambition delta is the worst kind of half-write: there
+ * is then no scheduled revert, so the deduction is simply permanent.
+ * 實際寫入 / The body, run inside one transaction.
+ *
+ * 岗位搬過了而野心沒扣，就永不會有回歸排安排。 /
+ * A seat that moves without the ambition delta is the worst kind of half-write: no
+ * revert is ever scheduled, so the deduction is simply permanent.
+ */
+async function grantAdminTx(
+  tx: TxClient,
+  { worldId, round, place, char, logEvent = true, eventData }: GrantAdminParams
+): Promise<void> {
   // 清除該角色在其他地點的總督職（唯一約束），並替那些地點打上冷卻錨點 /
   // Clear the character's seat elsewhere (unique constraint) and stamp the
   // cooldown anchor on those places
-  await prisma.place.updateMany({
+  await tx.place.updateMany({
     where: {
       worldId,
       administratorId: char.id,
@@ -97,12 +115,12 @@ export async function grantAdmin(params: GrantAdminParams): Promise<void> {
   });
 
   // 地點換領導：記錄行政官 + 冷卻錨點 / Place changes leader: administrator + cooldown anchor
-  await prisma.place.update({
+  await tx.place.update({
     where: { id: place.id },
     data: { administratorId: char.id, adminChangedRound: round },
   });
 
-  const current = await prisma.character.findUnique({
+  const current = await tx.character.findUnique({
     where: { id: char.id },
     select: { ambition: true, adminAmbitionRevertRound: true },
   });
@@ -111,7 +129,7 @@ export async function grantAdmin(params: GrantAdminParams): Promise<void> {
   // Reduction still pending → continuous service, extend expiry only
   if (current === null) return;
   if (current.adminAmbitionRevertRound !== null) {
-    await prisma.character.update({
+    await tx.character.update({
       where: { id: char.id },
       data: {
         lastPromotedRound: round,
@@ -128,7 +146,7 @@ export async function grantAdmin(params: GrantAdminParams): Promise<void> {
   );
   const appliedDelta = newAmbition - current.ambition;
 
-  await prisma.character.update({
+  await tx.character.update({
     where: { id: char.id },
     data: {
       lastPromotedRound: round,
@@ -143,7 +161,7 @@ export async function grantAdmin(params: GrantAdminParams): Promise<void> {
   });
 
   if (appliedDelta !== 0) {
-    await prisma.ambitionEvent.create({
+    await tx.ambitionEvent.create({
       data: {
         worldId,
         charId: char.id,
@@ -155,7 +173,7 @@ export async function grantAdmin(params: GrantAdminParams): Promise<void> {
   }
 
   if (logEvent) {
-    await prisma.event.create({
+    await tx.event.create({
       data: {
         worldId,
         round,
@@ -194,17 +212,32 @@ export interface RevokeAdminParams {
  * choice, since only the caller knows the succession context.
  */
 export async function revokeAdmin(params: RevokeAdminParams): Promise<void> {
-  const {
-    worldId,
+  await inTransaction((tx) => revokeAdminTx(tx, params));
+}
+
+/**
+ * 實際寫入 / The body, run inside one transaction.
+ *
+ * 岗位搬過了而野心沒扣是最害的半寫入：它會永久沒有回歸的回毫。 /
+ * A seat that moves without the ambition delta is the worst kind of half-write: there
+ * is then no scheduled revert, so the deduction is simply permanent.
+ * 實際寫入 / The body, run inside one transaction.
+ *
+ * 免職不搬岗位，風險在另一個地方： +1 已經入責，却沒清掉未到期的氚免。 /
+ * Revoking moves no seat. The risk is the other one: the +1 lands but the pending
+ * reduction is not cleared, so the scheduled revert would credit a second +1.
+ */
+async function revokeAdminTx(
+  tx: TxClient,
+  { worldId,
     round,
     place,
     char,
     newAdmin,
     logEvent = false,
-    eventData,
-  } = params;
-
-  const current = await prisma.character.findUnique({
+    eventData }: RevokeAdminParams
+): Promise<void> {
+  const current = await tx.character.findUnique({
     where: { id: char.id },
     select: { ambition: true },
   });
@@ -219,13 +252,13 @@ export async function revokeAdmin(params: RevokeAdminParams): Promise<void> {
     // 順帶清掉未到期的減免：免職已給 +1，若再回復會重複計算 /
     // Also cancel the pending reduction: removal already paid +1, so a later
     // revert would double-count
-    await prisma.character.update({
+    await tx.character.update({
       where: { id: char.id },
       data: { ambition: newAmbition, adminAmbitionRevertRound: null },
     });
 
     if (appliedDelta !== 0) {
-      await prisma.ambitionEvent.create({
+      await tx.ambitionEvent.create({
         data: {
           worldId,
           charId: char.id,
@@ -240,7 +273,7 @@ export async function revokeAdmin(params: RevokeAdminParams): Promise<void> {
   }
 
   if (logEvent) {
-    await prisma.event.create({
+    await tx.event.create({
       data: {
         worldId,
         round,

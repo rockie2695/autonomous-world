@@ -203,7 +203,7 @@ function TelemetryStrip({
       >
         <div className="hidden sm:block shrink-0 pr-4 md:pr-6 border-r border-cyan-400/20 max-w-[12rem]">
           <div className="ds-eyebrow">{t('home.stats.title')}</div>
-          <div className="mt-0.5 text-xs text-white/85 font-orbitron tracking-widest truncate">
+          <div className="mt-0.5 text-xs text-white/85 font-display tracking-widest truncate">
             {worldName}
           </div>
         </div>
@@ -565,7 +565,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
             </svg>
           </div>
-          <h2 className="font-orbitron text-lg font-bold text-white mb-2">{t('general.error')}</h2>
+          <h2 className="font-display text-lg font-bold text-white mb-2">{t('general.error')}</h2>
           <p className="text-gray-400 text-base mb-6">{errorMessage}</p>
           <button
             onClick={() => fetchWorldState()}
@@ -640,10 +640,10 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
               </svg>
             </div>
           </div>
-          <span className="font-orbitron font-bold text-sm tracking-wider text-white truncate">
+          <span className="font-display font-bold text-sm tracking-wider text-white truncate">
             {t('general.title')}
           </span>
-          {/* <span className={`${GM_BADGE} hidden sm:flex items-center gap-2 text-xs font-orbitron tracking-wider text-cyan-300/90`}>
+          {/* <span className={`${GM_BADGE} hidden sm:flex items-center gap-2 text-xs font-display tracking-wider text-cyan-300/90`}>
             <span className={`${GM_LIVE}`} aria-hidden="true" />
             RND {String(round).padStart(4, '0')}
           </span> */}
@@ -651,7 +651,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
 
         <div className="hidden sm:flex items-center gap-3 min-w-0 text-gray-400">
           <span className="h-px w-8 bg-gradient-to-r from-transparent to-cyan-400/40" aria-hidden="true" />
-          <span className="text-xs font-orbitron tracking-widest truncate">
+          <span className="text-xs font-display tracking-widest truncate">
             {worldState?.world.name ?? '—'}
           </span>
           <span className="h-px w-8 bg-gradient-to-l from-transparent to-cyan-400/40" aria-hidden="true" />
@@ -701,7 +701,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
           {/* 登出按鈕 / Logout button */}
           <button
             onClick={() => signOut({ callbackUrl: '/' })}
-            className={`${GM_BTN_DANGER} px-3 py-1.5 text-xs font-orbitron tracking-wider`}
+            className={`${GM_BTN_DANGER} px-3 py-1.5 text-xs font-display tracking-wider`}
             title={t('general.logout')}
           >
             {t('general.logout')}
@@ -756,7 +756,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
                 transition={{ type: 'tween', duration: 0.25, ease: 'easeOut' }}
               >
                 <div className="flex items-center justify-between mb-2">
-                  <span className="font-orbitron text-xs text-gray-400 tracking-wider">控制面板</span>
+                  <span className="font-display text-xs text-gray-400 tracking-wider">控制面板</span>
                   <button
                     onClick={() => setLeftSidebarOpen(false)}
                     className={`${GM_BTN} w-7 h-7`}
@@ -906,7 +906,20 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
             setRightPanelOpen(true);
           }}
           open={panelHasContent}
-          onClose={() => setRightPanelOpen(false)}
+          // 面板自己的 ✕ 要**連帶清掉選取**。面板只是把地點詳情搬進分頁而已，選取狀態
+          // 仍然住在 popupStack 裡；只關面板而不清 stack，地圖上的節點就會繼續維持
+          // 選取樣式（高亮 + 強制顯示地名），畫面上看起來就是「關掉了卻還選著」。
+          // 詳情自己的 ✕ 走的是 closePopup，本來就會清；這裡是補上另一條路徑。
+          //
+          // The panel's own ✕ has to clear the selection too. The panel only *hosts* the place
+          // detail as a tab — the selection itself still lives in popupStack. Closing the panel
+          // without emptying the stack leaves the map node highlighted (selected colour plus a
+          // forced label), so the map reads as "still selected" after the popup is gone. The
+          // detail's own ✕ already went through closePopup; this is the other path.
+          onClose={() => {
+            setRightPanelOpen(false);
+            closePopup();
+          }}
           loading={isLoading && !worldState}
         >
           {rightTab === 'characters' && (
@@ -1001,6 +1014,15 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
                 (c) => c.factionId && c.factionId === detailChar.factionId && c.alive
               )
             )}
+            onFocusPlace={(placeId) => {
+              // 鏡頭移過去 **而且** 開啟地點分頁：只移鏡頭的話，讀者得到的是一個
+              // 地圖畫面，卻不知道要再按一次什麼才看得到那個地方的詳情 /
+              // Move the camera AND open the tab: moving the camera alone leaves the reader
+              // staring at the map with no idea what to press next to see the detail.
+              focusPlaceFromLog(placeId);
+              const target = (worldState?.places ?? []).find((pl) => pl.id === placeId);
+              if (target) openPlace(target);
+            }}
           />
         )}
       </DetailModal>
@@ -1020,7 +1042,7 @@ function LanguageSwitch({
   return (
     <button
       onClick={onToggle}
-      className={`${GM_BTN} px-3 py-1.5 text-xs font-orbitron tracking-wider text-cyan-300/90!`}
+      className={`${GM_BTN} px-3 py-1.5 text-xs font-display tracking-wider text-cyan-300/90!`}
       title={t('general.language')}
       aria-label={t('general.language')}
     >
@@ -1221,7 +1243,7 @@ function MapSidePanel({
           className={`pointer-events-auto h-full w-[19rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
         >
           <div className="flex items-center justify-between px-3 pt-3 pb-2">
-            <span className="font-orbitron text-xs text-gray-400 tracking-wider">
+            <span className="font-display text-xs text-gray-400 tracking-wider">
               {tabs.find((tab) => tab.key === activeTab)?.label}
             </span>
             <button
@@ -1259,7 +1281,7 @@ function MapSidePanel({
               aria-selected={isActive}
               onClick={() => onTabChange(tab.key)}
               title={tab.label}
-              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-orbitron tracking-wider transition-all duration-200 ${
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-display tracking-wider transition-all duration-200 ${
                 isActive ? 'bg-cyan-500/15 text-cyan-300' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
               }`}
             >
@@ -1337,7 +1359,7 @@ function NextRoundButton({
         // utilities layer, so this picks one complete button. The disabled
         // cursor rides GM_BTN's disabled: variant, whose condition matches the
         // button's own disabled={!isAdmin || loading} exactly.
-        className={`${!isAdmin ? GM_BTN : GM_BTN_ACCENT} px-3 py-1.5 text-xs font-orbitron tracking-wider`}
+        className={`${!isAdmin ? GM_BTN : GM_BTN_ACCENT} px-3 py-1.5 text-xs font-display tracking-wider`}
         title={isAdmin ? t('admin.runRound') : t('game.adminOnly')}
       >
         {loading ? (
@@ -1416,7 +1438,7 @@ function RoundTimeline({
             aria-label={t('game.autoPlaySpeed')}
             className="flex-1 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500"
           />
-          <span className="text-xs text-gray-400 font-orbitron tabular-nums">
+          <span className="text-xs text-gray-400 font-display tabular-nums">
             {(playSpeed / 1000).toFixed(1)}s
           </span>
         </div>
@@ -1437,7 +1459,7 @@ function RoundTimeline({
                 : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
                 }`}
             >
-              <span className="font-orbitron tracking-wider">{t('game.round')} {String(round).padStart(4, '0')}</span>
+              <span className="font-display tracking-wider">{t('game.round')} {String(round).padStart(4, '0')}</span>
             </button>
           )
         )}
@@ -1445,7 +1467,7 @@ function RoundTimeline({
           <button
             type="button"
             onClick={() => setOlderPages((pages) => pages + 1)}
-            className={`${GM_BTN} w-full mt-1 py-1.5 text-xs font-orbitron tracking-wider`}
+            className={`${GM_BTN} w-full mt-1 py-1.5 text-xs font-display tracking-wider`}
           >
             載入更早回合（{oldestRound}）
           </button>
@@ -1476,11 +1498,15 @@ function LeaderDetail({
   faction,
   placeName,
   factionAverage,
+  onFocusPlace,
 }: {
   char: WorldState['characters'][0];
   faction: WorldState['factions'][0] | null;
   placeName: string;
   factionAverage: number[] | null;
+  /** 點「位置」時把鏡頭移過去並開啟地點分頁 /
+   *  Called when 位置 is clicked: move the camera there and open the 地點 tab */
+  onFocusPlace: (placeId: string) => void;
 }) {
   const stats: ReadonlyArray<readonly [string, string | number]> = [
     [t('character.wu'), char.wu],
@@ -1520,17 +1546,37 @@ function LeaderDetail({
               <Crown className="w-4 h-4 text-amber-300 shrink-0" label={t('character.isKing')} />
             )}
           </span>
-          <span className="text-xs text-gray-400">{faction ? faction.name : '—'}</span>
+          {/* 勢力色塊放在勢力名「左邊」：色塊先到，文字才對得起那個顏色。
+              沒有勢力時才用 em dash，不留一個沒有來源的色塊 /
+              The faction swatch sits to the LEFT of the name, so the colour arrives before
+              the word it belongs to. No swatch when there is no faction: a coloured chip
+              with nothing behind it reads as a different faction. */}
+          <span className="flex items-center gap-1.5">
+            {faction && (
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ backgroundColor: faction.color }}
+                aria-hidden="true"
+              />
+            )}
+            <span className="text-xs text-gray-400">{faction ? faction.name : '—'}</span>
+          </span>
           {!char.alive && (
             <span className="text-xs text-rose-300">{t('character.dead')}</span>
           )}
         </div>
       </div>
       <div className="flex-1 min-w-0 space-y-3">
+        {/* interactive：詳情彌窗里的圖是固定的，可以很自然地接受游標；
+            而將領表那一列的浮動預稿必須保持 pointer-events-none，
+            否則面板會觸發那一列的 mouseleave 而閃烁消失 /
+            interactive: in the modal the chart is static and can take the pointer; the
+            leader-table hover preview must stay non-interactive or it flickers away */}
         <CharacterRadarHover
           character={char}
           factionAverage={factionAverage}
           color={faction ? faction.color : '#64748b'}
+          interactive
         />
         <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
           {stats.map(([label, value]) => (
@@ -1539,12 +1585,25 @@ function LeaderDetail({
               className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
             >
               <dt className="text-xs text-gray-400">{label}</dt>
-              <dd className="text-xs text-gray-200 font-orbitron">{value}</dd>
+              <dd className="text-xs text-gray-200 font-display">{value}</dd>
             </div>
           ))}
           <div className="flex items-center justify-between gap-2 border-b border-white/5 py-1">
             <dt className="text-xs text-gray-400">{t('character.place')}</dt>
-            <dd className="text-xs text-gray-200 truncate">{placeName}</dd>
+            {/* 位置可點：把鏡頭移過去，並且開啟「地點」分頁看那個地方的詳情。
+                只是文字時，它等於叫讀者自己去地圖上找那個地方 /
+                The place is clickable: move the camera there AND open the 地點 tab, so the
+                detail is actually shown. As plain text it only told the reader where to go
+                and look for it. */}
+            <dd className="min-w-0">
+              <button
+                type="button"
+                onClick={() => onFocusPlace(char.placeId)}
+                className="block max-w-full text-xs text-cyan-300 hover:text-cyan-200 hover:underline transition-colors duration-150 truncate text-left"
+              >
+                {placeName}
+              </button>
+            </dd>
           </div>
         </dl>
       </div>
@@ -1687,7 +1746,7 @@ function CharacterList({
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
                 {char.isKing && <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" label={t('character.isKing')} />}
-                <span className="ml-auto flex items-center gap-1 text-xs text-gray-400 font-orbitron">
+                <span className="ml-auto flex items-center gap-1 text-xs text-gray-400 font-display">
                   <Ic className="w-3.5 h-3.5"><path d="m6 13 6-6 6 6M6 18l6-6 6 6" /></Ic>
                   <span className="sr-only">{t('character.troops')}: </span>
                   {char.troops}
@@ -1704,7 +1763,7 @@ function CharacterList({
           <button
             type="button"
             onClick={() => setListShown((count) => count + 100)}
-            className={`${GM_BTN} w-full py-2 text-xs font-orbitron tracking-wider`}
+            className={`${GM_BTN} w-full py-2 text-xs font-display tracking-wider`}
           >
             載入更多（{aliveRows.length - listShown}）
           </button>
@@ -1855,18 +1914,18 @@ function CharacterList({
                     <span className="text-gray-400">—</span>
                   )}
                 </td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.wu}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.tong}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.ti}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.jing}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.speed}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.wu}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.tong}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.ti}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.jing}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.speed}</td>
                 {/* 野心存於 Float 欄位（±0.5 增減），顯示取整與其他整數屬性一致 /
                     Ambition lives in a Float column (±0.5 deltas); round for
                     display so it matches the other integer stats */}
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{Math.round(char.ambition)}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.age}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.troops}</td>
-                <td className="py-2 pr-3 text-gray-300 font-orbitron text-right">{char.gold}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{Math.round(char.ambition)}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.age}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.troops}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.gold}</td>
                 <td className="py-2 pr-3 text-gray-300">
                   {t(`character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`)}
                 </td>
@@ -1880,7 +1939,7 @@ function CharacterList({
           <button
             type="button"
             onClick={() => setRowsShown((count) => count + 100)}
-            className={`${GM_BTN} w-full mt-3 py-2 text-xs font-orbitron tracking-wider`}
+            className={`${GM_BTN} w-full mt-3 py-2 text-xs font-display tracking-wider`}
           >
             載入更多（{detailRows.length - rowsShown}）
           </button>
@@ -2012,15 +2071,56 @@ const [hoveredBuilding, setHoveredBuilding] = useState<BuildingKind | null>(null
  */
 const openBuilding = pinnedBuilding ?? hoveredBuilding;
 
-  // 還沒選地點時的空白狀態。這個面板現在是「地點」分頁的內容，所以「沒有選中」是一個
-  // 正常狀態，不是錯誤——原本它是浮動彈窗，根本不會在沒有選中時存在 /
-  // The no-place-selected state. This panel is now the 地點 tab's content, so "nothing
-  // selected" is a normal state rather than an error — as a floating popup it simply
-  // did not exist when nothing was selected.
+  // 還沒選地點時：不是空白，而是**列出所有地點**讓人直接點。這個面板現在是「地點」分頁
+  // 的內容，所以「沒有選中」是一個正常狀態；但只放一句提示等於逼讀者回到地圖自己去點，
+  // 面板既然已經在這裡，就該把所有地點攤開。依名稱排序，因為這個列表和地圖的視覺位置無關。
+  //
+  // With nothing selected, do not show a dead end: list every place and let the reader pick.
+  // This panel is the 地點 tab's content, so "nothing selected" is a normal state — but a
+  // one-line prompt sends the reader back to the map to hunt. The panel is already here, so
+  // it should list them. Sorted by name, because this list has no spatial cue of its own.
   if (!place) {
+    const sorted = [...places].sort((a, b) => a.name.localeCompare(b.name));
     return (
-      <div className={`${GM_PANEL} px-3 py-10 text-center`}>
-        <p className="text-base text-gray-400">{t('place.selectPrompt')}</p>
+      <div className={`${GM_PANEL} px-2 py-2`}>
+        <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.allPlaces')}</div>
+        {sorted.length === 0 ? (
+          <p className="text-base text-gray-400 px-1">{t('game.noData')}</p>
+        ) : (
+          <ul className="space-y-0.5 max-h-[70vh] overflow-y-auto ds-gm-scroll">
+            {sorted.map((p) => {
+              const owner = factions.find((f) => f.id === p.factionId);
+              return (
+                <li key={p.id}>
+                  <button
+                    type="button"
+                    onClick={() => onOpenPlace(p)}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-white/5"
+                  >
+                    {/* 勢力色塊在地點名左邊，與將領詳情的排列一致 /
+                        The faction swatch sits left of the name, matching the leader detail */}
+                    <span
+                      className="size-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: owner ? owner.color : 'transparent' }}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-sm text-gray-200">
+                      {p.name}
+                    </span>
+                    {!owner && (
+                      <span className="shrink-0 text-xs text-gray-500">
+                        {t('place.unowned')}
+                      </span>
+                    )}
+                    <span className="shrink-0 font-display text-xs text-cyan-300/80 tabular-nums">
+                      {p.garrison}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
       </div>
     );
   }
@@ -2086,7 +2186,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
           {/* 標頭 / Header */}
           <div className="relative h-full flex items-end justify-between gap-3 p-4 pb-3">
             <div className="min-w-0">
-              <h3 className="font-orbitron font-bold text-lg text-white tracking-wide truncate">{place.name}</h3>
+              <h3 className="font-display font-bold text-lg text-white tracking-wide truncate">{place.name}</h3>
               {faction && (
                 <div className="flex items-center gap-1.5 mt-1">
                   <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: faction.color }} />
@@ -2162,7 +2262,18 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                 return (
                   <div
                     key={row.kind}
-                    className="rounded-lg bg-white/5 border border-white/10 overflow-hidden"
+                    // 展開時提高 z：提示畫在這一張卡的**外面**（上一張卡的上方），
+                    // 不提高的話會被後面的同層卡片蓋掉。
+                    // 而這裡**不能**把 `overflow-hidden` 加回來：它會把提示整個裁掉，
+                    // z 再高也沒用——裁切與堆疊順序是兩件事。
+                    //
+                    // Raise z while expanded: the tooltip renders *outside* this card, over the
+                    // card above it, so a later sibling would otherwise paint over it. And
+                    // `overflow-hidden` must not come back here — it clips the tooltip away
+                    // entirely, and no z-index can undo a clip.
+                    className={`relative rounded-lg bg-white/5 border border-white/10 ${
+                      expanded ? 'z-30' : ''
+                    }`}
                   >
                     <button
                       type="button"
@@ -2186,7 +2297,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           The level is the headline number, so it keeps the active colour
                           whether or not the table is expanded */}
                       <span
-                        className={`font-orbitron text-sm tabular-nums shrink-0 ${
+                        className={`font-display text-sm tabular-nums shrink-0 ${
                           level > 0 ? 'text-cyan-300' : 'text-gray-500'
                         }`}
                       >
@@ -2194,12 +2305,12 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                       </span>
                       <span className="text-base text-gray-200 shrink-0">{t(row.labelKey)}</span>
                       <span className="flex-1 min-w-0" />
-                      <span className="text-sm text-gray-300 font-orbitron tabular-nums shrink-0">
+                      <span className="text-sm text-gray-300 font-display tabular-nums shrink-0">
                         {formatEffect(buildingTotal(row.kind, level), per.unit)}
                       </span>
                       {cost !== null ? (
                         <span
-                          className={`text-sm font-orbitron tabular-nums shrink-0 ${
+                          className={`text-sm font-display tabular-nums shrink-0 ${
                             affordable ? 'text-amber-300' : 'text-rose-300'
                           }`}
                           title={adminChar ? `${t('place.adminHas')} ${adminChar.gold}` : undefined}
@@ -2219,58 +2330,66 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                         <path d="m6 9 6 6 6-6" />
                       </Ic>
                     </button>
-                    {expanded && (
-                      <div className="px-2.5 pb-2.5">
-                        <div className="grid grid-cols-3 gap-1">
-                          {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
-                            const active = lvl === level;
-                            const reached = lvl <= level;
-                            return (
-                              <div
+                    {/* 一級一點：已達到的填滿，目前等級是 active 色，未達到的只剩外框。
+                        數字不常駐——滑鼠停在點點上時用 tooltip 顯示，這樣一行只佔幾像素，
+                        三棟建築疊起來仍然讀得完。
+                        One dot per level: reached levels filled, the current one in the active colour,
+                        unreached ones reduced to an outline. The numbers are not permanent — they appear
+                        in a tooltip on hover, so a row costs a few pixels and all three buildings still fit. */}
+                    <div
+                      className="group/dots relative flex items-center gap-1.5 px-2.5 pb-2"
+                      onMouseEnter={() => setPinnedBuilding(row.kind)}
+                      onMouseLeave={() => setPinnedBuilding((cur) => (cur === row.kind ? null : cur))}
+                    >
+                        {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
+                          const active = lvl === level;
+                          const reached = lvl <= level;
+                          return (
+                          <span
+                            key={lvl}
+                            className={`size-2 rounded-full transition-colors duration-150 ${
+                              active
+                                ? 'bg-cyan-300 ring-2 ring-cyan-400/50 scale-125'
+                                : reached
+                                  ? 'bg-cyan-400/45'
+                                  : 'border border-white/20 bg-transparent'
+                            }`}
+                            title={`L${lvl} · ${formatEffect(buildingTotal(row.kind, lvl), per.unit)}`}
+                          />
+                          );
+                        })}
+{/* 提示固定貼在點點**上方**（bottom-full）。點點本來就在每一張卡片的底部，下面就是卡片邊界，
+                          再往下只會被裁掉，所以一律往上，不做翻轉。
+                          The tooltip is anchored above the dots (bottom-full) unconditionally:
+                          the dots already sit at the bottom of each card, so anything below
+                          them is the card edge and would be clipped. No flip needed. */}
+                      {expanded && (
+                        <div
+                          className="pointer-events-none absolute left-2.5 bottom-full mb-1 z-20 min-w-[9rem] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
+                          role="tooltip"
+                          >
+                          <ul className="space-y-0.5">
+                            {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => (
+                              <li
                                 key={lvl}
-                                className={`rounded-md border px-1.5 py-1 text-center ${
-                                  active
-                                    ? 'border-cyan-400/70 bg-cyan-400/15'
-                                    : reached
-                                      ? 'border-white/10 bg-white/5'
-                                      : 'border-white/5 bg-transparent'
+                                className={`flex items-center gap-1.5 text-[13px] font-mono tabular-nums ${
+                                  lvl === level ? 'text-cyan-200' : 'text-gray-400'
                                 }`}
                               >
-                                <div
-                                  className={`font-orbitron text-[11px] leading-none ${
-                                    active ? 'text-cyan-200' : 'text-gray-500'
-                                  }`}
-                                >
-                                  L{lvl}
-                                </div>
-                                <div
-                                  className={`text-[13px] leading-tight mt-0.5 ${
-                                    active
-                                      ? 'text-cyan-100'
-                                      : reached
-                                        ? 'text-gray-300'
-                                        : 'text-gray-600'
-                                  }`}
-                                >
-                                  {formatEffect(buildingTotal(row.kind, lvl), per.unit)}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {/* 升到下一級的增量只在列上重複一次，這裡說明各級之間的差別 /
-                            What one more level adds is already on the row; this line
-                            explains the spacing between the levels instead */}
-                        <div className="mt-1 text-[13px] text-gray-500">
-                          {t('place.perLevel')} {formatEffect(per.value, per.unit)}
-                        </div>
-                        {adminChar && cost !== null && (
-                          <div className="mt-0.5 text-[13px] text-gray-500">
-                            {t('place.adminHas')} {adminChar.gold}
+                                <span className="w-4 shrink-0">L{lvl}</span>
+                                <span>{formatEffect(buildingTotal(row.kind, lvl), per.unit)}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <div className="mt-1 border-t border-white/10 pt-1 text-[11px] text-gray-500">
+                            {t('place.perLevel')} {formatEffect(per.value, per.unit)}
+                            {adminChar && cost !== null && (
+                              <> · {t('place.adminHas')} {adminChar.gold}</>
+                            )}
                           </div>
-                        )}
-                      </div>
-                    )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -2282,13 +2401,13 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
             <div className={`${GM_TITLE} text-xs!`}>{t('place.perRound')}</div>
             <div className="flex items-baseline justify-between gap-2 text-base">
               <span className="text-gray-400">{t('place.recruitsToGarrison')}</span>
-              <span className="font-orbitron text-cyan-300 tabular-nums">
+              <span className="font-display text-cyan-300 tabular-nums">
                 +{placeRecruits(place.barracks)}
               </span>
             </div>
             <div className="flex items-baseline justify-between gap-2 text-base">
               <span className="text-gray-400">{t('place.incomeTotal')}</span>
-              <span className="font-orbitron text-amber-300 tabular-nums">
+              <span className="font-display text-amber-300 tabular-nums">
                 {placeIncome(place.market)}
               </span>
             </div>
@@ -2297,7 +2416,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                 outcome rather than the nominal share */}
             <div className="flex items-baseline justify-between gap-2 text-base">
               <span className="text-gray-400">{t('place.toAdmin')}</span>
-              <span className={`font-orbitron tabular-nums ${adminChar ? 'text-amber-300' : 'text-gray-500'}`}>
+              <span className={`font-display tabular-nums ${adminChar ? 'text-amber-300' : 'text-gray-500'}`}>
                 {adminLeaderShare === null ? t('place.nobodyPaid') : `+${adminLeaderShare}`}
               </span>
             </div>
@@ -2306,7 +2425,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
           {/* 駐軍 / Garrison */}
           <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 border border-white/10">
             <span className="text-base text-gray-400">{t('place.garrison')}</span>
-            <span className="font-orbitron font-bold text-lg text-cyan-300 tabular-nums">{place.garrison}</span>
+            <span className="font-display font-bold text-lg text-cyan-300 tabular-nums">{place.garrison}</span>
           </div>
 
           {/* 行政官 / Administrator */}
@@ -2348,7 +2467,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-gray-200">{char.name}</span>
                     {char.isKing && <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" label={t('character.isKing')} />}
-                    <span className="ml-auto flex items-center gap-3 text-sm font-orbitron">
+                    <span className="ml-auto flex items-center gap-3 text-sm font-display">
                       {/* 兵力配劍、金幣配錢記號，並各自上色。原本兩個數字直接並排、
                           金幣連圖示都沒有，看不出哪個是兵力哪個是金幣 / Troops get a
                           sword and gold a coin, each colour-coded. Previously the two
@@ -2372,7 +2491,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                       </span>
                     </span>
                   </div>
-                  <div className="flex flex-wrap gap-x-2.5 text-xs font-orbitron text-gray-400">
+                  <div className="flex flex-wrap gap-x-2.5 text-xs font-display text-gray-400">
                     <span>{t('character.wu')} {char.wu}</span>
                     <span>{t('character.tong')} {char.tong}</span>
                     <span>{t('character.ti')} {char.ti}</span>
@@ -2454,7 +2573,7 @@ function ZoomSlider({
         title={label}
         className="w-28 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
       />
-      <span className="text-xs text-gray-400 font-orbitron tabular-nums w-9 text-right">
+      <span className="text-xs text-gray-400 font-display tabular-nums w-9 text-right">
         {Math.round(zoom * 100)}%
       </span>
     </div>

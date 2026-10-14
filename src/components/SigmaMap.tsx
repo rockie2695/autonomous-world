@@ -27,6 +27,7 @@ import Sigma from 'sigma';
 import { drawDiscNodeHover } from 'sigma/rendering';
 import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
+import { createRng } from '@/lib/rng';
 import {
   buildTerritoryField,
   factionAt,
@@ -1613,6 +1614,45 @@ useEffect(() => {
           ctx.arc(vp.x, vp.y, nodeRadius * (1 + 0.3 * corePulse), 0, Math.PI * 2);
           ctx.fillStyle = color;
           ctx.shadowColor = color;
+          // 行星與月球：純粹從節點 id 抽出來，所以同一個地點每次都長得一樣，換一台機器也一樣。
+          // Planet and moons are derived from the node id alone, so a place always looks the
+          // same and every client agrees without storing anything.
+          const detail = createRng(node);
+          const hasPlanet = detail.chance(CONFIG.MAP_STAR_PLANET_CHANCE);
+          const moonCount = detail.int(0, CONFIG.MAP_STAR_MOON_MAX);
+          const moonPhase = (t / CONFIG.MAP_STAR_MOON_ORBIT_MS) * Math.PI * 2;
+
+          if (hasPlanet) {
+            // 行星環畫成壓扁的橢圓：正圓看起來像第二個軌道環，橢圓才像有傾斜的圓盤
+            // The planet ring is a flattened ellipse: a circle would read as a second orbital
+            // ring, an ellipse reads as a tilted disc
+            const pr = ringRadius * CONFIG.MAP_STAR_PLANET_RING_RATIO;
+            ctx.save();
+            ctx.translate(vp.x, vp.y);
+            ctx.rotate(-0.32); // 固定傾斜角 / a fixed tilt
+            ctx.beginPath();
+            ctx.ellipse(0, 0, pr, pr * 0.32, 0, 0, Math.PI * 2);
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = CONFIG.MAP_STAR_RING_ALPHA * 0.9;
+            ctx.lineWidth = CONFIG.MAP_STAR_PLANET_RING_WIDTH;
+            ctx.stroke();
+            ctx.restore();
+            ctx.globalAlpha = 1;
+          }
+
+          for (let m = 0; m < moonCount; m++) {
+            // 每顆月球的起始相位也從 rng 抽出來，三顆才不會疊在同一點 / Each moon's start
+            // phase comes from the rng too, or three moons would stack on one spot
+            const a = moonPhase + (m / CONFIG.MAP_STAR_MOON_MAX) * Math.PI * 2;
+            const mr = nodeRadius * CONFIG.MAP_STAR_MOON_RATIO;
+            ctx.beginPath();
+            ctx.arc(vp.x + mr * Math.cos(a), vp.y + mr * Math.sin(a), CONFIG.MAP_STAR_MOON_SIZE, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.7;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+          }
+
           ctx.shadowBlur = CONFIG.MAP_STAR_CORE_GLOW;
           ctx.globalAlpha = 0.3 + 0.35 * corePulse;
           ctx.fill();
@@ -1813,7 +1853,7 @@ useEffect(() => {
               ref={(el) => {
                 territoryLabelEls.current[index] = el;
               }}
-              className="absolute left-0 top-0 whitespace-nowrap font-orbitron leading-none tracking-widest opacity-0"
+              className="absolute left-0 top-0 whitespace-nowrap font-display leading-none tracking-widest opacity-0"
               style={{
                 color: label.color,
                 // 勢力色是執行期資料；文字陰影讓名字在深色與淺色領地上都讀得到 /
@@ -1885,18 +1925,18 @@ useEffect(() => {
                   className="w-3 h-3 rounded-full shrink-0"
                   style={{ backgroundColor: tooltip.color }}
                 />
-                <span className="font-orbitron font-bold text-lg text-white tracking-wide">
+                <span className="font-display font-bold text-lg text-white tracking-wide">
                   {tooltip.name}
                 </span>
               </div>
               <div className="text-gray-400 text-sm">
                 控制地方:{' '}
-                <span className="text-cyan-400 font-orbitron">{tooltip.placeCount}</span>
+                <span className="text-cyan-400 font-display">{tooltip.placeCount}</span>
               </div>
             </>
           ) : (
             <>
-              <div className="font-orbitron font-bold text-lg text-white mb-1 tracking-wide">
+              <div className="font-display font-bold text-lg text-white mb-1 tracking-wide">
                 {tooltip.place.name}
               </div>
               {tooltip.faction && (
@@ -1909,11 +1949,11 @@ useEffect(() => {
                 </div>
               )}
               <div className="space-y-0.5 text-gray-400 text-sm">
-                <div>⚔️ 兵力: <span className="text-cyan-400 font-orbitron">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
-                <div>🏰 堡壘: <span className="text-gray-400 font-orbitron">{tooltip.place.fortress}</span></div>
-                <div>🏪 市場: <span className="text-gray-400 font-orbitron">{tooltip.place.market}</span></div>
-                <div>🏯 兵營: <span className="text-gray-400 font-orbitron">{tooltip.place.barracks}</span></div>
-                <div>👥 將領: <span className="text-gray-400 font-orbitron">{tooltip.characterCount}</span></div>
+                <div>⚔️ 兵力: <span className="text-cyan-400 font-display">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
+                <div>🏰 堡壘: <span className="text-gray-400 font-display">{tooltip.place.fortress}</span></div>
+                <div>🏪 市場: <span className="text-gray-400 font-display">{tooltip.place.market}</span></div>
+                <div>🏯 兵營: <span className="text-gray-400 font-display">{tooltip.place.barracks}</span></div>
+                <div>👥 將領: <span className="text-gray-400 font-display">{tooltip.characterCount}</span></div>
               </div>
               {tooltip.linkedPlaces.length > 0 && (
                 <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-400 text-sm">

@@ -95,7 +95,7 @@ export default function HomeNav({ locale, links, enterLabel, brandLabel }: HomeN
               <path d="M12 2v4m0 12v4M2 12h4m12 0h4m-3.5-6.5L17 7m-10 10-1.5 1.5M20.5 17.5 19 17M5 7 3.5 5.5" />
             </svg>
           </span>
-          <span className="font-orbitron hidden min-w-0 truncate text-sm font-bold tracking-[0.18em] text-white sm:inline md:text-base">
+          <span className="font-display hidden min-w-0 truncate text-sm font-bold tracking-[0.18em] text-white sm:inline md:text-base">
             AUTONOMOUS WORLD
           </span>
         </Link>

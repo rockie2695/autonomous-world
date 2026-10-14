@@ -136,7 +136,7 @@ export default function LiveStats({ locale }: LiveStatsProps) {
             className="block rounded-ds-control border border-ds-line bg-slate-900/50 px-3.5 py-4 text-center"
           >
             <span
-              className="block font-orbitron text-[clamp(1.5rem,3.4vw,2rem)] leading-[1.2] font-bold text-slate-50 tabular-nums whitespace-nowrap data-changed:animate-ds-bump"
+              className="block font-display text-[clamp(1.5rem,3.4vw,2rem)] leading-[1.2] font-bold text-slate-50 tabular-nums whitespace-nowrap data-changed:animate-ds-bump"
               data-changed={changed.has(cell.key) ? 'true' : undefined}
             >
               {cell.value.toLocaleString(locale === 'zh' ? 'zh-TW' : 'en-US')}
@@ -151,7 +151,7 @@ export default function LiveStats({ locale }: LiveStatsProps) {
       {/* 資料擷取時間：讓讀者知道這不是寫死的數字 / proves the numbers are not hardcoded */}
       <p className="mt-4 flex flex-wrap items-center gap-2 text-ds-label text-slate-400">
         <span className={LIVE_DOT} aria-hidden="true" />
-        <span className="font-orbitron tracking-[0.18em] text-cyan-300 uppercase">
+        <span className="font-display tracking-[0.18em] text-cyan-300 uppercase">
           {t('home.feed.live')}
         </span>
         {time ? <span>{t('home.live.updated', { time })}</span> : null}

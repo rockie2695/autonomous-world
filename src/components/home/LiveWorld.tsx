@@ -63,7 +63,7 @@ export default function LiveWorld({ locale }: LiveWorldProps) {
       {/* 勢力圖例：名稱與顏色都是資料庫的值，不寫死
           names and colours come from the database, never hardcoded */}
       <div className="mt-6">
-        <p className="font-orbitron text-ds-label font-semibold tracking-[0.2em] text-slate-400 uppercase">
+        <p className="font-display text-ds-label font-semibold tracking-[0.2em] text-slate-400 uppercase">
           {t('home.world.legendTitle')}
         </p>
 

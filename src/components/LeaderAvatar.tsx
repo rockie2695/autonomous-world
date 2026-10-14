@@ -295,7 +295,31 @@ const SPEED_LINES: Record<AbilityTier, readonly number[]> = {
  * three bands all but flatten into each other. One scale factor makes every cue legible
  * without a tooltip.
  */
+/**
+
+/**
+ * 輪圓圖根換字機：衣袍上下比件暗、预算理例要更大的尺寸，這不能単靠方形等掉。
+ * Per-region cue scale. The chest cue is deliberately SMALLER than the default: it sits
+ * in the middle of the body where the abacus and the coin are large shapes, and at the
+ * shared scale it crowded the robe and the shoulder boards.
+ */
+/**
+ * 對象圖的 clipPath id。
+ *
+ * 每個頭像用同一個 id 是安全的：裁剪圖形在每個頭像里都完全一樣，所以重複的 id 會引到第一个也是一樣的。
+ * 與獨、肩章相後是對兩個**已存在**的组加 clipPath 属性，不斷增任何 group——
+ * 之前新增一個包裹組更幸讓 JSX 平衡失敗，對比照警誝。
+ *
+ * One shared clip id is safe: the clip shape is identical in every avatar, so a duplicate
+ * id resolving to the first one is still the same rectangle. The clipPath is attached as
+ * an ATTRIBUTE on the two groups that already exist (chest and head), so no wrapper is
+ * added — a previous attempt that inserted one unbalanced the JSX.
+ */
+const AVATAR_CLIP_ID = "avatar-round-clip";
+
 const TIER_CUE_SCALE = 1.45;
+const TIER_CUE_SCALE_CHEST = 1.0;
+const TIER_CUE_SCALE_ARM = 1.0;
 
 export interface AvatarTraits {
   skin: string;
@@ -600,9 +624,53 @@ export function LeaderAvatar({
           rise together; the head is a second group, out of phase. Breathing is off
           by default (see `breathe`), so these transforms are never written unless
           it is on. */}
-      <g ref={chestRef}>
+{/* 圍換的圍拷圖角：衣袍與肩章直接落到底邊，不切它會透出圍換 /
+    The rounded plate: the robe and shoulder boards run right to the bottom edge, and
+    without this they bleed outside the rounded square. */}
+<defs>
+  <clipPath id={AVATAR_CLIP_ID}>
+    <rect x="0" y="0" width="100" height="100" rx="14" />
+  </clipPath>
+</defs>
+      <g ref={chestRef}
+        clipPath={`url(#${AVATAR_CLIP_ID})`}
+      >
       {/* 衣袍與肩膀 / Robe and shoulders */}
       <path d="M5 100 Q50 40 95 100 Z" fill={robe} />
+
+      {/* ── 前臂：護具下面是**一條真的手臂**，不是直接浮在衣袍上的色塊 ──
+          少了手臂，護腕看起來就像貼在衣料上的一條貼紙，讀不出「這是四肢」；有了手臂，
+          金／鋼／麻三種材質才有承托物可以對比。這一段刻意畫在**肩章之前**，肩章才會
+          壓在肩膀上，而不是被手臂穿過去。
+          The forearm is a real limb, not a coloured patch floating on the robe. Without it the
+          guard reads as a sticker on cloth rather than an arm, and the gold/steel/hemp materials
+          have nothing to contrast against. It is drawn *before* the shoulder board, so the board
+          sits on top of the shoulder instead of the arm passing through it. */}
+      {[false, true].map((mirror) => (
+        <g key={`arm-${mirror ? 'r' : 'l'}`}>
+          {/* 深色邊緣與衣袍分界 / A dark rim so the arm separates from the robe.
+              上緣壓到肩章之下：手臂本來就在肩膀的位置，但畫出來的高一點就會從肩章的
+              斜邊上方露出一塊皮膚，讀起來像脖子旁長了一塊。
+              The top edge is tucked under the board: the arm does belong at the shoulder, but a
+              little higher and a wedge of skin clears the board's diagonal and reads as a neck. */}
+          <path
+            d={mirror ? 'M77 77 L83 100 L70 100 L68 79 Z' : 'M23 77 L17 100 L30 100 L32 79 Z'}
+            fill={skin}
+            stroke="#0b1220"
+            strokeWidth="1.2"
+            strokeOpacity="0.5"
+          />
+          {/* 內側一道暗面，讓手臂是圓柱而不是一塊平色 / An inner shade, so the arm reads as a
+              cylinder rather than a flat patch */}
+          <path
+            d={mirror ? 'M68.5 81 L71 100' : 'M31.5 81 L29 100'}
+            stroke="#0f172a"
+            strokeWidth="1"
+            opacity="0.22"
+            strokeLinecap="round"
+          />
+        </g>
+      ))}
 
       {/* ── 統領：肩章 / Leadership: the shoulder board ──
           同一個物件逐級劣化，而且**大小也一起變**：寬板 + 流蘇（金）→ 素板（鋼）
@@ -676,34 +744,28 @@ export function LeaderAvatar({
       })}
 
       {/* ── 體魄：前臂護具 / Physique: the forearm guard ──
-          位置在肩章**之下**、衣袍的外緣，是四個部位（頭／肩／胸／臂）裡唯一還空著的
-          一塊，所以四項能力可以一眼分開而不會互相蓋掉。同一個物件逐級劣化，同時也變窄：
-          重甲護腕（金）→ 素臂鐔（鋼）→ 布纏臂（麻）。
-          The Physique cue sits *below* the shoulder board on the robe's outer edge — the only
-          free body region left once head / shoulders / chest are taken, so all four abilities
-          stay separable at a glance. One object degrading and narrowing: heavy bracer (gold)
-          → plain vambrace (steel) → thin forearm wrap (hemp). */}
+          位置在肩章**之下**、前臂之上，是四個部位（頭／肩／胸／臂）裡唯一還空著的
+          一塊，所以四項能力可以一眼分開而不會互相蓋掉。
+          三段**共用同一個尺寸**：階級改由材質（金／鋼／麻）、外框與飾線表達，而不是
+          由大小表達。原本 mid 與 low 的護具比較小，結果低階的線索不是「弱」而是「幾乎
+          看不見」——在 40px 的列表列上，那正是唯一承載體魄資訊的地方。
+          The Physique cue sits *below* the shoulder board, on the forearm — the only free
+          body region left once head / shoulders / chest are taken, so all four abilities stay
+          separable at a glance. All three bands share **one size**: rank is carried by material
+          (gold / steel / hemp), the rim and the detailing, not by extent. mid and low used to be
+          smaller, which made the low band's signal "almost invisible" rather than "weak" — and
+          that is precisely where the only ti signal lives at the 40px list size. */}
       {[false, true].map((mirror) => {
         const tier = traits.tiTier;
-        const band =
-          tier === 'high'
-            ? mirror
-              ? 'M66 85 L84 86 L83 94 L65 93 Z'
-              : 'M16 86 L34 85 L35 93 L17 94 Z'
-            : tier === 'mid'
-              ? mirror
-                ? 'M68 86.5 L82 87 L81.5 92 L67.5 91.5 Z'
-                : 'M18 87 L32 86.5 L32.5 91.5 L18.5 92 Z'
-              : mirror
-                ? 'M70 88 L80 88.5 L79.5 91 L69.5 90.5 Z'
-                : 'M20 88.5 L30 88 L30.5 90.5 L20.5 91 Z';
+        // 同一段幾何，三階共用 / one geometry, shared by all three bands
+        const band = mirror ? 'M66 85 L84 86 L83 94 L65 93 Z' : 'M16 86 L34 85 L35 93 L17 94 Z';
         return (
           <g
             key={`ti-${mirror ? 'r' : 'l'}`}
             /* 以自己的中心放大：座標不變，所以護腕仍然長在同一條前臂上，只是變大。
                Scaling about each band's own centre keeps the coordinates — and therefore the
                placement on the arm — untouched, and only makes the cue read at a glance. */
-            transform={`translate(${mirror ? 74.5 : 25.5} 89) scale(${TIER_CUE_SCALE}) translate(${mirror ? -74.5 : -25.5} -89)`}
+            transform={`translate(${mirror ? 74.5 : 25.5} 89) scale(${TIER_CUE_SCALE_ARM}) translate(${mirror ? -74.5 : -25.5} -89)`}
           >
             {/* 深色外框：四段階級本來靠顏色辨識，但麻/鋼這類低階色在深色衣袍上幾乎看不見，
                 一圈外框讓輪廓在任何尺寸都站得住 / A dark rim. The three bands were read from
@@ -720,11 +782,12 @@ export function LeaderAvatar({
                 strokeLinecap="round"
               />
             )}
-            {/* 低階是布纏，縫線讓「破」看得見 / The low wrap is stitched, which is what makes
-                "worn" legible rather than merely thinner */}
+            {/* 低階是布纏，縫線讓「破」看得見。跨滿整段護具，否則尺寸統一之後縫線會縮成一小截 /
+                The low wrap is stitched, which is what makes "worn" legible. It spans the whole
+                guard now — left at the old narrow band's length it would read as a stray mark. */}
             {tier === 'low' && (
               <path
-                d={mirror ? 'M70.5 89.5 L79.5 90' : 'M20.5 90 L29.5 89.5'}
+                d={mirror ? 'M67 89.5 L82 90' : 'M18 90 L33 89.5'}
                 stroke={tiColor.dark}
                 strokeWidth="1"
                 strokeDasharray="2 2"
@@ -739,7 +802,7 @@ export function LeaderAvatar({
           銅錢一定要挖方孔，那個方孔才是「認得出是銅錢」的關鍵。 */}
       {traits.jingTier === 'high' && (
         <g
-          transform={`translate(50 84) scale(${TIER_CUE_SCALE}) translate(-50 -84)`}
+          transform={`translate(50 84) scale(${TIER_CUE_SCALE_CHEST}) translate(-50 -84)`}
         >
           <rect x="36" y="76" width="28" height="16" rx="2.5" fill="#0b1220" opacity="0.45" />
           <rect
@@ -790,7 +853,9 @@ export function LeaderAvatar({
       </g>
 
       {/* ── 頭部（呼吸時微幅後仰）/ The head, which tilts slightly while breathing ── */}
-      <g ref={headRef}>
+      <g ref={headRef}
+        clipPath={`url(#${AVATAR_CLIP_ID})`}
+      >
       {/* 耳（帶耳廓細節，不再是兩個圓）/ Ears, with a little inner fold so they are not
           two bare circles stuck on the sides */}
       {[-1, 1].map((side) => (
@@ -1048,7 +1113,7 @@ export function LeaderAvatar({
               className="flex items-baseline gap-1.5 text-[13px] leading-relaxed"
             >
               <span className="text-gray-400">{row.statLabel}</span>
-              <span className="font-orbitron text-cyan-300">{row.tierLabel}</span>
+              <span className="font-display text-cyan-300">{row.tierLabel}</span>
               <span className="text-gray-100">{row.cueLabel}</span>
             </span>
           ))}
