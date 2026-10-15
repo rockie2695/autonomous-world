@@ -260,6 +260,10 @@ export const en = {
     jing: 'Economy',
     speed: 'Speed',
     ambition: 'Ambition',
+    defectionValue: 'Defection value',
+    defectionChance: 'Defection chance',
+    defectionEvents: 'Affecting this round',
+    noDefectionEvents: 'No events affect them this round',
     loyalty: 'Loyalty',
     age: 'Age',
     troops: 'Troops',
@@ -278,6 +282,10 @@ export const en = {
   // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
   allPlaces: 'All places',
+  searchPlaces: 'Search places…',
+  filterOwnership: 'Ownership filter',
+  filterOwned: 'Owned',
+  filterUnowned: 'Unowned',
   tab: 'Places',
     name: 'Place Name',
     owner: 'Owner',

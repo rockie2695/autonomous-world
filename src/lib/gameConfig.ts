@@ -159,7 +159,26 @@ export const CONFIG = {
   AMBITION_KING_TONG_DELTA: 0.5, // 國王強時 -0.5 × (king.tong/30) / -0.5 × (king.tong/30) when king strong
   AMBITION_ADMIN_REPLACED_DELTA: 1, // 被免去行政官職務時野心 +1 / +1 ambition when removed as administrator
   AMBITION_ADMIN_ASSIGNED_DELTA: 1, // 取得行政官職務時野心 -1（暫時）/ -1 ambition when granted administrator post (temporary)
-  AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS: 10, // 減免持續回合數；到期若仍在職則 +1 回復 / Rounds before the -1 reverts if still in office
+  AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS: 10, // 減免持續回合數；到期若仍在職則 +1 回復 / Rounds before the -1 reverts
+
+  // ── 叛變 / Defection ─────────────────────────────────────────────────────
+  // 野心是**固定的初始值**（和 ti／wu／tong 一樣），不再隨事件被改寫；會變的是
+  // 「叛變值」，而它**不存資料庫**、每回合重算。
+  //
+  // Ambition is a fixed initial stat (like ti / wu / tong) and is no longer rewritten by
+  // events. What moves is the **defection value**, which is recomputed every round and
+  // deliberately **not stored**.
+  //
+  // 機率是線性的：平均（17.5）時剛好等於基底機率，遠高於平均才明顯上升。
+  // The chance is linear: exactly the base rate at the mean (17.5), rising noticeably only
+  // well above it.
+  DEFECTION_BASE_RATE: 0.05, // 叛變值等於平均值時的每回合機率 / Per-round chance at the mean defection value
+  DEFECTION_VALUE_LOYALTY_PENALTY: 2, // 忠誠標籤與君王不同 → 叛變值 +2 / Loyalty tag differs from the king's -> +2
+  // 事件影響**不設常數**：每筆 AmbitionEvent 自帶 delta，直接從資料庫加總。
+  // 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生 AmbitionEvent，沒有 delta 可加。
+  // No constant for events: each AmbitionEvent carries its own delta, summed straight from
+  // the database. Only the loyalty tag is hardcoded, being a tag comparison that never
+  // produces an AmbitionEvent and so has no delta to read. if still in office
 
   // ── 行政官冷卻 / Administrator Cooldown ────────────────────────────────────
   ADMIN_CHANGE_COOLDOWN_ROUNDS: 10, // 換領導後 N 回合內 AI 不得再更換 / AI paths blocked for N rounds after a leader change
@@ -207,6 +226,13 @@ export const CONFIG = {
 
   // 建築成本（指數成長：base × 2^level）
   // Building costs (exponential: base × 2^level)
+  // ── 地點列表 / Place list ─────────────────────────────────────────────────
+  // 「地點」分頁一次顯示多少列，之後捲到底再載入更多。世界可以到 2000 個地點，一次全部
+  // 渲染等於每次開分頁都重建整個列表 / Rows shown at once in the 地點 tab, then more on
+  // scroll. The world can hold 2000 places, so rendering them all means rebuilding the
+  // whole list every time the tab opens.
+  PLACE_LIST_PAGE_SIZE: 100,
+
   BUILDING_UPGRADE_COST_BASE: 100,
   BUILDING_UPGRADE_COST_MULT: 2, // 成本 = base × mult^level / Cost = base × mult^level
 
@@ -301,7 +327,7 @@ export const CONFIG = {
   // Zoomed in on a place, that place reads as a star system — a bright core with orbital
   // rings — rather than a bare dot. The threshold is a zoom RATIO, and sigma's ratio is
   // SMALLER when closer, so "zoomed in" is `camera.ratio <= MAP_STAR_ZOOM_RATIO`.
-  MAP_STAR_ZOOM_RATIO: 0.5,        // 放大到这個 ratio 以入就顯示星系效果 / Star systems appear at or below this ratio
+  MAP_STAR_ZOOM_RATIO: 0.2,        // 放大到这個 ratio 以入就顯示星系效果 / Star systems appear at or below this ratio
   MAP_STAR_RING_GAP: 6,// 輪道圈與節點圖的間距 / Gap between the node edge and the orbital ring (px)
   MAP_STAR_RING_WIDTH: 1.2,       // 輪道圈素寬 / Orbital ring stroke width (px)
   MAP_STAR_RING_ALPHA: 0.5,       // 輪道圈透明度 / Orbital ring opacity

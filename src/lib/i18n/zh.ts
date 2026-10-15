@@ -259,6 +259,10 @@ export const zh = {
     jing: '經濟',
     speed: '速度',
     ambition: '野心',
+    defectionValue: '叛變值',
+    defectionChance: '叛變機率',
+    defectionEvents: '本回合影響',
+    noDefectionEvents: '本回合沒有影響此人的事件',
     loyalty: '忠誠',
     age: '年齡',
     troops: '兵力',
@@ -277,6 +281,10 @@ export const zh = {
   // ── 地點 / Place ────────────────────────────────────────────────────────
   place: {
   allPlaces: '所有地方',
+  searchPlaces: '搜尋地點…',
+  filterOwnership: '擁有權過濾',
+  filterOwned: '有主',
+  filterUnowned: '無主',
   tab: '地點',
     name: '地方名稱',
     owner: '所屬勢力',

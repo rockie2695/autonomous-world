@@ -24,7 +24,8 @@
 
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
-import { type Rng } from '@/lib/rng';
+import { type Rng } from '@/lib/rng';
+import { defectionValue, defectionChance } from '@/lib/defection';
 import { uniqueAliveFactionName, uniqueAliveKingName } from '../uniqueNames';
 
 /**
@@ -67,71 +68,53 @@ export async function loyaltyCheck(
     },
   });
 
+  // AmbitionEvents for THIS round, batched once and their deltas summed per character.
+  //
+  // One query for the whole round rather than one per character: this loop already runs
+  // per living leader, and at a few hundred characters that difference is the whole cost of
+  // the phase. The deltas are summed, not counted -- each event carries its own magnitude.
+  const eventsThisRound = await prisma.ambitionEvent.findMany({
+    where: { worldId, round },
+    select: { charId: true, delta: true },
+  });
+  const deltaPerChar = new Map<string, number>();
+  for (const ev of eventsThisRound) {
+    deltaPerChar.set(ev.charId, (deltaPerChar.get(ev.charId) ?? 0) + ev.delta);
+  }
+
   let defectionCount = 0;
 
   for (const char of characters) {
     if (!char.faction) continue;
 
-    // 計算叛變機率 / Calculate defection probability
-    let base = char.ambition * CONFIG.AMBITION_DEFECT_BASE_MULT;
-
-// 檢查與君王的忠誠差異 / Check loyalty difference from king
-  if (char.faction.kingId) {
-    const king = await prisma.character.findUnique({
-      where: { id: char.faction.kingId },
-      select: { loyalty: true },
-    });
-
-    if (king) {
-      if (char.loyalty !== king.loyalty) {
-        base *= CONFIG.AMBITION_DIFF_LOYALTY_MULT;
-      }
-    }
-  }
-
-    // 檢查朋友是否最近叛逃 / Check if friend defected recently
-    const recentDefection = await prisma.event.findFirst({
-      where: {
-        worldId,
-        type: 'DEFECT',
-        round: { gte: round - 5 },
-        data: {
-          path: ['friendId'],
-          equals: char.id,
-        },
-      },
-    });
-
-    if (recentDefection) {
-      base *= CONFIG.AMBITION_FRIEND_DEFECT_MULT;
-    }
-
-    // 大型勢力降低叛變 / Large faction reduces defection
-    const factionCharCount = await prisma.character.count({
-      where: {
-        factionId: char.factionId!,
-        alive: true,
-      },
-    });
-
-    if (factionCharCount > CONFIG.AMBITION_LARGE_FACTION_THRESHOLD) {
-      base *= CONFIG.AMBITION_LARGE_FACTION_MULT;
-    }
-
-    // 不滿增加叛變 / Discontent increases defection
-    const hasDiscontent = await prisma.discontent.findFirst({
-      where: {
-        worldId,
-        aId: char.id,
-      },
-    });
-
-    if (hasDiscontent) {
-      base *= CONFIG.DISCONTENT_DEFECT_MULT;
-    }
-
-    // 叛變擲骰 / Roll for defection
-    if (rng.chance(base / 100)) {
+        // Defection is a computed value, not a stored one. See src/lib/defection.ts.
+        //
+        // The old chain multiplied: ambition x 0.5, then loyalty x1.2, friend-defection
+        // x1.5, large faction x0.8, discontent x1.3. Multipliers compound, so no single
+        // factor could be read off on its own, and "friend defected x1.5" doubled the
+        // *probability* rather than the *risk*. Everything now adds to the value instead.
+        //
+        // Note the king lookup is by id and does not need the faction: loyalty only matters
+        // as "same tag as the king", and a character with no king has nothing to mismatch.
+        let loyaltyMismatch = false;
+        if (char.faction.kingId) {
+          const king = await prisma.character.findUnique({
+            where: { id: char.faction.kingId },
+            select: { loyalty: true },
+          });
+          loyaltyMismatch = king !== null && char.loyalty !== king.loyalty;
+        }
+
+        const value = defectionValue({
+          ambition: char.ambition,
+          loyaltyMismatch,
+          eventDeltaSum: deltaPerChar.get(char.id) ?? 0,
+        });
+        const chance = defectionChance(value);
+
+        // chance is already a 0..1 probability, so no /100 here. A value at or below the
+        // midpoint yields exactly 0, which is the "below average, no defection" case.
+        if (chance > 0 && rng.chance(chance)) {
       defectionCount++;
 
       // 決定叛變類型 / Determine defection type

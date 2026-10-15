@@ -120,57 +120,18 @@ async function grantAdminTx(
     data: { administratorId: char.id, adminChangedRound: round },
   });
 
-  const current = await tx.character.findUnique({
-    where: { id: char.id },
-    select: { ambition: true, adminAmbitionRevertRound: true },
-  });
-
-  // 已有未到期減免 → 視為職務未中斷，只順延到期回合（不再重複扣減）/
-  // Reduction still pending → continuous service, extend expiry only
-  if (current === null) return;
-  if (current.adminAmbitionRevertRound !== null) {
-    await tx.character.update({
-      where: { id: char.id },
-      data: {
-        lastPromotedRound: round,
-        adminAmbitionRevertRound:
-          round + CONFIG.AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS,
-      },
-    });
-    return;
-  }
-
-  const newAmbition = Math.max(
-    CONFIG.CHAR_AMBITION_MIN,
-    current.ambition - CONFIG.AMBITION_ADMIN_ASSIGNED_DELTA
-  );
-  const appliedDelta = newAmbition - current.ambition;
-
+  // 野心是**固定初始值**，不再被改寫。這裡因此只剩「記錄升遷回合」一件事：
+  // 原本的「暫時扣 1、十回合後回 1」連同 adminAmbitionRevertRound 一併退休，
+  // 而「升遷過沒有」仍會影響叛變值，所以 lastPromotedRound 必須照舊更新。
+  //
+  // Ambition is a fixed initial stat and is no longer rewritten. All that is left here is
+  // recording the promotion round: the old temporary -1 and its scheduled revert, along with
+  // adminAmbitionRevertRound, are retired together. "Has gone a while without promotion"
+  // still feeds the defection value, so lastPromotedRound is still updated.
   await tx.character.update({
     where: { id: char.id },
-    data: {
-      lastPromotedRound: round,
-      ambition: newAmbition,
-      // 已在最低值時實際未扣減 → 不排定回復（否則到期會憑空 +1）/
-      // Already at the floor → no deduction happened, so nothing to revert
-      adminAmbitionRevertRound:
-        appliedDelta !== 0
-          ? round + CONFIG.AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS
-          : null,
-    },
+    data: { lastPromotedRound: round },
   });
-
-  if (appliedDelta !== 0) {
-    await tx.ambitionEvent.create({
-      data: {
-        worldId,
-        charId: char.id,
-        round,
-        delta: appliedDelta,
-        reason: `Granted administrator of ${place.name}`,
-      },
-    });
-  }
 
   if (logEvent) {
     await tx.event.create({
@@ -183,7 +144,6 @@ async function grantAdminTx(
           charName: char.name,
           placeId: place.id,
           placeName: place.name,
-          ambitionDelta: appliedDelta,
           ...eventData,
         },
       },
@@ -237,40 +197,25 @@ async function revokeAdminTx(
     logEvent = false,
     eventData }: RevokeAdminParams
 ): Promise<void> {
-  const current = await tx.character.findUnique({
-    where: { id: char.id },
-    select: { ambition: true },
+  // 野心是**固定初始值**，免職不再改寫它；這裡只寫一筆帳本，讓忠誠檢查下回合把這筆
+  // delta 加進叛變值。原本「順帶清掉未到期減免」的連帶動作也一起退休：現在根本不會
+  // 再排定減免，所以沒有東西需要清。
+  //
+  // Ambition is a fixed initial stat, so removal no longer rewrites it; this only writes a
+  // ledger row for `loyaltyCheck` to fold into next round's defection value. The old
+  // side-effect of clearing a pending reduction retires with it: no reduction is ever
+  // scheduled now, so there is nothing to clear.
+  await tx.ambitionEvent.create({
+    data: {
+      worldId,
+      charId: char.id,
+      round,
+      delta: CONFIG.AMBITION_ADMIN_REPLACED_DELTA,
+      reason: newAdmin
+        ? `Removed as administrator of ${place.name} by ${newAdmin.name}`
+        : `Removed as administrator of ${place.name}`,
+    },
   });
-
-  if (current !== null) {
-    const newAmbition = Math.min(
-      CONFIG.CHAR_AMBITION_MAX,
-      current.ambition + CONFIG.AMBITION_ADMIN_REPLACED_DELTA
-    );
-    const appliedDelta = newAmbition - current.ambition;
-
-    // 順帶清掉未到期的減免：免職已給 +1，若再回復會重複計算 /
-    // Also cancel the pending reduction: removal already paid +1, so a later
-    // revert would double-count
-    await tx.character.update({
-      where: { id: char.id },
-      data: { ambition: newAmbition, adminAmbitionRevertRound: null },
-    });
-
-    if (appliedDelta !== 0) {
-      await tx.ambitionEvent.create({
-        data: {
-          worldId,
-          charId: char.id,
-          round,
-          delta: appliedDelta,
-          reason: newAdmin
-            ? `Removed as administrator of ${place.name} by ${newAdmin.name}`
-            : `Removed as administrator of ${place.name}`,
-        },
-      });
-    }
-  }
 
   if (logEvent) {
     await tx.event.create({

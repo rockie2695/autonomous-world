@@ -72,6 +72,44 @@ interface ChartSeries {
   rounds?: number[];
 }
 
+/**
+ * Where a series' first value belongs on the shared axis.
+ *
+ * A faction founded in round 12 has `values` starting at index 0, so index 0 would place it
+ * at the world's first round and the axis would read 0,1,2 for rounds that are really
+ * 12,13,14. Looking the first round up in the world's own `rounds` array recovers the offset
+ * the series was missing. Series without `rounds` (the world-wide ones) are dense from the
+ * start, so they correctly start at 0.
+ *
+ * These live at module scope, not inside `LineChart`, because `BarChart` had the same bug:
+ * it labelled its axis with real round numbers while reading values by array index, so a
+ * faction that appeared later was drawn with someone else's numbers.
+ */
+function startOffsetOf(s: ChartSeries, rounds: number[]): number {
+  const first = s.rounds?.[0];
+  if (first === undefined) return 0;
+  const idx = rounds.indexOf(first);
+  return idx === -1 ? 0 : idx;
+}
+
+/**
+ * Read a series at a *world* round index.
+ *
+ * `index` is an index into the world's `rounds`, but a faction's `values` only covers the
+ * rounds from the one it appeared in. Indexing `values` directly therefore read the wrong
+ * round's number -- often `undefined`, which fell through to `0` and reported a real
+ * faction's troops as zero.
+ */
+function valueAt(s: ChartSeries, worldIndex: number, rounds: number[]): number {
+  return s.values[worldIndex - startOffsetOf(s, rounds)] ?? 0;
+}
+
+/** Whether the series actually covers that world round / Whether it covers that round */
+function hasValueAt(s: ChartSeries, worldIndex: number, rounds: number[]): boolean {
+  const i = worldIndex - startOffsetOf(s, rounds);
+  return i >= 0 && i < s.values.length;
+}
+
 /** 可圖表化的勢力欄位 / Per-faction fields that can be charted */
 type FactionStatKey = 'troops' | 'gold' | 'territories' | 'characters';
 
@@ -293,34 +331,11 @@ function LineChart({
     CHART_PAD + (i / Math.max(rounds.length - 1, 1)) * plotW;
   const yScale = (v: number) => CHART_H - CHART_PAD - (v / maxVal) * plotH;
 
-  /**
-   * Where a series' first value belongs on the shared axis.
-   *
-   * A faction founded in round 12 has `values` starting at index 0, so `xScale(0)` would
-   * put it at the world's first round and the axis would read 0,1,2 for rounds that are
-   * really 12,13,14. Looking the first round up in the world's own `rounds` array gives the
-   * offset the series was missing. Series without `rounds` (the world-wide ones) are dense
-   * from the start, so they correctly start at 0.
-   */
-  const startOffsetOf = (s: ChartSeries): number => {
-    const first = s.rounds?.[0];
-    if (first === undefined) return 0;
-    const idx = rounds.indexOf(first);
-    return idx === -1 ? 0 : idx;
-  };
-  const xOf = (s: ChartSeries, i: number) => xScale(startOffsetOf(s) + i);
-  /**
-   * Read a series at a *world* round index.
-   *
-   * Same reason as `xOf`: `hover.index` is an index into the world's `rounds`, but a faction's
-   * `values` only covers the rounds from the one it appeared in. Indexing `values` directly
-   * therefore read the wrong round's number — often `undefined`, which fell through to `0` and
-   * reported a real faction's troops as zero.
-   */
-  const valueAt = (s: ChartSeries, worldIndex: number): number =>
-    s.values[worldIndex - startOffsetOf(s)] ?? 0;
-  const hasValueAt = (s: ChartSeries, worldIndex: number): boolean =>
-    worldIndex - startOffsetOf(s) >= 0 && worldIndex - startOffsetOf(s) < s.values.length;
+  // `startOffsetOf` / `valueAt` / `hasValueAt` live at module scope so `BarChart` shares
+  // them — it had this exact bug independently.
+  const xOf = (s: ChartSeries, i: number) => xScale(startOffsetOf(s, rounds) + i);
+  const readAt = (s: ChartSeries, worldIndex: number) => valueAt(s, worldIndex, rounds);
+  const covers = (s: ChartSeries, worldIndex: number) => hasValueAt(s, worldIndex, rounds);
 
   // 提示的游標位置與回合索引 / Tooltip pointer position and snapped round index
   const [hover, setHover] = useState<{ index: number; x: number; y: number } | null>(null);
@@ -417,11 +432,11 @@ function LineChart({
               strokeDasharray="3 3"
             />
             {series.map((s, si) =>
-              hasValueAt(s, hover.index) ? (
+              covers(s, hover.index) ? (
                 <circle
                   key={si}
                   cx={xScale(hover.index)}
-                  cy={yScale(valueAt(s, hover.index))}
+                  cy={yScale(readAt(s, hover.index))}
                   r={3.5}
                   fill={s.color}
                   stroke="var(--color-ds-void)"
@@ -456,11 +471,11 @@ function LineChart({
             // 只顯示該回合確實存在的勢力，否則讀者會看到一個從未存在過的勢力報 0 /
             // Only series that actually existed in that round, or the reader sees a faction
             // that was never there reporting zero
-            .filter((s) => hasValueAt(s, hover.index))
+            .filter((s) => covers(s, hover.index))
             .map((s) => ({
               label: s.label,
               color: s.color,
-              value: valueAt(s, hover.index),
+              value: readAt(s, hover.index),
             }))}
         />
       )}
@@ -692,7 +707,7 @@ function BarChart({
   const start = Math.max(0, rounds.length - BAR_MAX_ROUNDS);
   const visibleRounds = rounds.slice(start);
   const totals = visibleRounds.map((_, i) =>
-    series.reduce((sum, s) => sum + (s.values[start + i] ?? 0), 0)
+    series.reduce((sum, s) => sum + (valueAt(s, start + i, rounds)), 0)
   );
   const maxVal = Math.max(1, ...totals);
   const plotW = CHART_W - CHART_PAD * 2;
@@ -704,7 +719,7 @@ function BarChart({
   const stackedBelow = (roundIdx: number, upto: number) =>
     series
       .slice(0, upto)
-      .reduce((sum, s) => sum + (s.values[start + roundIdx] ?? 0), 0);
+      .reduce((sum, s) => sum + (valueAt(s, start + roundIdx, rounds)), 0);
 
   // hover：游標對齊到某一回合的長條，並顯示該回合各序列的數值 /
   // Hover: the cursor snaps to one round's bar and the readout lists every series
@@ -758,7 +773,7 @@ function BarChart({
           return (
             <g key={i}>
               {series.map((s, si) => {
-                const v = s.values[start + i] ?? 0;
+                const v = valueAt(s, start + i, rounds);
                 if (v <= 0) return null;
                 const h = (v / maxVal) * plotH;
                 const y =
@@ -812,7 +827,7 @@ function BarChart({
           rows={series.map((s) => ({
             label: s.label,
             color: s.color,
-            value: s.values[start + hover.index] ?? 0,
+            value: valueAt(s, start + hover.index, rounds),
           }))}
         />
       )}
@@ -822,15 +837,18 @@ function BarChart({
   );
 }
 
-/** treemap 的三個內部分段（依序列值）/ The treemap's three inner segments, in series order */
-const TREEMAP_SEGMENT_KEYS = ['troops', 'gold', 'characters'] as const;
+/**
+ * 區面圖可以綔的指標 / The metrics a treemap block can size itself by.
+ *
+ * 這後前是一個 `const` 陣以供分段圖票遍測。分段製上提升为「每個指標一張圖」之後，
+ * 那個圖來是它唯一的「作為值」用法，因此它應該改成紮型。
+ *
+ * This used to be a const array feeding the segment swatch legend. Once each metric got its
+ * own chart and the subdivision went away, that legend was its only use as a *value*, so it
+ * belongs in a type position.
+ */
+type TreemapMetric = 'territories' | 'troops' | 'gold' | 'characters';
 
-/** treemap 分段色票取自設計 token（兵力/金幣/將領）/ Segment swatches come from design tokens (troops / gold / characters) */
-const TREEMAP_SEGMENT_VARS = [
-  'var(--color-ds-cyan)',
-  'var(--color-ds-amber)',
-  'var(--color-ds-purple)',
-] as const;
 
 /** treemap 的節點 / One treemap node; `children` turns it into a subdivided block */
 interface TreemapNode {
@@ -838,7 +856,6 @@ interface TreemapNode {
   label: string;
   value: number;
   color: string;
-  children?: TreemapNode[];
   /**
    * 提示面板要顯示的「真實數字」，跟版面用的 `value` 分開 /
    * The real number the readout shows, kept apart from the layout `value`.
@@ -890,9 +907,6 @@ function layoutTreemap(
       ? { x: rect.x + offset, y: rect.y, width: slice, height: rect.height }
       : { x: rect.x, y: rect.y + offset, width: rect.width, height: slice };
     placed.push({ node, ...box });
-    if (node.children && node.children.length > 0) {
-      placed.push(...layoutTreemap(node.children, box));
-    }
     offset += slice;
   }
 
@@ -910,45 +924,52 @@ function layoutTreemap(
  * world maximum before the split: block area reflects both a faction's scale
  * and its internal mix. That normalisation is a deliberate trade-off.
  */
-function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
-  const at = (f: StatsPayload['factions'][number], key: (typeof TREEMAP_SEGMENT_KEYS)[number] | 'territories') => {
+function FactionTreemap({
+  factions,
+  metric = 'territories',
+  title,
+}: {
+  factions: StatsPayload['factions'];
+  /**
+   * 這張圖用來分區塊的指標 / The metric this chart sizes its blocks by.
+   *
+   * 以前**沒有**這個參數：一張圖把每個勢力切成兵力／金幣／將領三段，所以每一格都在
+   * 同時回答三個問題，結果三個都讀不太出來。現在改成**每個指標一張圖**，和折線圖一樣，
+   * 於是一個指標就是一張圖、一個答案。
+   *
+   * There used to be no parameter: one chart cut each faction into troops / gold /
+   * characters, so every cell was trying to answer three questions at once and answered
+   * none of them well. It is now one chart per metric, matching the line chart, so a metric
+   * is one chart and one answer.
+   */
+  metric?: TreemapMetric;
+  title: string;
+}) {
+  const at = (f: StatsPayload['factions'][number], key: TreemapMetric) => {
     const series = f[key];
     return series[series.length - 1] ?? 0;
   };
 
-  // 只畫有領地的勢力，並依領地數取前 N 個 /
-  // Only factions holding land, capped to the largest N
+  // 只畫這個指標大於 0 的勢力，並依它取前 N 個 /
+  // Only factions with a non-zero value on this metric, capped to the largest N
   const ranked = [...factions]
-    .filter((f) => at(f, 'territories') > 0)
-    .sort((a, b) => at(b, 'territories') - at(a, 'territories'))
+    .filter((f) => at(f, metric) > 0)
+    .sort((a, b) => at(b, metric) - at(a, metric))
     .slice(0, TREEMAP_MAX_FACTIONS);
 
-  // 各指標的正規化基準 / Each metric's normalisation base
-  const maxOf = (key: (typeof TREEMAP_SEGMENT_KEYS)[number]) =>
-    Math.max(1, ...ranked.map((f) => at(f, key)));
+  const maxOfThis = Math.max(1, ...ranked.map((f) => at(f, metric)));
 
-  const maxTroops = maxOf('troops');
-  const maxGold = maxOf('gold');
-  const maxCharacters = maxOf('characters');
-
+  // 單層區塊：面積就是這個指標佔全體的比例，所以每個指標需要自己的正規化基準 /
+  // Single-level blocks: area is this faction's share of the metric's total, which is why
+  // each metric needs its own normalisation base
   const nodes: TreemapNode[] = ranked.map((f) => {
-    // 子分段單獨hover時只會讀到指標名，讀不出是誰的兵力，所以標籤先帶上勢力名 /
-    // Hovering a segment on its own would otherwise read as a bare metric name
-    // with no indication of which faction it belongs to
-    const children: TreemapNode[] = [
-      { key: `${f.id}-troops`, label: `${f.name} · ${t('stats.troopsOverTime')}`, value: at(f, 'troops') / maxTroops, display: at(f, 'troops'), color: TREEMAP_SEGMENT_VARS[0] },
-      { key: `${f.id}-gold`, label: `${f.name} · ${t('stats.goldOverTime')}`, value: at(f, 'gold') / maxGold, display: at(f, 'gold'), color: TREEMAP_SEGMENT_VARS[1] },
-      { key: `${f.id}-characters`, label: `${f.name} · ${t('stats.charactersOverTime')}`, value: at(f, 'characters') / maxCharacters, display: at(f, 'characters'), color: TREEMAP_SEGMENT_VARS[2] },
-    ];
+    const raw = at(f, metric);
     return {
       key: f.id,
       label: f.name,
-      value: at(f, 'territories'),
-      display: at(f, 'territories'),
+      value: raw / maxOfThis,
+      display: raw,
       color: f.color,
-      // 沒有任何數值時不細分，只留勢力色的大區塊 /
-      // With nothing to split, keep the plain faction-coloured block
-      children: children.some((c) => c.value > 0) ? children : undefined,
     };
   });
 
@@ -971,7 +992,7 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
   return (
-    <ChartFrame title={t('stats.factionPower')}>
+    <ChartFrame title={title}>
       {placed.length === 0 ? (
         <p className="text-sm text-gray-500 py-6 text-center">{t('game.noData')}</p>
       ) : (
@@ -1026,12 +1047,10 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
             viewBox={`0 0 ${TREEMAP_W} ${TREEMAP_H}`}
             className="w-full"
             role="img"
-            aria-label={t('stats.factionPower')}
+            aria-label={title}
           >
             {placed.map(({ node, x, y, width, height }) => {
               // 父區塊畫勢力色底，子區塊疊在它上面 /
-              // Parents paint the faction colour; children sit on top
-              const isParent = node.children !== undefined;
               return (
                 <rect
                   key={node.key}
@@ -1040,9 +1059,9 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
                   width={Math.max(0, width)}
                   height={Math.max(0, height)}
                   fill={node.color}
-                  fillOpacity={isParent ? 0.22 : 0.62}
+                  fillOpacity={0.62}
                   stroke={node.color}
-                  strokeWidth={isParent ? 1 : 0.5}
+                  strokeWidth={0.5}
                   className="pointer-events-none transition-[fill-opacity,stroke-width] duration-200"
                 />
               );
@@ -1070,24 +1089,6 @@ function FactionTreemap({ factions }: { factions: StatsPayload['factions'] }) {
                 />
                 <span className="truncate max-w-[80px]">{f.name}</span>
                 <span className="text-gray-500">{at(f, 'territories')}</span>
-              </li>
-            ))}
-          </ul>
-          <ul className="flex flex-wrap gap-x-3 gap-y-1.5 mt-2">
-            {TREEMAP_SEGMENT_KEYS.map((key, i) => (
-              <li
-                key={key}
-                className="group inline-flex items-center gap-1.5 text-[13px] text-gray-500 font-mono transition-colors duration-200 hover:text-gray-200"
-              >
-                <span
-                  className="w-2.5 h-2.5 rounded-[1px] shrink-0 transition-transform duration-200 group-hover:scale-125"
-                  style={{ backgroundColor: TREEMAP_SEGMENT_VARS[i] }}
-                />
-                {key === 'troops'
-                  ? t('stats.troopsOverTime')
-                  : key === 'gold'
-                    ? t('stats.goldOverTime')
-                    : t('stats.charactersOverTime')}
               </li>
             ))}
           </ul>
@@ -1885,7 +1886,26 @@ export function StatsCharts({
         // 所以這個模式下不畫那 9 張時間序列圖。
         // The treemap is a combined view of faction power, not another rendering
         // of any single metric, so it replaces the nine time-series charts.
-        <FactionTreemap factions={factions} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          {factionCharts.map((chart) => {
+            const metric =
+              chart.title === t('stats.territoriesOverTime')
+                ? 'territories'
+                : chart.title === t('stats.troopsOverTime')
+                  ? 'troops'
+                  : chart.title === t('stats.goldOverTime')
+                    ? 'gold'
+                    : 'characters';
+            return (
+              <FactionTreemap
+                key={chart.title}
+                factions={factions}
+                metric={metric}
+                title={chart.title}
+              />
+            );
+          })}
+        </div>
       ) : (
         <>
           {factionCharts.map((chart) => (

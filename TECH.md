@@ -2688,6 +2688,112 @@ the card above it, and `overflow-hidden` clips it away entirely — clipping and
 different things, and no z-index undoes a clip. The fix is to drop `overflow-hidden` and instead
 raise the **card itself** to `z-30` while expanded, so a later sibling cannot paint over it.
 
+### 野心不動了，變的是叛變值 / Ambition is fixed; the defection value moves
+
+**野心是固定初始值，事件不再改寫它。** `ambitionEvents` 階段與 `adminAssign` 原本
+到處寫 `character.ambition`（「未升遷 +0.5」「取得職務 −1、十回合後回 +1」「被免職 +1」），
+現在全部退休：那個扣了再回的機制連同 `adminAmbitionRevertRound` 都沒有意義了。
+`ambitionEvents` 現在只寫**帳本**——每回合產生 `AmbitionEvent`，一行都不改 `Character`。
+Ambition is a fixed initial stat and events no longer rewrite it. The whole
+deduct-then-revert machinery, `adminAmbitionRevertRound` included, is retired;
+`ambitionEvents` now only writes the ledger and touches no `Character` row.
+
+**帳本不是裝飾：忠誠檢查每回合把本回合的 delta 加總成「叛變值」。**
+
+    value  = ambition
+           + (忠誠標籤與君王不同 ? 2 : 0)
+           + 本回合此人的 AmbitionEvent **delta 總和**
+
+    chance = (value − 17.5) / 17.5 × 0.05        // 17.5 = (5+30)/2
+
+只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `AmbitionEvent`，
+所以沒有 delta 可加。其餘全部來自資料庫的真實 delta。**曾經寫成「每筆 +1」是錯的**——
+每筆事件各有各的差值，`−2` 的一筆就該是 `−2`，而一筆 `+3` 就該是 `+3`。
+只有忠誠標籤是寫死的，因為它是標籤比較、不會產生事件，沒有 delta 可讀。
+
+Only the loyalty tag is hardcoded: it is a *comparison* of `Loyalty` tags that never
+produces an `AmbitionEvent`, so there is no delta to add. Everything else is summed from
+real deltas. Writing it as "a flat +1 per event" was wrong — each event carries its own
+magnitude.
+
+**注意機率在平均以下就是 0。** `value ≤ 17.5` 時 `chance` 為 0，而野心的平均是 **17**，
+所以大約一半的將領**永遠不會叛變**。這是公式的直接結果（0.05 是梯度不是下限）；
+若要讓平均野心也有基礎機率，公式應該是 `(value / 17.5) × 0.05`。
+Below the midpoint the chance is exactly 0, and ambition averages 17 — so roughly half of
+all leaders can never defect. That follows from the formula as written (0.05 is a gradient,
+not a floor); a floor would need `(value / 17.5) × 0.05`.
+
+**建立新勢力時仍會重骰野心**（`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`）。這是
+「成為君王這個新角色」，不是事件 nudges，但它確實與「永不變動」抵觸——一個野心 25 的
+將領叛變後會掉到 5–15，叛變行為因此驟變。若要嚴格遵守固定值，這五處也要拿掉。
+Founding a new faction still re-rolls ambition. That is a new role rather than an event
+nudge, but it does contradict "never changes" — a leader at 25 drops to 5–15 and their
+defection behaviour shifts sharply. Strictly honouring the fixed stat means removing those too.
+
+### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
+
+**`BarChart` 的取值也要走 `valueAt()`，不能走 `s.values[i]`。** 長條圖的**軸標籤**本來
+就是真回合數，但它用 `s.values[start + i]` 取值，於是晚成立的勢力被畫成**別人的數字**。
+線圖早就修過同一個 bug，但 `startOffsetOf` / `valueAt` / `hasValueAt` 三個幫手被關在
+`LineChart` 裡面，`BarChart` 用不到，就各自重犯了一次。現在三個幫手提升到模組層，兩張圖共用。
+The bar chart already labelled its axis with real round numbers while reading values by array
+index, so a later-founded faction was drawn with another faction's numbers. The line chart had
+this fixed long ago, but its three helpers were trapped inside `LineChart`, so `BarChart` could
+not reuse them and re-broke it independently. They are now module-scope and shared.
+
+**市場 0/5 的「每回合產出」是 10，不是 0。** `buildingTotal('market', 0)` 是 0，但地方
+照樣有 `PLACE_BASE_INCOME`，所以印 0 會讓讀者以為這棟建築毫無用處。`placeOutputAt()`
+印的是**此地此刻的總產出**；堡壘回傳 `null`，因為防禦是乘在守軍上的倍率，沒有「總產出」
+可言，硬印一個數字只會是說謊。
+At market level 0 the building's own contribution is 0, but the place still earns its base
+income, so printing 0 reads as "this building is worthless". `placeOutputAt()` prints the
+place's actual total. Fortress returns `null` on purpose: defence is a multiplier, so there is
+no total and inventing one would be a lie.
+
+### 區塊圖與地點列表 / The treemap and the place list
+
+**區塊圖改成「每個指標一張」，和折線圖一樣。** 以前**沒有**metric 參數：一張圖把每個
+勢力切成兵力／金幣／將領三段，於是每一格都在同時回答三個問題，結果三個都讀不太出來。
+現在 `FactionTreemap` 接受 `metric`，每張圖只回答一個問題，面板數值由**各指標自己的
+正規化基準**算出（`maxOfThis`），所以每張圖都代表「這個指標的全體分布」。
+`TREEMAP_SEGMENT_KEYS` 原本還有個「當值」用法（分段圖例），圖例隨細分段一起移除後，
+它只剩下型別用途，所以改成 `TreemapMetric` 型別聯集——把一個只被當型別用的
+`const` 留在檔案裡，會讓下一個人以為它還有行為。
+The treemap is now **one chart per metric**, matching the line chart. It previously had no
+metric parameter: a single chart cut each faction into troops / gold / characters, so every
+cell was answering three questions at once and answered none of them well. `FactionTreemap`
+now takes a `metric` and answers exactly one question, with each metric normalised against
+its own base (`maxOfThis`) so every chart shows that metric's own distribution.
+`TREEMAP_SEGMENT_KEYS` used to have one *value* consumer — the segment legend — and once the
+subdivision and its legend were removed only the type use remained, so it became a
+`TreemapMetric` union. Leaving a `const` that is only used as a type invites the next reader
+to think it still does something.
+
+**地點列表加上搜尋、擁有權過濾，以及「無窮載入」。** 世界可以到 2000 個地點，而這個面板
+只有 24rem 寬，一次建立所有列等於每次開分頁都重建整個列表。所以只畫
+`CONFIG.PLACE_LIST_PAGE_SIZE`（100）列，捲到接近底部再載入下一頁。
+**改變過濾條件時必須重設已顯示筆數**，否則那個數字會指向另一個集合的尾端，畫面看起來
+就像「沒反應」。
+The place list gained search, an ownership filter and incremental loading. The world can hold
+2000 places and this panel is only 24rem wide, so building every row means rebuilding the
+whole list each time the tab opens. Only `CONFIG.PLACE_LIST_PAGE_SIZE` (100) rows render,
+with the next page revealed on scroll. **The revealed count has to reset when the filter
+changes**, or it points into the tail of a different set and the list looks unresponsive.
+
+**`CONFIG` 是 `as const`，所以頁數要用 `useState<number>(...)`。** 否則 state 會被推成字面值
+`100`，setter 只接受回傳 `100`，第一次「再載入 100 筆」就編譯不過。這和自動播放速度 slider
+是同一個坑。
+`CONFIG` is `as const`, so the row count must be `useState<number>(...)`. Otherwise the state
+infers the literal `100` and the setter cannot return a larger number, so the very first
+"load 100 more" fails to compile — the same trap as the autoplay-speed slider.
+
+**面板寬度改動會連帶影響相機控制的偏移。** `GM_HUD_CONTROLS_OPEN` 的 `lg:right-[31rem]`
+是由「面板 24rem + 頁籤 rail 與間距約 7rem」推出來的，不是拍腦袋的數字。面板寬度一改就
+必須重算，否則 reset／縮小／滑桿會被面板蓋住。
+The camera-control offset follows the panel width. `lg:right-[31rem]` is derived from 24rem of
+panel plus roughly 7rem of rail and gutter — it is not a guess. Change the panel width and it
+must be recomputed, or reset/zoom-out/the slider end up underneath the panel.
+
 ## 總結 / Summary
 
 Autonomous World 使用現代化的技術棧：

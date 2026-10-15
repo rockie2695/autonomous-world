@@ -33,74 +33,6 @@ export async function ambitionEvents(
   round: number,
   rng: Rng
 ): Promise<void> {
-  // ── 行政官暫時減免到期 / Expired temporary administrator ambition reduction ──
-  // 取得行政官職務時會暫時 -AMBITION_ADMIN_ASSIGNED_DELTA，若在
-  // AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS 回合後仍在職就回復；已被免職者
-  // 免職時已 +AMBITION_ADMIN_REPLACED_DELTA 且欄位已清空（不會出現在此查詢），
-  // 死亡者不回復，只清掉欄位 /
-  // Granting the post temporarily -AMBITION_ADMIN_ASSIGNED_DELTA; the reduction
-  // reverts after AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS if the character is
-  // still in office. Removed characters already gained
-  // +AMBITION_ADMIN_REPLACED_DELTA (field cleared), dead ones just get the field
-  // cleared without a revert.
-  const expiring = await prisma.character.findMany({
-    where: { worldId, adminAmbitionRevertRound: { lte: round } },
-    select: {
-      id: true,
-      name: true,
-      ambition: true,
-      alive: true,
-      administered: { select: { id: true, name: true } },
-    },
-  });
-
-  for (const char of expiring) {
-    if (char.alive && char.administered !== null) {
-      const newAmbition = Math.min(
-        CONFIG.CHAR_AMBITION_MAX,
-        char.ambition + CONFIG.AMBITION_ADMIN_ASSIGNED_DELTA
-      );
-      const appliedDelta = newAmbition - char.ambition;
-
-      if (appliedDelta !== 0) {
-        await prisma.character.update({
-          where: { id: char.id },
-          data: { ambition: newAmbition },
-        });
-        await prisma.ambitionEvent.create({
-          data: {
-            worldId,
-            charId: char.id,
-            round,
-            delta: appliedDelta,
-            reason: `Temporary administrator ambition reduction expired after ${CONFIG.AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS} rounds`,
-          },
-        });
-        // 記錄可見事件，讓玩家看得到「暫時減免」已到期 / Log a visible Event so
-        // players can see the temporary reduction expire
-        await prisma.event.create({
-          data: {
-            worldId,
-            round,
-            type: 'AMBITION_RECOVERED',
-            data: {
-              charId: char.id,
-              charName: char.name,
-              placeId: char.administered.id,
-              placeName: char.administered.name,
-              ambitionDelta: appliedDelta,
-            },
-          },
-        });
-      }
-    }
-
-    await prisma.character.update({
-      where: { id: char.id },
-      data: { adminAmbitionRevertRound: null },
-    });
-  }
-
   // 取得所有存活角色 / Get all living characters
   const characters = await prisma.character.findMany({
     where: { worldId, alive: true },
@@ -152,18 +84,20 @@ export async function ambitionEvents(
       }
     }
 
-    // 若有變化則套用 / Apply delta if any
+    // 野心是**固定初始值**，所以這裡不再改寫 `Character.ambition`，只寫帳本。
+    //
+    // Ambition is a **fixed initial stat**, so this no longer rewrites
+    // `Character.ambition` — it only writes the ledger.
+    //
+    // 帳本不是裝飾：忠誠檢查每回合會把本回合的 delta 加總成「叛變值」
+    // （見 src/lib/defection.ts）。把狀態留在事件表裡、而不是攤平到一個會漂移的數字上，
+    // 這條鏈才不會有兩份互相矛盾的真相。
+    //
+    // The ledger is not decoration: `loyaltyCheck` sums this round's deltas into the defection
+    // value every round (see src/lib/defection.ts). Keeping the state in the event table rather
+    // than flattening it into a number that can drift is what stops there being two
+    // contradictory versions of the same truth.
     if (delta !== 0) {
-      const newAmbition = Math.max(
-        CONFIG.CHAR_AMBITION_MIN,
-        Math.min(CONFIG.CHAR_AMBITION_MAX, char.ambition + delta)
-      );
-
-      await prisma.character.update({
-        where: { id: char.id },
-        data: { ambition: newAmbition },
-      });
-
       // 記錄事件 / Log the event
       await prisma.ambitionEvent.create({
         data: {

@@ -21,6 +21,7 @@ import type { MapCameraControls } from '@/components/SigmaMap';
 import { LeaderAvatar } from '@/components/LeaderAvatar';
 import { apiFetch } from '@/lib/api';
 import { CONFIG } from '@/lib/gameConfig';
+import { defectionValue, defectionChance } from '@/lib/defection';
 import { splitIncome } from '../../../server/income';
 import {
   BUILDING_MAX_LEVEL,
@@ -29,6 +30,8 @@ import {
   placeIncome,
   placeRecruits,
   upgradeCost,
+  placeOutputAt,
+  totalCostToReach,
   type BuildingKind,
 } from '@/lib/placeEffects';
 import { signOut } from 'next-auth/react';
@@ -1074,6 +1077,16 @@ onTabChange={(tab) => {
             placeName={
               (worldState?.places ?? []).find((pl) => pl.id === detailChar.placeId)?.name ?? '—'
             }
+            kingLoyalty={(() => {
+              const f = (worldState?.factions ?? []).find((x) => x.id === detailChar.factionId);
+              const king = f?.kingId
+                ? (worldState?.characters ?? []).find((c) => c.id === f.kingId)
+                : null;
+              return king ? king.loyalty : null;
+            })()}
+            myEvents={(worldState?.roundAmbitionEvents ?? []).filter(
+              (e) => e.charId === detailChar.id
+            )}
             factionAverage={radarMeanOf(
               (worldState?.characters ?? []).filter(
                 (c) => c.factionId && c.factionId === detailChar.factionId && c.alive
@@ -1563,16 +1576,46 @@ function LeaderDetail({
   faction,
   placeName,
   factionAverage,
+  kingLoyalty,
+  myEvents,
   onFocusPlace,
 }: {
   char: WorldState['characters'][0];
   faction: WorldState['factions'][0] | null;
   placeName: string;
   factionAverage: number[] | null;
+  /** 本势力君王的忠誠标签；null = 没有君王可比 / The faction king's loyalty tag; null when there is no king to compare */
+  kingLoyalty: string | null;
+  /** 本回合影響此人的 AmbitionEvent / This round's AmbitionEvents affecting them */
+  myEvents: ReadonlyArray<{ delta: number; reason: string }>;
   /** 點「位置」時把鏡頭移過去並開啟地點分頁 /
    *  Called when 位置 is clicked: move the camera there and open the 地點 tab */
   onFocusPlace: (placeId: string) => void;
 }) {
+  /**
+   * 叛變值與本回合機率，**在客戶端用同一組純函式重算**，而不是讓伺服器多存一份。
+   *
+   * 伺服器端已經用 `src/lib/defection.ts` 算過一次來擲骰；這裡呼叫同一個函式，所以
+   * 顯示的值與實際擲骰用的值不可能對不上。若這裡改成自己重寫一份公式，就會出現
+   * 「面板寫 12%、實際擲出來像 5%」這種沒有任何機制能發現的不一致。
+   *
+   * Recomputed client-side with the *same* pure functions the server rolled with, rather
+   * than having the server store a second copy.
+   *
+   * `loyaltyCheck` already called `src/lib/defection.ts` to make the roll, so calling it
+   * again here means the displayed value and the rolled value cannot disagree. Re-deriving
+   * the formula by hand here is what would produce a "the panel says 12% but it behaved
+   * like 5%" divergence that nothing would ever catch.
+   */
+  const eventDeltaSum = myEvents.reduce((sum, e) => sum + e.delta, 0);
+  const loyaltyMismatch = kingLoyalty !== null && char.loyalty !== kingLoyalty;
+  const defection = defectionValue({
+    ambition: char.ambition,
+    loyaltyMismatch,
+    eventDeltaSum,
+  });
+  const defectionRate = defectionChance(defection);
+
   const stats: ReadonlyArray<readonly [string, string | number]> = [
     [t('character.wu'), char.wu],
     [t('character.tong'), char.tong],
@@ -1587,6 +1630,8 @@ function LeaderDetail({
       t('character.loyalty'),
       t(`character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`),
     ],
+    [t('character.defectionValue'), defection.toFixed(1)],
+    [t('character.defectionChance'), `${(defectionRate * 100).toFixed(1)}%`],
   ];
 
   return (
@@ -1671,6 +1716,40 @@ function LeaderDetail({
             </dd>
           </div>
         </dl>
+        {/* 叛變值的來源：把「哪些事件把這個數字推高或壓低」列出來。
+            一個沒有來源的數字等於沒有解釋——讀者看得到結果，看不到原因，所以這個面板
+            在表面上顯示機率、實際上卻沒有任何機制會讓人懷疑它錯了。
+            每筆事件各有各的 delta（可以正也可以負），所以列的是**原始 delta**而不是
+            事件筆數。
+            The sources of the defection value: which events pushed it up or down.
+            A number with no visible source is not an explanation — the reader sees the result
+            and not the cause, so nothing would ever make them doubt it. Each event carries
+            its own delta, positive or negative, so the list shows the raw delta rather than a
+            count of events. */}
+        <div className="mt-3">
+          <div className={`${GM_TITLE} text-xs! mb-1`}>{t('character.defectionEvents')}</div>
+          {myEvents.length === 0 ? (
+            <p className="text-xs text-gray-500">{t('character.noDefectionEvents')}</p>
+          ) : (
+            <ul className="space-y-0.5">
+              {myEvents.map((e, i) => (
+                <li
+                  key={`${i}-${e.reason}`}
+                  className="flex items-baseline gap-2 text-xs text-gray-400"
+                >
+                  <span
+                    className={`font-display tabular-nums shrink-0 ${
+                      e.delta >= 0 ? 'text-amber-300' : 'text-cyan-300'
+                    }`}
+                  >
+                    {e.delta >= 0 ? `+${e.delta}` : e.delta}
+                  </span>
+                  <span className="min-w-0 flex-1 break-words">{e.reason}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -2144,16 +2223,107 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
   // This panel is the 地點 tab's content, so "nothing selected" is a normal state — but a
   // one-line prompt sends the reader back to the map to hunt. The panel is already here, so
   // it should list them. Sorted by name, because this list has no spatial cue of its own.
+  /** 地點列表的搜尋字串 / The place list's search text */
+  const [placeQuery, setPlaceQuery] = useState('');
+  /** 擁有權過濾 / Ownership filter */
+  const [placeOwnerFilter, setPlaceOwnerFilter] = useState<'all' | 'owned' | 'unowned'>('all');
+  /**
+   * 已顯示的筆數。這是「無窮載入」而不是一次畫完：世界可以到 2000 個地點，而這個面板
+   * 只有 24rem 寬，一次建立兩千列等於每次開分頁都重建整個列表。
+   *
+   * Rows revealed so far. This is incremental loading rather than rendering everything: the
+   * world can hold 2000 places and this panel is only 24rem wide, so building every row on
+   * each open means rebuilding the whole list every time the tab is opened.
+   *
+   * 重設這個值是因為過濾條件改變後，已顯示的筆數會指向另一個集合的尾端。
+   * It resets when the filter changes, because the count would otherwise point into the tail
+   * of a different set.
+   */
+  const [placeVisibleCount, setPlaceVisibleCount] =
+    // CONFIG 是 `as const`，所以這裡會推成字面值 `100`，而 updater 要回傳 number。
+    // 顯式標成 number 才不會把 setter 鎖死成只有 100 可用 / CONFIG is `as const`, so this
+    // infers the literal `100` and the updater cannot return a larger number. Annotating it
+    // is what keeps the setter usable.
+    useState<number>(CONFIG.PLACE_LIST_PAGE_SIZE);
+
   if (!place) {
-    const sorted = [...places].sort((a, b) => a.name.localeCompare(b.name));
+    const ownedFilter = placeOwnerFilter;
+    const query = placeQuery.trim().toLowerCase();
+    const filtered = places.filter((p) => {
+      const isOwned = p.factionId !== null;
+      if (ownedFilter === 'owned' && !isOwned) return false;
+      if (ownedFilter === 'unowned' && isOwned) return false;
+      // 名稱比對不分大小寫：中文沒有大小寫，但英文地名有，所以一律轉小寫再比 /
+      // Name matching is case-insensitive: Chinese has no case but English place names do
+      return query === '' || p.name.toLowerCase().includes(query);
+    });
+    const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+    const shown = sorted.slice(0, placeVisibleCount);
+    const hasMore = shown.length < sorted.length;
     return (
       <div className={`${GM_PANEL} px-2 py-2`}>
         <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.allPlaces')}</div>
+        {/* 搜尋 + 擁有權過濾。重設「已顯示筆數」是必要的：否則換了條件之後，那個數字
+            會指向另一個集合的尾端，畫面看起來就像「沒反應」 /
+            Search plus an ownership filter. The revealed-row count has to reset with them:
+            otherwise the count points into the tail of a different set and the list looks
+            unresponsive. */}
+        <input
+          type="search"
+          value={placeQuery}
+          onChange={(e) => {
+            setPlaceQuery(e.target.value);
+            setPlaceVisibleCount(CONFIG.PLACE_LIST_PAGE_SIZE);
+          }}
+          placeholder={t('place.searchPlaces')}
+          aria-label={t('place.searchPlaces')}
+          className="mb-1.5 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 outline-none focus:border-cyan-400/50"
+        />
+        <div className="mb-1.5 flex gap-1" role="group" aria-label={t('place.filterOwnership')}>
+          {(
+            [
+              ['all', t('place.filterAll')],
+              ['owned', t('place.filterOwned')],
+              ['unowned', t('place.filterUnowned')],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={placeOwnerFilter === key}
+              onClick={() => {
+                setPlaceOwnerFilter(key);
+                setPlaceVisibleCount(CONFIG.PLACE_LIST_PAGE_SIZE);
+              }}
+              className={`min-h-11 flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors duration-150 ${
+                placeOwnerFilter === key
+                  ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-200'
+                  : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {sorted.length === 0 ? (
           <p className="text-base text-gray-400 px-1">{t('game.noData')}</p>
         ) : (
-          <ul className="space-y-0.5 max-h-[70vh] overflow-y-auto ds-gm-scroll">
-            {sorted.map((p) => {
+          <>
+            <ul
+              className="space-y-0.5 max-h-[55vh] overflow-y-auto ds-gm-scroll"
+              onScroll={(e) => {
+                // 接近底部就再載入一頁。用捲動事件而不是 IntersectionObserver：
+                // 這裡已經有一個捲動容器，加一個哨兵元素只是多一個要同步的節點 /
+                // Reveal another page near the bottom. A scroll handler rather than an
+                // IntersectionObserver: the scroll container already exists, so a sentinel
+                // element would just be one more node to keep in sync
+                const el = e.currentTarget;
+                if (hasMore && el.scrollHeight - el.scrollTop - el.clientHeight < 200) {
+                  setPlaceVisibleCount((c) => c + CONFIG.PLACE_LIST_PAGE_SIZE);
+                }
+              }}
+            >
+              {shown.map((p) => {
               const owner = factions.find((f) => f.id === p.factionId);
               return (
                 <li key={p.id}>
@@ -2184,7 +2354,16 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                 </li>
               );
             })}
-          </ul>
+            </ul>
+            {/* 已經到底了就不再提示，否則它會永遠掛在那裡說「還有更多」 /
+                No "load more" once the list is exhausted, or it sits there claiming there
+                is more forever */}
+            <div className="mt-1 px-1 text-center text-[11px] text-gray-500 tabular-nums">
+              {hasMore
+                ? `${shown.length} / ${sorted.length}`
+                : `${sorted.length}`}
+            </div>
+          </>
         )}
       </div>
     );
@@ -2434,17 +2613,38 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           role="tooltip"
                           >
                           <ul className="space-y-0.5">
-                            {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => (
-                              <li
-                                key={lvl}
-                                className={`flex items-center gap-1.5 text-[13px] font-mono tabular-nums ${
-                                  lvl === level ? 'text-cyan-200' : 'text-gray-400'
-                                }`}
-                              >
-                                <span className="w-4 shrink-0">L{lvl}</span>
-                                <span>{formatEffect(buildingTotal(row.kind, lvl), per.unit)}</span>
-                              </li>
-                            ))}
+                            {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
+                              const out = placeOutputAt(row.kind, lvl);
+                              // 印的是**此地此刻每回合的總產出**，不是這一棟自己的貢獻：
+                              // 市場 0 級時貢獻是 0，但地方照樣有基礎收入，印 0 會讓讀者
+                              // 以為這棟建築一點用都沒有。堡壘沒有「總產出」，退回累積百分比。
+                              //
+                              // The **place's total per round** is printed, not this building's own
+                              // contribution: at market level 0 the contribution is 0 while the
+                              // place still earns its base income, and printing 0 would read as
+                              // "this building is worthless". Fortress has no total, so it falls
+                              // back to the cumulative percentage.
+                              const value = out ? out.value : buildingTotal(row.kind, lvl);
+                              const unit = out ? out.unit : 'percent';
+                              return (
+                                <li
+                                  key={lvl}
+                                  className={`flex items-baseline gap-1.5 text-[13px] font-mono tabular-nums ${
+                                    lvl === level ? 'text-cyan-200' : 'text-gray-400'
+                                  }`}
+                                >
+                                  <span className="w-4 shrink-0">L{lvl}</span>
+                                  <span className="flex-1">
+                                    {formatEffect(value, unit)} / {t('place.perRound')}
+                                  </span>
+                                  {/* 到這一級為止的累計花費，不是從上一級起算的一步 /
+                                      The running total to reach this level, not one step */}
+                                  <span className="shrink-0 text-amber-300/80">
+                                    {lvl === 0 ? '—' : `${t('character.gold')} ${totalCostToReach(lvl)}`}
+                                  </span>
+                                </li>
+                              );
+                            })}
                           </ul>
                           <div className="mt-1 border-t border-white/10 pt-1 text-[11px] text-gray-500">
                             {t('place.perLevel')} {formatEffect(per.value, per.unit)}

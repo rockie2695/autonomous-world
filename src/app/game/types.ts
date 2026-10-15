@@ -71,6 +71,18 @@ export interface WorldState {
   spotlights?: Array<{ placeId: string; kind: 'created' | 'attacked' }>;
   /** 本回合移動（供地圖動畫）/ This round's moves (for the map animation) */
   moves?: Array<{ fromPlaceId: string; toPlaceId: string; factionId: string | null }>;
+  /**
+   * 本回合的 AmbitionEvent：叛變值的事件部分就是這些 delta 的總和。
+   *
+   * 將領詳情用它列出「哪些事件把這個數字推高／壓低」，因為一個沒有來源的數字等於
+   * 沒有解釋——讀者看得到結果，看不到原因。
+   *
+   * This round's AmbitionEvents: their deltas are the "events" part of the defection value.
+   *
+   * The leader detail lists which events pushed the number up or down. A number with no
+   * visible source is not an explanation — the reader can see the result but not the cause.
+   */
+  roundAmbitionEvents?: Array<{ charId: string; delta: number; reason: string }>;
 }
 
 export interface GameEvent {

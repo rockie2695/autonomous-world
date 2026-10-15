@@ -206,6 +206,23 @@ export async function GET(request: NextRequest) {
     }),
   ]);
 
+  /**
+   * 本回合的 AmbitionEvent：叛變值的「事件部分」就是這些 delta 的總和。
+   *
+   * 只取**本回合**，因為叛變值每回合重算，而歷史紀錄在這裡沒有作用：它們是不同回合
+   * 的 delta，把跨回合的加總塞進一個「本回合的叛變值」只會讓那個數字沒有定義。
+   *
+   * This round's AmbitionEvents: the "events" part of the defection value is their delta sum.
+   *
+   * Only **this round**, because the value is recomputed every round. History has no role
+   * here: summing deltas across rounds would give the number no meaning.
+   */
+  const roundAmbitionEvents = await prisma.ambitionEvent.findMany({
+    where: { worldId: world.id, round },
+    select: { charId: true, delta: true, reason: true },
+    orderBy: { round: 'asc' },
+  });
+
   return NextResponse.json({
     world: {
       id: world.id,
@@ -218,5 +235,6 @@ export async function GET(request: NextRequest) {
     roads,
     spotlights,
     moves,
+    roundAmbitionEvents,
   });
 }

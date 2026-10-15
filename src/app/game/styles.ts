@@ -102,15 +102,18 @@ export const GM_HUD_PANEL =
  * wraps to many lines cannot cover the map.
  */
 export const GM_HUD_LEGEND = `${GM_HUD_PANEL} left-4 max-w-[min(55%,24rem)] max-h-[40vh] overflow-y-auto ds-gm-scroll`;
-// 相機控制要避開右側面板（內容 19rem + 頁籤 rail 與間距，實測約 405px），
-// 否則 reset/縮小/滑桿會被面板蓋住。面板展開時往左挪、收合時貼齊右緣。
-// 窄視窗下 26rem 會把控制列推出畫面，所以只在 lg 以上套用，窄版維持右緣。
-// Camera controls must clear the side panel (19rem of content plus the tab rail
-// and gutter — measured at ~405px) or reset/zoom-out/the slider end up
-// underneath it. Shift left while the panel is open, back to the edge when closed.
-// A fixed 26rem offset pushes the controls off-screen on narrow viewports, so it
-// only applies from lg up; narrow keeps them on the edge.
-export const GM_HUD_CONTROLS_OPEN = `${GM_HUD_PANEL} right-4 lg:right-[26rem]`;
+// 相機控制要避開右側面板。面板內容是 `w-[24rem]`，加上頁籤 rail 與間距約 7rem，
+// 所以打開時要讓開 31rem，否則 reset／縮小／滑桿會被面板蓋住。
+// 面板收合時貼齊右緣。
+// 窄視窗下 31rem 會把控制列推出畫面，所以只在 lg 以上套用，窄版維持右緣。
+//
+// Camera controls must clear the side panel. The panel content is `w-[24rem]`; adding the
+// tab rail and the gutter brings the real width to about 31rem, so that is what the controls
+// have to clear or reset/zoom-out/the slider end up underneath it. They return to the edge
+// when the panel is closed.
+// A fixed 31rem offset pushes the controls off-screen on narrow viewports, so it only
+// applies from lg up; narrow keeps them on the edge.
+export const GM_HUD_CONTROLS_OPEN = `${GM_HUD_PANEL} right-4 lg:right-[31rem]`;
 export const GM_HUD_CONTROLS_CLOSED = `${GM_HUD_PANEL} right-4`;
 /**
  * 選擇回合：疊在地圖左緣，換取地圖寬度。圖例在左下、相機控制在右下，所以左上是
