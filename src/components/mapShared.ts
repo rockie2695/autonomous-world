@@ -1,23 +1,28 @@
 // ============================================================================
 // Sigma 地圖的共用純邏輯 / Shared pure logic for the sigma map
 // ----------------------------------------------------------------------------
-// 顏色換算、發光 sprite 快取、資料型別，以及那組讓外部按鈕控制鏡頭的
-// `MapCameraControls`。全部與 React 和 canvas 都無關，所以從 `SigmaMap.tsx`
-// 分出來之後元件本身短了很多，而且這些東西可以各自單獨測。
+// 顏色換算、資料型別，以及那組讓外部按鈕控制鏡頭的 `MapCameraControls`。全部與 React
+// 和 canvas 都無關，所以從 `SigmaMap.tsx` 分出來之後元件本身短了很多，而且這些東西
+// 可以各自單獨測。
 //
-// Colour conversion, the glow sprite cache, the data shapes, and `MapCameraControls`
-// (the handle the floating buttons use to drive the camera). None of it touches React
-// or a canvas, so pulling it out shortens the component and each piece stands alone.
+// Colour conversion, the data shapes, and `MapCameraControls` (the handle the floating
+// buttons use to drive the camera). None of it touches React or a canvas, so pulling it
+// out shortens the component and each piece stands alone.
 //
 // 這個檔案刻意**不含** 'use client'：它是純模組。
 // Deliberately carries no 'use client': it is a plain module.
 // 功能 / Features:
 // - 節點 = 勢力色、大小 = 兵力 / Nodes = faction color, size = troops
 // - 道路 = 細線、半透明、hover 高亮 / Roads = thin lines, semi-transparent, hover highlight
-// - 節點發光 + 陰影（靜態裝飾層）/ Node glow + drop shadow (static decoration layer)
 // - hover 顯示：名字 + 勢力 + 兵力 + 建築 / Hover: name + faction + troops + buildings
 // - 可拖曳 / 縮放 / Draggable + zoomable（鏡頭動畫：聚焦地點、全覽）/ animated camera: focus + fit
 // - 點擊顯示地方詳情 / Click shows place detail
+//
+// 節點發光／陰影層已**移除**，所以 `readDesignToken`、`getGlowSprite` 與 `withAlpha`
+// 也一併不存在了——它們只服務那一層。
+//
+// The node glow/shadow layer is **removed**, so `readDesignToken`, `getGlowSprite` and
+// `withAlpha` are gone with it — they existed only to serve that layer.
 // ============================================================================
 
 import { CONFIG } from '@/lib/gameConfig';
@@ -65,25 +70,6 @@ export function hslToHex(hsl: string): string {
 }
 
 /**
- * 讀取 globals.css 的設計 token（設計值不 hardcode 在 TSX）。
- * Read a design token from globals.css (design values never hardcoded in TSX).
- *
- * @param name - CSS 自訂屬性名稱（不含 --）/ CSS custom property name (without --)
- * @param fallback - 讀不到時的後備值 / Fallback when the token is missing
- * @returns token 值（已 trim）/ The trimmed token value
- */
-export function readDesignToken(name: string, fallback: string): string {
-  if (typeof window === 'undefined') return fallback;
-  const value = getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
-  return value.length > 0 ? value : fallback;
-}
-
-/** 發光／陰影 sprite 的像素尺寸 / Pixel size of the glow/shadow sprites */
-export const SPRITE_SIZE = 64;
-
-/**
  * 把 `#rgb` / `#rrggbb` 轉成三個 0–255 的通道值。
  * Turn `#rgb` / `#rrggbb` into three 0–255 channels.
  *
@@ -104,73 +90,6 @@ export function hexToRgb(hex: string): [number, number, number] {
   const value = Number.parseInt(full, 16);
   if (Number.isNaN(value)) return [0, 0, 0];
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255];
-}
-
-/**
- * 建立一張中心向外淡出的徑向漸層 sprite，並依色票快取。
- * 對同一種顏色只建立一次，之後每次重繪都只是 drawImage ——
- * 遠比每幀 createRadialGradient 便宜（地圖最多 2000 個節點）。
- * Build a radial-gradient sprite that fades from the centre outwards, cached
- * per colour. Each redraw is then just a drawImage, far cheaper than calling
- * createRadialGradient per node per frame (the map can hold 2000 nodes).
- *
- * @param cache - 以顏色為鍵的 sprite 快取 / Sprite cache keyed by colour
- * @param color - 中心色（CSS 色碼）/ Centre colour (any CSS colour string)
- * @param alpha - 中心不透明度 / Opacity at the centre
- * @returns 快取的 sprite 畫布 / The cached sprite canvas
- */
-export function getGlowSprite(
-  cache: Map<string, HTMLCanvasElement>,
-  color: string,
-  alpha: number
-): HTMLCanvasElement {
-  const key = `${color}|${alpha}`;
-  const cached = cache.get(key);
-  if (cached) return cached;
-
-  const sprite = document.createElement('canvas');
-  sprite.width = SPRITE_SIZE;
-  sprite.height = SPRITE_SIZE;
-  const sctx = sprite.getContext('2d');
-  if (sctx) {
-    const half = SPRITE_SIZE / 2;
-    const gradient = sctx.createRadialGradient(half, half, 0, half, half, half);
-    gradient.addColorStop(0, withAlpha(color, alpha));
-    gradient.addColorStop(0.45, withAlpha(color, alpha * 0.32));
-    gradient.addColorStop(1, withAlpha(color, 0));
-    sctx.fillStyle = gradient;
-    sctx.fillRect(0, 0, SPRITE_SIZE, SPRITE_SIZE);
-  }
-
-  cache.set(key, sprite);
-  return sprite;
-}
-
-/**
- * 把 CSS 色碼轉成帶透明度的 rgba()。
- * Sigma 的節點色是 hex，所以這裡只需處理 #rgb / #rrggbb。
- * Convert a CSS colour to rgba() with the given alpha. Node colours arrive as
- * hex from hslToHex, so only #rgb / #rrggbb need handling.
- *
- * @param color - hex 色碼 / A hex colour
- * @param alpha - 0-1 的不透明度 / Opacity between 0 and 1
- * @returns rgba() 色字串 / An rgba() colour string
- */
-export function withAlpha(color: string, alpha: number): string {
-  let hex = color.trim();
-  if (hex.startsWith('#')) hex = hex.slice(1);
-  if (hex.length === 3) {
-    hex = hex
-      .split('')
-      .map((c) => c + c)
-      .join('');
-  }
-  if (hex.length !== 6) return color;
-  const r = parseInt(hex.slice(0, 2), 16);
-  const g = parseInt(hex.slice(2, 4), 16);
-  const b = parseInt(hex.slice(4, 6), 16);
-  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return color;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 /**
@@ -340,6 +259,18 @@ export interface MapCameraControls {
   setZoom: (t: number) => void;
   /** 每次縮放變動時通知（滑桿要跟著動）/ Called whenever the zoom changes so the slider can track it */
   onZoomChange?: (cb: (zoom: number) => void) => () => void;
+  /**
+   * Sigma's own **framed** (normalised) → viewport-pixel mapping.
+   *
+   * The backdrop layers (`SpaceGalaxy` and its fog) position and scale themselves with
+   * this, and must **not** re-derive pan and zoom from `camera.x / y / ratio`: a
+   * hand-rolled pan has the **wrong sign**, so the backdrop drifts against the map and
+   * reads as "not following it". The galaxy has no parallax or zoom clamp of its own for
+   * the same reason — it inherits sigma's transform exactly.
+   *
+   * Optional so partial fixtures still satisfy the interface.
+   */
+  framedGraphToViewport?: (p: { x: number; y: number }) => { x: number; y: number };
 }
 
 export interface SigmaMapProps {

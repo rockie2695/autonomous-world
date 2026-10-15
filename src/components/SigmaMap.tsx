@@ -12,9 +12,7 @@
 import {
   brightenColor,
   hexToRgb,
-  getGlowSprite,
   hslToHex,
-  readDesignToken,
   solveLabelFontSize,
   type Faction,
   type Place,
@@ -59,7 +57,6 @@ export function SigmaMap({
 }: SigmaMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
-  const glowRef = useRef<HTMLCanvasElement>(null);
   /** 領地圖層（最底層，area view）/ Territory layer (bottom-most, the area view) */
   const territoryRef = useRef<HTMLCanvasElement>(null);
   /**
@@ -92,6 +89,17 @@ export function SigmaMap({
   // Respect prefers-reduced-motion: the camera jumps instead of animating
   const reducedMotion = useReducedMotion();
   const reducedMotionRef = useRef(reducedMotion);
+  /**
+   * 鏡頭 ratio 的鏡像，供**穩定閉包**讀取。`onMove` 綁在 wrapper 上、effect 依賴為空，
+   * 所以它不能直接抓到 sigma 實例；把 ratio 寫進 ref，它就能在每次 mousemove 時判斷
+   * 「現在是否已經拉近到領地層不该互動」。
+   *
+   * A mirror of the camera ratio for the **stable closure** to read. `onMove` is bound to
+   * the wrapper from an effect with empty dependencies, so it cannot reach the sigma
+   * instance directly; mirroring the ratio into a ref lets every mousemove ask "are we
+   * zoomed in past the point where the territory layer should be inert?".
+   */
+  const cameraRatioRef = useRef(1);
   useEffect(() => {
     reducedMotionRef.current = reducedMotion;
   }, [reducedMotion]);
@@ -468,6 +476,26 @@ export function SigmaMap({
           zoomSubscribers.delete(cb);
         };
       },
+      // sigma 自己的「框化座標 → 視窗像素」對應。背景銀河與霧氣層必須走這條路，
+      // **不可**從 camera.x / y / ratio 自行推導——
+      //
+      // Sigma's own framed → viewport mapping. The backdrop layers must use this and
+      // must NOT re-derive pan and zoom from camera.x / y / ratio:
+      //
+      //   * 手推的平移**方向是反的**。sigma 的對應是
+      //     `screen = (framed - camera.position) × scale + centre`，所以 camera.x 變大時
+      //     世界內容往**左**移；而 `centre + (camera.x - 0.5) × k` 會讓背景往**右**移——
+      //     背景於是與地圖反向漂移，平移時看起來「不跟著地圖走」。
+      //   * 縮放的比例因子也拿不到精確值，`zoomRel ^ n` 只是近似。
+      //
+      //   * a hand-rolled pan has the **wrong sign**. Sigma's mapping is
+      //     `screen = (framed - camera.position) × scale + centre`, so raising
+      //     camera.x moves world content **left**, whereas
+      //     `centre + (camera.x - 0.5) × k` moves the backdrop **right** — so the
+      //     backdrop drifts against the map and reads as "not following it".
+      //   * the exact zoom factor is likewise unavailable, so `zoomRel ^ n` is only
+      //     ever an approximation.
+      framedGraphToViewport: (p: { x: number; y: number }) => sigma.framedGraphToViewport(p),
     });
 
     return () => {
@@ -654,21 +682,20 @@ field: buildTerritoryField(
 
   // ── 領地圖層 / Territory layer ──────────────────────────────────────────────
 // 拉遠時把「節點 + 道路」換成「每個地方所佔的面積」，類似 Stellaris 星系圖或
-// CK3 省份圖。這是最底層，掛 afterRender 重繪（與發光層同一個理由：沒有額外
-// rAF，閒置時零成本），而且只有鏡頭確實拉遠時才開啟互動。
+// CK3 省份圖。這是最底層，掛 afterRender 重繪（沒有額外 rAF，閒置時零成本），
+// 而且只有鏡頭確實拉遠時才開啟互動。
 // When zoomed out this replaces "nodes + roads" with the area each place covers,
 // like a Stellaris galaxy map or CK3's province map. It is the bottom-most
-// layer, redrawn on afterRender for the same reason as the glow layer (no extra
-// rAF, so an idle map costs nothing), and it only takes pointer events while the
+// layer, redrawn on afterRender (no extra rAF, so an idle map costs nothing),
+// and it only takes pointer events while the
 // camera is genuinely zoomed out.
 useEffect(() => {
   const sigma = sigmaRef.current;
   const graph = graphRef.current;
   const canvas = territoryRef.current;
-  const glow = glowRef.current;
   const container = containerRef.current;
   const surface = surfaceRef.current;
-  if (!sigma || !graph || !canvas || !glow || !container || !surface) return;
+  if (!sigma || !graph || !canvas || !container || !surface) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
 
@@ -788,13 +815,10 @@ useEffect(() => {
     // 領地是**疊在原圖上的半透明色層**，所以圖表本身**不會**淡出——這與較早的
     // 版本相反，那個版本把節點與道路淡到 0，等於把地圖整張換掉，正是使用者指出的
     // 「 Stellaris / CK3 是用地圖標出面積、不是另外畫一張圖」。
-    // 淡出的只有發光層（半透明色層疊上去時，過強的光暈會讓領地邊界糊掉）。
-    // The territory is a translucent tint *over* the map, so the graph does NOT
-    // fade — the opposite of the earlier version, which faded nodes and roads to
-    // zero and so replaced the map outright. Only the glow dims, since a strong
-    // halo under a translucent wash would blur the territory border.
+    // 節點發光層已經移除，所以這裡只有領地本身的 opacity。
+    // The node glow layer is gone, so the territory's own opacity is the only one
+    // written here.
     canvas.style.opacity = String(alpha);
-    glow.style.opacity = String(1 - alpha * 0.75);
     container.style.opacity = '1';
     // sigma 的 container **無條件**保留指標事件。它以前會在領地層啟用時被關掉，讓下面
     // 那層 canvas 收得到 hover / click —— 而那也正是本元件自己實作拖曳與滾輪的原因。
@@ -1055,6 +1079,8 @@ useEffect(() => {
     const vx = event.clientX - rect.left;
     const vy = event.clientY - rect.top;
     const graphPoint = sigma.viewportToGraph({ x: vx, y: vy });
+    const territoryInteractive =
+      showTerritory && cameraRatioRef.current >= CONFIG.TERRITORY_INTERACTIVE_RATIO;
 
     // ── 指到某個地方 → 地方提示 ──
     // 勢力領地是「面積」，但地方節點還是看得見、也還能互動，所以指到它就顯示它。
@@ -1087,9 +1113,13 @@ useEffect(() => {
 
       // 仍然把游標底下那格的勢力打亮，維持「這片是誰的」 /
       // Still light whichever faction owns the ground under the cursor, so
-      // "whose land is this" keeps reading
-      const litKey = factionAt(field, graphPoint.x, graphPoint.y);
-      if (litKey !== null && litKey !== lit) {
+      // "whose land is this" keeps reading. Skipped when zoomed in past the interactive
+      // ratio: there the area layer is only a backdrop, and lighting it would be the area
+      // taking over the cursor from the node the pointer is actually on.
+      const litKey = territoryInteractive
+        ? factionAt(field, graphPoint.x, graphPoint.y)
+        : null;
+      if (litKey !== lit) {
         lit = litKey;
         draw();
       }
@@ -1108,7 +1138,15 @@ useEffect(() => {
     // With the territory layer off, this must stop answering "whose ground is this":
     // the layer is not drawn, so the tooltip would describe a claim that is not on
     // screen. The place tooltip above is unaffected — nodes and roads remain.
-    if (!showTerritory) {
+    //
+    // 拉近到 `TERRITORY_INTERACTIVE_RATIO` 以下時也一樣：那一段畫的是**節點與道路**，
+    // 面積層只是底色，卻還會搶走游標的解讀權並把勢力色亮起來，看起來像 bug。
+    //
+    // The same applies once zoomed in past `TERRITORY_INTERACTIVE_RATIO`: that range is
+    // showing **nodes and roads**, so the area layer is only a backdrop — yet it would
+    // still take over the cursor's reading and light a faction's fill, which reads as a
+    // bug.
+    if (!territoryInteractive) {
       canvas.style.cursor = '';
       hoveredPlaceId = null;
       if (lit !== null) {
@@ -1273,6 +1311,25 @@ useEffect(() => {
   // moves it must repaint it. `afterRender` is not reliable here: measured, it does not
   // always reach this handler during a drag.
   const scheduleOverlay = () => {
+    // 鏡頭每次移動都把 ratio 寫進 ref，供 `onMove` 那個穩定閉包讀取 /
+    // Mirror the ratio into the ref on every camera move, for the stable `onMove` closure
+    cameraRatioRef.current = sigma.getCamera().ratio;
+    // 跨過 `TERRITORY_INTERACTIVE_RATIO` 時，已經亮起來的勢力色與地點提示必須**立刻**
+    // 清掉：它們是在比例還算大的時候產生的，若留著，玩家在拉近之後仍會看到一個已經
+    // 不該互動的面積層留下來的殘影（而且沒有任何游標移動去觸發重新判定）。
+    //
+    // Crossing `TERRITORY_INTERACTIVE_RATIO` must clear the highlight and tooltip at
+    // once: they were produced while the ratio was still large, and left in place they
+    // would linger as the residue of an area layer that is no longer interactive — with
+    // no cursor movement to trigger a fresh decision.
+    const interactive =
+      showTerritory && cameraRatioRef.current >= CONFIG.TERRITORY_INTERACTIVE_RATIO;
+    if (!interactive && (lit !== null || hoveredPlaceId !== null)) {
+      lit = null;
+      hoveredPlaceId = null;
+      canvas.style.cursor = '';
+      setTooltip(null);
+    }
     if (overlayFrame) return;
     overlayFrame = window.requestAnimationFrame(() => {
       overlayFrame = 0;
@@ -1305,7 +1362,6 @@ useEffect(() => {
     // 離開時一定要還原，否則 sigma 會永久失去指標事件 /
     // Restore on the way out, or sigma loses pointer events for good
     container.style.opacity = '';
-    glow.style.opacity = '';
     canvas.style.opacity = '';
   };
   }, [places, factions, showTerritory]);
@@ -1320,150 +1376,6 @@ useEffect(() => {
     sigmaRef.current?.refresh();
   }, [selectedPlaceId]);
 
-  // ── 節點發光 + 陰影（靜態裝飾層）───────────────────────────────────────
-  // 第二張覆蓋畫布，位於聚光燈層之下、sigma 容器之上：先鋪一層往右下
-  // 偏移的暗影，再鋪一層依勢力色的柔和發光。節點圓盤由 WebGL 畫在更上面，
-  // 所以看起來像「從地圖發亮起來」而不是貼圖。
-  // A second overlay canvas below the spotlight layer and above the sigma
-  // container: an offset dark shadow pass, then a soft faction-coloured glow
-  // pass. Sigma paints the node discs on top, so the map reads as lit from
-  // within rather than as flat stickers.
-  //
-  // 只在 sigma 重繪（鏡頭移動 / 資料變更 / refresh）或視窗縮放時重繪，閒置時零成本；
-  // 沒有額外 rAF。掛 afterRender 而非 camera 'updated'，兵力變化導致節點大小改變
-  // 時也能跟著重繪。
-  // Redraws only when sigma renders (camera moves, data changes, refresh) or on
-  // resize — no extra rAF, so an idle map costs nothing. Hooking afterRender
-  // rather than the camera event also covers node resizes from troop changes.
-  // ──────────────────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    const sigma = sigmaRef.current;
-    const graph = graphRef.current;
-    const canvas = glowRef.current;
-    if (!sigma || !graph || !canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // 以色票快取的 sprite（同一勢力只建立一次）/ Sprites cached per colour
-    const sprites = new Map<string, HTMLCanvasElement>();
-    // 快取畫布尺寸，避免每幀讀 getBoundingClientRect 造成版面重排 /
-    // Cached canvas size — reading getBoundingClientRect every frame thrashes layout
-    let viewWidth = 0;
-    let viewHeight = 0;
-
-    const resize = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
-      viewWidth = rect.width;
-      viewHeight = rect.height;
-      canvas.width = Math.max(1, Math.round(rect.width * dpr));
-      canvas.height = Math.max(1, Math.round(rect.height * dpr));
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      draw();
-    };
-
-    const draw = () => {
-      ctx.clearRect(0, 0, viewWidth, viewHeight);
-      if (graph.order === 0) return;
-
-      // 陰影色取自設計 token，而非 hardcode 在 TSX
-      // The shadow colour comes from a design token, never hardcoded here
-      const shadowColor = readDesignToken('--color-ds-void', CONFIG.MAP_SHADOW_FALLBACK);
-
-      // 只畫視窗內的節點：2000 個節點時這是明顯的省流 /
-      // Only nodes inside the viewport — a real saving at 2000 nodes
-      const topLeft = sigma.viewportToGraph({ x: 0, y: 0 });
-      const bottomRight = sigma.viewportToGraph({ x: viewWidth, y: viewHeight });
-      const minX = Math.min(topLeft.x, bottomRight.x);
-      const maxX = Math.max(topLeft.x, bottomRight.x);
-      const minY = Math.min(topLeft.y, bottomRight.y);
-      const maxY = Math.max(topLeft.y, bottomRight.y);
-
-      // ── 第一層：陰影（往右下偏移）/ Pass 1: drop shadow, offset down-right ──
-      for (const node of graph.nodes()) {
-        const attrs = graph.getNodeAttributes(node);
-        const { x, y, size } = attrs as {
-          x: number;
-          y: number;
-          size: number;
-        };
-        if (x < minX || x > maxX || y < minY || y > maxY) continue;
-
-        const radius = sigma.scaleSize(size);
-        const outer = radius * CONFIG.MAP_SHADOW_SCALE;
-        if (outer < CONFIG.MAP_GLOW_MIN_RADIUS_PX) continue;
-
-        const vp = sigma.graphToViewport({ x, y });
-        const sprite = getGlowSprite(
-          sprites,
-          shadowColor,
-          CONFIG.MAP_SHADOW_ALPHA
-        );
-        ctx.drawImage(
-          sprite,
-          vp.x - outer + CONFIG.MAP_SHADOW_OFFSET_PX,
-          vp.y - outer + CONFIG.MAP_SHADOW_OFFSET_PX,
-          outer * 2,
-          outer * 2
-        );
-      }
-
-      // ── 第二層：發光（依節點大小調整強度）/ Pass 2: glow, scaled by node size ──
-      for (const node of graph.nodes()) {
-        const attrs = graph.getNodeAttributes(node);
-        const { x, y, size, color } = attrs as {
-          x: number;
-          y: number;
-          size: number;
-          color: string;
-        };
-        if (x < minX || x > maxX || y < minY || y > maxY) continue;
-
-        const radius = sigma.scaleSize(size);
-        const outer = radius * CONFIG.MAP_GLOW_SCALE;
-        if (radius < CONFIG.MAP_GLOW_MIN_RADIUS_PX) continue;
-
-        // 大節點全亮，小節點降到下限 —— 讓勢力重心自然浮現 /
-        // Big nodes glow fully, small ones fade to a floor, so the map's
-        // centres of gravity emerge without everything hazing over
-        const strength = Math.min(
-          1,
-          Math.max(
-            CONFIG.MAP_GLOW_MIN_ALPHA / CONFIG.MAP_GLOW_ALPHA,
-            radius / CONFIG.MAP_GLOW_REFERENCE_PX
-          )
-        );
-        const alpha = CONFIG.MAP_GLOW_ALPHA * strength;
-
-        const vp = sigma.graphToViewport({ x, y });
-        ctx.drawImage(getGlowSprite(sprites, color, alpha), vp.x - outer, vp.y - outer, outer * 2, outer * 2);
-      }
-    };
-
-    // sigma 每次重繪都會觸發（拖曳 / 縮放 / 鏡頭動畫 / refresh）/
-    // Fires on every sigma render (drag, zoom, camera animation, refresh)
-    sigma.on('afterRender', draw);
-    sigma.on('resize', resize);
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(canvas);
-
-    resize();
-
-    return () => {
-      sigma.off('afterRender', draw);
-      sigma.off('resize', resize);
-      resizeObserver.disconnect();
-      // 清空 sprite 快取，避免關閉的畫布留在記憶體 /
-      // Drop the sprite cache so detached canvases are not retained
-      sprites.clear();
-      ctx.clearRect(0, 0, viewWidth, viewHeight);
-    };
-    // 只在掛載時建立：節點資料從 graph 讀取，變更由 afterRender 觸發重繪
-    // Built once on mount: node data is read from the graph, and changes
-    // trigger a redraw through afterRender
-  }, []);
 
   // ── 聚光燈環 + 移動動畫（覆蓋畫布）────────────────────────────────────────
   // 每幀用當前鏡頭座標重繪：新生成 / 被攻擊地點顯示脈動發光環；
@@ -1868,27 +1780,15 @@ useEffect(() => {
         </div>
       )}
       {/* 領地圖層（最底層：拉遠時的面積視圖）/ Territory layer (bottom-most: the area view when zoomed out)
-          必須在發光層「之前」—— 領地是背景，發光、聚光燈與節點都要壓在它上面。
-          刻意不加 pointer-events-none：拉遠時這一層要自己收 hover / click。
-          所以互動是靠 draw() 把 sigma container 的 pointer-events 關掉來讓路，
-          因為它在 DOM 上位於 sigma 之下。
-          Must come BEFORE the glow: territory is the background, so the glow, the
-          spotlight and the nodes all paint on top of it. Deliberately NOT
-          pointer-events-none — while zoomed out this layer handles hover and
-          click itself. draw() yields to it by switching the sigma container's
-          pointer-events off, since sigma sits above it in the DOM. */}
+          DOM 順序：領地層 → 聚光燈層 → sigma container。領地是背景，聚光燈與節點都壓在它上面。
+          刻意不加 pointer-events-none：拉遠時這一層要自己收 hover / click（經由外層 wrapper 的
+          冒泡），而 sigma 的 container 則**無條件**保留指標事件。
+          DOM order: territory → spotlight overlay → sigma container. The territory is
+          the background, with the spotlight and the nodes painted on top of it. It is
+          deliberately NOT pointer-events-none: while zoomed out this layer handles hover
+          and click (via the wrapper's bubbling), and the sigma container keeps its
+          pointer events **unconditionally**. */}
       <canvas ref={territoryRef} className="absolute inset-0 w-full h-full" />
-      {/* 節點發光 + 陰影 / Node glow + drop shadow
-          w-full h-full 理由同覆蓋層：canvas 是替換元素 / same reason as the overlay: canvas is a replaced element
-          DOM 順序：領地層 → 發光層 → 聚光燈層 → sigma container。發光要在聚光燈環之下，
-          sigma 的節點與標籤又在最上面。
-          DOM order: territory → glow → spotlight overlay → sigma container. The
-          glow sits under the spotlight rings, and sigma's nodes and labels sit
-          above both. */}
-      <canvas
-        ref={glowRef}
-        className="absolute inset-0 w-full h-full pointer-events-none"
-      />
       {/* 聚光燈環 + 移動動畫覆蓋層（不攔截滑鼠事件）/ Spotlight rings + move animation overlay (never intercepts mouse events)
           w-full h-full 必須：canvas 是替換元素，absolute inset-0 不會自動撐滿（intrinsic 300×150）
           w-full h-full is required: canvas is a replaced element — absolute inset-0 alone leaves it at its intrinsic 300×150

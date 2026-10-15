@@ -110,7 +110,9 @@ autonomous-world/
 │       ├── rng.ts                 # Seeded RNG (mulberry32)
 │       ├── snapshot.ts            # Snapshot compression/decompression (gzip)
 │       ├── territory.ts           # Territory force field (pure logic, no DOM)
-│       ├── spaceFlow.ts           # Flow-field dust: noise field + colour ramp (pure logic)
+│       ├── spaceGalaxy.ts         # Background galaxy: core, nebula, stars (pure logic)
+│       ├── spaceFog.ts            # Seeded cloud layer over the map, faded by zoom (pure logic)
+│       ├── spaceShared.ts         # Shared: sigma's framed→viewport placement + canvas colour helpers
 │       ├── i18n/                  # Internationalization (zh/en)
 │       │   ├── index.ts           # Locale management
 │       │   ├── zh.ts              # Traditional Chinese translations
@@ -122,10 +124,12 @@ autonomous-world/
 │           └── epithet.ts         # Shared two-character epithet components
 ├── src/components/
 │   ├── SigmaMap.tsx               # Interactive graph map (Sigma.js + graphology)
-│   ├── mapShared.ts               # SigmaMap's pure half: colour maths, glow sprites, shapes, MapCameraControls
+│   ├── mapShared.ts               # SigmaMap's pure half: colour maths, shapes, MapCameraControls
 │   ├── LeaderAvatar.tsx           # Procedural leader head bust (seeded from character.id)
 │   ├── BattleReport.tsx           # Battle report popup (the attack/defence arithmetic)
-│   ├── SpaceFlow.tsx              # Flow-field space dust (Simplex noise, Canvas 2D)
+│   ├── SpaceGalaxy.tsx            # Baked rotating galaxy, bottom layer (Canvas 2D)
+│   ├── SpaceFog.tsx               # Warm seeded star-dust drifting slowly, over the galaxy and under the map (Canvas 2D)
+│   ├── SpaceFlow.tsx              # Flow-field dust over the galaxy (Simplex noise, Canvas 2D)
 │   └── home/                   # Homepage sections (three.js scenes, live poller, hooks)
 │                                #   (the event log and charts live in src/app/game/)
 ├── server/
@@ -205,8 +209,8 @@ The game features an interactive force-directed graph map using Sigma.js:
   circular **force**, marking the area those forces cover: the CK3 map-mode / Stellaris galaxy-map
   idea. Same-faction force **accumulates**, so a faction holding more places reaches further, and
   rival forces push against each other — the border lands where two forces are equal, so distance
-  decides it. It is a translucent tint **over** the map, not a repaint of it — the graph, roads and
-  glow stay visible underneath — and unowned land is never coloured, because CK3 leaves unclaimed
+  decides it. It is a translucent tint **over** the map, not a repaint of it — the graph and roads
+  stay visible underneath — and unowned land is never coloured, because CK3 leaves unclaimed
   land untouched. Hovering a *place* still shows that place's tooltip; hovering open territory shows
   the faction's, and lifting a region dims the rest. Each faction's **name** is DOM over its region
 - **Faction names always sit inside their own territory** — both the anchor and the font size come from
@@ -214,13 +218,45 @@ The game features an interactive force-directed graph map using Sigma.js:
   A name is brightened toward white first, because the fill beneath it is that same colour over a dark
   backdrop; and faction names take over at the exact zoom where the place names disappear, so no band
   of the map is left with no label at all
-- **Space dust** — the map sits on a slowly drifting flow field: particles follow a 3D Simplex noise
-  field, so they gather into ribbons, vortices and voids rather than scattering at random, and each
-  particle's colour is read from the noise **at its position**, so one ribbon is one colour band.
-  Every colour and rate is a `SPACE_FLOW_*` value in `lib/gameConfig.ts`; widen `SPACE_FLOW_HUE_MAX`
-  toward 360 for a rainbow, but raise `SPACE_FLOW_LIGHTNESS` or `SPACE_FLOW_MAX_ALPHA` before
-  `SPACE_FLOW_SATURATION` — the map already carries faction colour, and vivid ribbons cost the roads
-  their contrast
+- **A three-layer space backdrop** — the map sits on a slowly rotating galaxy, a warm star-dust fog
+  that drifts slowly, and a drift-field dust layer.
+  - The **galaxy** is the deep field at the bottom: a soft warm core, desaturated nebula patches
+    and stars that concentrate toward the centre. Baked once into an offscreen canvas; every frame is
+    one rotated `drawImage`. It uses **no noise at all**, and it dims as you zoom in
+    (`SPACE_GALAXY_FADE_RATIO: 0.9`) — following sigma's zoom exactly would otherwise grow it to ~9×
+    the viewport and flatten it into a film that costs the roads their contrast. The fade is floored at
+    `SPACE_GALAXY_FADE_MIN: 0.55`, so the galaxy never disappears — it only dims, and deeper zoom stays
+    legible thanks to the raised floor plus more stars and nebula patches.
+  - The **fog** is a warm seeded star-dust layer painted **over the galaxy and under the map** — a
+    deep backdrop rather than a haze, so the roads and nodes always sit on top of it. It is
+    `pointer-events-none` (kept for safety), and it still paints *below* the HUD chrome. It **drifts
+    slowly** (20 minutes a turn) and has **no zoom fade**, because it now lives under the map and
+    nothing needs veiling. Its **density** is what makes it read as a cloud rather than a grey sheet —
+    each patch draws one value that drives both its alpha and its size, so dense patches are bright
+    and large while thin ones nearly vanish. The palette is deliberately **warm** (near-white cream to
+    dark umber), so it reads as *lit star dust*, not a cold grey haze.
+  - The **dust** is the topmost backdrop layer (still under the map), supplying all of the structure
+    and motion: particles follow a 3D Simplex noise field, so they gather into ribbons, vortices and
+    voids rather than scattering at random, and each particle's colour is read from the noise **at its
+    position**, so one ribbon is one colour band.
+  - The galaxy and fog are **placed by sigma itself**, through `framedGraphToViewport`, so they sit in
+    *world* coordinates and scroll and zoom with the map. This replaced a real bug: a hand-rolled pan
+    had the wrong sign, so the backdrop drifted *against* the map. Only the dust has a parallax factor
+    of its own (`SPACE_FLOW_PARALLAX: 0.35`) — it is the one layer that floats above the map rather
+    than lying in it.
+  - The **territory area layer stops being interactive when zoomed in** past `TERRITORY_INTERACTIVE_RATIO`
+    (0.6): below it, pointing at a patch of ground no longer answers "whose land is this" and no longer
+    lights that faction's fill, because that range is showing nodes and roads and the area layer is only
+    a backdrop. Place node hover and click are unaffected.
+  - The **zoom percentage is an editable input plus a `%` label**, not a display: it reads `0` = furthest,
+    `100` = closest, and typing a value jumps the camera there (Enter commits, and so does blur). The
+    draft is a string, never a number, or `15` would reformat to `1` on the first keystroke.
+  - The galaxy is deliberately **dimmer than the Stellaris reference**, which gets away with a bright
+    core because its hyperlanes are thin *bright* lines.
+  - The dust palette was pushed into the **cool half and down in chroma** (hue `195 → 280`,
+    saturation 45, alpha 0.55). It used to be a full 0–320 rainbow at saturation 78, tuned when it was
+    the *only* backdrop; over a warm galaxy those ribbons fought it. `spaceFlow.test.ts` asserts
+    ceilings so it cannot drift back.
 - **Battles are shown in one place only** — the `PLACE_CAPTURED` report. There is no map-level battle
   animation: an earlier fleet of ships trading fire along contested roads was removed because it was
   derived from *ownership*, so it was permanently "at war" everywhere two factions touched. That is
@@ -228,6 +264,7 @@ The game features an interactive force-directed graph map using Sigma.js:
   engagement. The map's only battle cue is the spotlight ring for the displayed round — red for
   attacked, cyan for created
 - The 將領 / 事件 / 統計 panels are **overlaid on the map's right edge** rather than taking layout width, so the map keeps the full canvas; the tab rail is always visible and only the content collapses
+- **Clicking the already-active tab closes its panel** — a toggle, not open-only, so the rail can always dismiss its own panel
 - **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
 - **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader
 - **Battle report** — a 佔領 row carries a **戰報 / Report** button opening the arithmetic behind
@@ -263,7 +300,6 @@ The game features an interactive force-directed graph map using Sigma.js:
   and opening a leader from the table keeps a **back** action to return to it
 - **Spotlight rings** — places created or attacked in the displayed round only (`SPOTLIGHT_ROUNDS` = 1) pulse a glow ring on a 2D overlay canvas: cyan for created, red for attacked
 - **Move animation** — each round's `CHARACTER_MOVED` events play a faction-colored dot traveling from → to place (1.5s travel + 2.5s pause, `MOVE_ANIM_DURATION`/`MOVE_ANIM_PAUSE`); the events endpoint enriches these rows with `fromPlaceName`/`toPlaceName` for the log
-- **Node glow + drop shadow** — a second, static overlay canvas under the spotlight layer and under Sigma paints a soft faction-colored halo behind every place, scaled by its on-screen size; it redraws on camera moves only, so an idle map costs nothing
 - **Camera transitions** — clicking a place animates the view to centre it, and reset animates to fit the whole world (`MAP_CAMERA_ANIM_MS`, forced to 0 under `prefers-reduced-motion`)
 - The spotlight loop pauses when the map scrolls out of view or the tab is hidden
 

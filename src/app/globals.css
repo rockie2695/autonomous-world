@@ -335,11 +335,20 @@ body {
      frames the world and pulls the eye toward the centre */
   --shadow-ds-map-vignette: inset 0 0 170px 34px rgba(2, 6, 23, 0.66);
 
-  /* 深空底色：兩團極淡的星雲 + 一道垂直漸層。純裝飾，所以住在 @theme static 當
-     token，再由 Tailify utility 引用——不另開一個 .space-bg class。/
+/* 深空底色：兩團極淡的星雲 + 一道垂直漸層。純裝飾，所以住在 @theme static 當
+     token，再由 Tailify utility 引用——不另開一個 .space-bg class。
      The deep-space base: two very faint nebula washes over a vertical gradient.
      Purely decorative, so it lives in @theme static as a token and is referenced
-     by utility — not a bespoke `.space-bg` class. */
+     by utility — not a bespoke `.space-bg` class.
+
+     這兩團是壓過飽和度的灰紫與石板色（原本是飽和的紫與藍）。背景銀河的核是**暖色**，
+     所以冷色角落不能搶戲——否則整張圖會是兩套色溫互相拉扯，而不是一顆銀河。
+     這兩團也會被銀河本身蓋住大部分，所以刻意壓得很淡。
+
+     Both washes are desaturated plum and slate (they used to be a saturated purple
+     and blue). The galaxy's core is **warm**, so the cool corners must not compete —
+     otherwise the frame is two colour temperatures pulling against each other rather
+     than one galaxy. The galaxy also covers most of them, so they stay very faint. */
   --color-ds-space: linear-gradient(
     180deg,
     #05060a 0%,
@@ -348,9 +357,9 @@ body {
   );
   --color-ds-space-nebula: radial-gradient(
     ellipse at 20% 30%,
-    rgba(30, 20, 80, 0.4) 0%,
+    rgba(74, 56, 82, 0.26) 0%,
     transparent 50%
-  ), radial-gradient(ellipse at 80% 70%, rgba(20, 40, 90, 0.3) 0%, transparent 50%);
+  ), radial-gradient(ellipse at 80% 70%, rgba(42, 52, 78, 0.22) 0%, transparent 50%);
 
   /* ── 缓動 / Easing ───────────────────────────────────────────────────── */
   --ease-ds: cubic-bezier(0.22, 0.61, 0.36, 1);

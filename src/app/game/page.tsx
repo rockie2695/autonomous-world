@@ -43,12 +43,29 @@ const SigmaMap = dynamic(
   () => import('@/components/SigmaMap').then((mod) => mod.SigmaMap),
   { ssr: false }
 );
-// 流場塵埃層。晚載也不會擋住地圖。/
-// The flow-field dust layer. It arrives on its own without holding the map back.
+// 背景銀河層。晚載也不會擋住地圖。/
+// The background galaxy layer. It arrives on its own without holding the map back.
+const SpaceGalaxy = dynamic(
+  () => import('@/components/SpaceGalaxy').then((mod) => mod.SpaceGalaxy),
+  { ssr: false }
+);
+
+// 流場塵埃層，疊在銀河**之上**：銀河提供深處的暖光與星點，這一層提供結構與移動。
+// 兩層都晚載，都不會擋住地圖。/
+//
+// The flow-field dust layer, stacked **over** the galaxy: the galaxy supplies the
+// distant warm light and stars, this one supplies the structure and the motion. Both
+// arrive on their own without holding the map back.
 const SpaceFlow = dynamic(
   () => import('@/components/SpaceFlow').then((mod) => mod.SpaceFlow),
   { ssr: false }
 );
+
+// 霧氣層，畫在 SigmaMap **之上**。晚載不會擋住地圖。
+// The fog layer, painted ABOVE SigmaMap. It arrives on its own without holding the map back.
+const SpaceFog = dynamic(() => import('@/components/SpaceFog').then((mod) => mod.SpaceFog), {
+  ssr: false,
+});
 
 // ============================================================================
 // 表面 utility / Surface utilities — Tailwind v4
@@ -277,6 +294,23 @@ export default function GamePage() {
   const queryClient = useQueryClient();
   /** 地圖視角控制（浮動縮放 / 重設按鈕）/ Map camera controls (floating zoom / reset buttons) */
   const mapControlsRef = useRef<MapCameraControls | null>(null);
+  /**
+   * sigma 自己的「框化座標 → 視窗像素」對應，由 `SigmaMap` 透過 `onControlsReady`
+   * 提供。銀河與霧氣用它定位與縮放，所以兩者真的躺在**世界座標**裡、跟著地圖走。
+   *
+   * 這是**必須的**：從 camera.x / y / ratio 自行推導會把方向算反，背景於是與地圖反向
+   * 漂移，平移時看起來「不跟著地圖走」。
+   *
+   * Sigma's own framed → viewport mapping, supplied by `SigmaMap` through
+   * `onControlsReady`. The galaxy and fog use it to place and scale themselves, so both
+   * genuinely sit in **world** coordinates and travel with the map.
+   *
+   * This is **required**: deriving it from camera.x / y / ratio gets the sign wrong,
+   * so the backdrop drifts against the map.
+   */
+  const framedMapperRef = useRef<
+    ((p: { x: number; y: number }) => { x: number; y: number }) | null
+  >(null);
   /** 同一組控制項也放進 state：ZoomSlider 要在 render 期間訂閱縮放變動，
    *  而 ref 只能在事件處理器裡讀，不能拿來驅動 render /
    *  The same controls also live in state: ZoomSlider subscribes to zoom
@@ -798,8 +832,12 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
               selectedPlaceId={selectedPlace?.id}
               onControlsReady={(controls) => {
                 mapControlsRef.current = controls;
+                // 銀河與霧氣需要 sigma 自己的對應，而不是自行推導 /
+                // The galaxy and fog need sigma's own mapping, not a hand-rolled one
+                framedMapperRef.current = controls?.framedGraphToViewport ?? null;
                 setMapControls(controls);
               }}
+              framedMapperRef={framedMapperRef}
               showTerritory={showTerritory}
             />
           </div>
@@ -902,6 +940,14 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
         <MapSidePanel
           activeTab={rightTab}
           onTabChange={(tab) => {
+            // 再點一次**已經啟用**的分頁 = 關閉面板。這是「切換」語意，而不是只能開不能關。
+            //
+            // Clicking the already-active tab again closes the panel: a toggle, not open-only.
+            if (rightTab === tab) {
+              setRightTab(null);
+              setRightPanelOpen(false);
+              return;
+            }
             setRightTab(tab);
             setRightPanelOpen(true);
           }}
@@ -2533,10 +2579,12 @@ function formatEffect(value: number, unit: 'percent' | 'gold' | 'troops'): strin
 
 /**
  * 縮放滑桿：0 = 最遠、1 = 最近（右＝更近），拖曳時直接 setState 不做動畫，
- * 這樣游標才跟得上。百分比只是顯示，實際比例由 Sigma 的相機決定 /
+ * 這樣游標才跟得上。百分比**可以直接輸入**，輸入後會跳到該比例；
+ * 實際比例仍由 Sigma 的相機決定 /
  * Zoom slider: 0 = furthest, 1 = closest (right = closer). Dragging sets the
- * camera state directly with no animation so the handle tracks the pointer;
- * the percentage is display only — Sigma owns the real ratio.
+ * camera state directly with no animation so the handle tracks the pointer.
+ * The percentage is **directly typeable** and jumps to that zoom; Sigma still owns
+ * the real ratio.
  */
 function ZoomSlider({
   controls,
@@ -2546,6 +2594,15 @@ function ZoomSlider({
   label: string;
 }) {
   const [zoom, setZoomState] = useState(0);
+  /**
+   * 正在編輯的文字。`null` 表示「跟著 zoom 走」。必須是**字串**而不是數字，否則使用者
+   * 打「1」準備打「15」時，值會立刻被 format 成 1%，游標就跳到第一個字後面。
+   *
+   * The text being edited; `null` means "follow the zoom". It has to be a **string** and
+   * not a number: while typing "15", a numeric value would immediately reformat to 1% and
+   * throw the caret to the end after the first keystroke.
+   */
+  const [draft, setDraft] = useState<string | null>(null);
 
   // controls 是 ref.current，會在 Sigma 建立後才填入；用 effect 訂閱並清理 /
   // controls comes from a ref and is only filled once Sigma exists — subscribe
@@ -2554,6 +2611,16 @@ function ZoomSlider({
     if (!controls?.onZoomChange) return;
     return controls.onZoomChange(setZoomState);
   }, [controls]);
+
+  /** 把百分比套用成縮放 / Apply a percentage as the zoom */
+  const commit = (raw: string) => {
+    const pct = Number(raw);
+    setDraft(null);
+    if (!Number.isFinite(pct)) return;
+    const next = Math.max(0, Math.min(100, pct)) / 100;
+    setZoomState(next);
+    controls?.setZoom(next);
+  };
 
   return (
     <div className="flex items-center gap-2 px-1">
@@ -2567,15 +2634,39 @@ function ZoomSlider({
         onChange={(e) => {
           const next = Number(e.target.value);
           setZoomState(next);
+          setDraft(null);
           controls?.setZoom(next);
         }}
         aria-label={label}
         title={label}
         className="w-28 h-1 bg-gray-800 rounded-full appearance-none cursor-pointer accent-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed"
       />
-      <span className="text-xs text-gray-400 font-display tabular-nums w-9 text-right">
-        {Math.round(zoom * 100)}%
-      </span>
+      {/* 百分比是可輸入的，不是純顯示。Enter 立即套用、失焦也套用——只用 blur 的話按
+          Enter 後文字不會生效；兩者都留著才能涵蓋「習慣按 Enter」與「習慣點別處」。
+          `inputMode="numeric"` 讓手機彈數字鍵盤。
+          文字框本身是 `w-14`：寬度夠放三碼數字（100），又窄到不會把右側按鈕推走。 */}
+      <input
+        type="number"
+        inputMode="numeric"
+        min={0}
+        max={100}
+        step={1}
+        disabled={!controls}
+        value={draft ?? String(Math.round(zoom * 100))}
+        aria-label={label}
+        title={label}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            commit(e.currentTarget.value);
+            e.currentTarget.blur();
+          }
+        }}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        className="w-14 bg-transparent text-right text-xs text-gray-400 font-display tabular-nums border-b border-transparent hover:border-gray-700 focus:border-cyan-500 focus:outline-none disabled:opacity-40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+      />
+      {/* 百分比**文字**，與可輸入的數字並排——數字是本體，% 是它的單位。 */}
+      <span className="text-xs text-gray-400 font-display">%</span>
     </div>
   );
 }
@@ -2592,6 +2683,7 @@ function GameGraph({
   onControlsReady,
   onCameraMove,
   showTerritory = true,
+  framedMapperRef,
 }: {
   places: WorldState['places'];
   factions: WorldState['factions'];
@@ -2606,6 +2698,10 @@ function GameGraph({
   onCameraMove?: (x: number, y: number, ratio: number) => void;
   /** 是否顯示領地層 / whether the territory layer is shown */
   showTerritory?: boolean;
+  /** sigma 的框化→視窗對應，轉給銀河層定位用 / Sigma's framed → viewport mapping, forwarded to the galaxy layer */
+  framedMapperRef?: React.RefObject<
+    ((p: { x: number; y: number }) => { x: number; y: number }) | null
+  >;
 }) {
   // 艦隊用的世界座標與勢力色票。座標直接沿用 ForceAtlas2 的 layoutX / layoutY，
   // 所以艦隊與地圖上的據點一定落在同一個位置。/
@@ -2635,13 +2731,31 @@ function GameGraph({
     // layered together
     <div className="w-full h-full bg-ds-space relative">
       <div className="absolute inset-0 bg-ds-space-nebula" aria-hidden="true" />
-      {/* 流場塵埃必須在 SigmaMap **之前**：DOM 順序就是繪製順序，而 sigma 的容器
-          本身帶一層不透明底色，放在後面會被完全蓋掉。SigmaMap 的外層底色也已經
-          拿掉，改由上層的 bg-ds-space 提供。/
-          The flow-field dust must come BEFORE SigmaMap: DOM order is paint order,
-          and sigma's container carries its own opaque background, which would hide
-          the dust completely. SigmaMap's own backdrop was removed too — bg-ds-space
-          above now provides it. */}
+{/* DOM 順序就是繪製順序，而 sigma 的容器本身帶一層不透明底色，所以**銀河、霧氣、塵埃都必須在
+          SigmaMap 之前**，否則會被完全蓋掉。SigmaMap 的外層底色也已經拿掉，改由上層的
+          bg-ds-space 提供。
+
+          三層的順序是「銀河 → 霧 → 塵埃」：
+          - 銀河在最底，是深處的場（暖核、星雲、星點）。
+          - 霧是**暖色星雲**，畫在銀河之上、地圖之下——它是背景，不是蓋在地圖上的霧，
+            所以道路與節點永遠在它之上，不會被它蒙住。
+          - 塵埃有視差（`SPACE_FLOW_PARALLAX`），浮在地圖上方。
+
+          霧與塵埃原本的位置對調過：霧原本畫在地圖**之上**（會蒙住道路），現在移到地圖**之下**。
+
+          Both the galaxy, the fog and the dust must come BEFORE SigmaMap: DOM order is paint
+          order, and sigma's container carries its own opaque background, which would hide them
+          completely. SigmaMap's own backdrop was removed too — bg-ds-space above provides it.
+
+          The three layers run galaxy → fog → dust:
+          - the galaxy is the deep field at the bottom (warm core, nebula, stars);
+          - the fog is a **warm nebula** over the galaxy and *under* the map — it is a backdrop,
+            not a haze over the map, so roads and nodes always sit on top of it;
+          - the dust carries parallax (`SPACE_FLOW_PARALLAX`) and floats above the map.
+
+          The fog used to sit *above* the map, which veiled the roads; it now sits *under* it. */}
+      <SpaceGalaxy cameraRef={cameraPosRef} mapperRef={framedMapperRef} />
+      <SpaceFog mapperRef={framedMapperRef} />
       <SpaceFlow cameraRef={cameraPosRef} />
       <SigmaMap
         places={places}

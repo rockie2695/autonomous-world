@@ -224,12 +224,27 @@ describe('hue follows the field', () => {
     expect(Array.isArray(CONFIG.SPACE_FLOW_COLORS)).toBe(true);
   });
 
-  it('is bright enough to actually see', () => {
-    // The user reported the dust looked colourless. Saturation, lightness and the
-    // alpha ceiling all have to be high enough that a 1-2px particle reads.
-    expect(CONFIG.SPACE_FLOW_SATURATION).toBeGreaterThanOrEqual(60);
+  it('stays recessive enough not to fight the galaxy or the map', () => {
+    // This assertion was originally the opposite: it demanded saturation >= 60 and
+    // alpha >= 0.5 because the dust was the *only* backdrop and a 1-2px particle
+    // needs enough chroma to read at all. Both conditions changed when the galaxy
+    // layer arrived underneath it.
+    //
+    // The dust is now a *foreground* accent over a warm, muted galaxy and a map that
+    // already carries faction colour. At the old values (hue 0-320, saturation 78,
+    // alpha 0.72) the ribbons were vivid enough to compete with both and cost the
+    // roads their contrast, so the floors became ceilings: the dust may recede, but
+    // it may never become garish again. It also no longer spans the full hue wheel,
+    // which is what leaves the warm tones to the galaxy.
+    expect(CONFIG.SPACE_FLOW_SATURATION).toBeLessThan(60);
+    expect(CONFIG.SPACE_FLOW_MAX_ALPHA).toBeLessThan(0.6);
+    expect(CONFIG.SPACE_FLOW_HUE_MIN).toBeGreaterThanOrEqual(0);
+    expect(CONFIG.SPACE_FLOW_HUE_MAX).toBeLessThanOrEqual(360);
+    // A full 0-360 sweep is a rainbow, which is exactly what it no longer does
+    expect(CONFIG.SPACE_FLOW_HUE_MAX - CONFIG.SPACE_FLOW_HUE_MIN).toBeLessThan(200);
+    // Lightness is unchanged from the original: a dim, desaturated dust still needs
+    // to be bright enough that a 1-2px particle is visible at all.
     expect(CONFIG.SPACE_FLOW_LIGHTNESS).toBeGreaterThanOrEqual(55);
-    expect(CONFIG.SPACE_FLOW_MAX_ALPHA).toBeGreaterThanOrEqual(0.5);
   });
 });
 
@@ -280,10 +295,21 @@ describe('buildFlowStyles', () => {
 });
 
 describe('colour visibility', () => {
-  it('spans the warm half of the wheel, not just the cool half', () => {
-    // The range used to be 195 → 320, which excludes green, yellow, orange and red
-    // entirely — only purple, pink and blue could ever appear. Guard the full span.
-    const { noise } = createFlowField('warm-wheel');
+  it('stays on the cool half of the wheel, leaving the warm tones to the galaxy', () => {
+    // This assertion was originally the exact opposite: it demanded that red, orange,
+    // yellow and green all be reachable, guarding against an earlier bug where the
+    // range was 195 → 320 and the dust could *only* ever be purple, pink and blue.
+    //
+    // That guard has been deliberately reversed. The dust is now a foreground accent
+    // over the warm galaxy (`SPACE_GALAXY_COLOR_CORE` is a warm cream) and a map that
+    // already carries faction colour, so warm dust on top of a warm core reads as a
+    // clash rather than as variety. The full 0-360 sweep it used to be restored to
+    // is gone for the same reason.
+    //
+    // The original bug is still worth guarding against, so the check is now the
+    // inverse one: the band must be a *narrow, deliberate* cool slice, not a
+    // degenerate single-hue range and not the whole wheel.
+    const { noise } = createFlowField('cool-wheel');
     const options = flowOptions();
     const hues: number[] = [];
     for (let x = 0; x < 1820; x += 47) {
@@ -291,14 +317,14 @@ describe('colour visibility', () => {
         hues.push(hueForIndex(particleHueIndex(noise, x, y, 0, options), options));
       }
     }
-    // Red, green and yellow must all be reachable
-    const hasWarm = (lo: number, hi: number) =>
-      hues.some((h) => h >= lo && h <= hi);
-    expect(hasWarm(0, 45)).toBe(true); // red → orange
-    expect(hasWarm(45, 75)).toBe(true); // orange → yellow
-    expect(hasWarm(90, 150)).toBe(true); // green
-    expect(hasWarm(190, 250)).toBe(true); // blue
-    expect(hasWarm(270, 320)).toBe(true); // violet
+    const has = (lo: number, hi: number) => hues.some((h) => h >= lo && h <= hi);
+    expect(has(190, 250)).toBe(true); // blue
+    expect(has(255, 300)).toBe(true); // violet
+    // Nothing warm may appear at all
+    expect(has(0, 90)).toBe(false); // red → orange → yellow
+    expect(has(90, 190)).toBe(false); // green → cyan
+    // Still a real band, not a single degenerate hue
+    expect(options.hueMax - options.hueMin).toBeGreaterThan(50);
   });
 
   it('renders distinguishable colours, not all the same one', () => {

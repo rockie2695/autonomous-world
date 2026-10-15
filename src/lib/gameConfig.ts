@@ -343,14 +343,14 @@ export const CONFIG = {
   //
   // Deliberately in this one CONFIG rather than a separate `UI_CONFIG`: the project
   // keeps exactly one.
-  SPACE_PARTICLE_COUNT: 300,        // 粒子數（上限 800）/ particle count (hard cap 800)
-  SPACE_PARTICLE_MAX_SPEED: 0.15,   // 每幀最大位移（px）/ max travel per frame, px
-  SPACE_PARTICLE_MIN_SIZE: 0.5,     // 最小半徑 / min radius
-  SPACE_PARTICLE_MAX_SIZE: 1.8,     // 最大半徑 / max radius
-  SPACE_PARTICLE_MIN_ALPHA: 0.15,   // 最小不透明度 / min opacity
-  SPACE_PARTICLE_MAX_ALPHA: 0.7,    // 最大不透明度 / max opacity
-  SPACE_PARTICLE_TWINKLE: 0.01,     // 閃爍速度 / twinkle rate
-  SPACE_PARTICLE_RGB: '180, 220, 255', // 基礎色（不透明度另外乘）/ base colour, opacity applied separately
+  // 這個區塊原本是**線性漂移塵埃**（`SPACE_PARTICLE_*` 與 `SPACE_PARTICLE_RGB`），
+  // 早已被下面的流場與銀河取代，卻一直沒被移除——而 `SPACE_DPR_CAP` 仍然被這兩層
+  // 共用，所以留在這裡。
+  //
+  // This block used to hold the **linear-drift dust** (`SPACE_PARTICLE_*` and
+  // `SPACE_PARTICLE_RGB`), long since replaced by the flow field and the galaxy
+  // below — and never removed. `SPACE_DPR_CAP` is still shared by both remaining
+  // canvas layers, so it stays.
   SPACE_DPR_CAP: 2,                 // DPR 上限，4K 螢幕不要用原值 / DPR cap; do not use the native value on 4K
   // 顏色一律放在 config，元件裡不得硬編碼任何顏色 /
   // Every colour lives in config; no component may hard-code one.
@@ -397,11 +397,11 @@ export const CONFIG = {
    * 想回到窄版冷色調就設成 `195` → `320`。/
    * Set `195` → `320` to go back to the narrow cool palette.
    */
-  SPACE_FLOW_HUE_MIN: 0,
-  SPACE_FLOW_HUE_MAX: 320,
-  SPACE_FLOW_SATURATION: 78,        // 飽和度（%）/ saturation %
+  SPACE_FLOW_HUE_MIN: 195,
+  SPACE_FLOW_HUE_MAX: 280,
+  SPACE_FLOW_SATURATION: 45,        // 飽和度（%）/ saturation %
   SPACE_FLOW_LIGHTNESS: 66,         // 亮度（%）/ lightness %
-  SPACE_FLOW_MAX_ALPHA: 0.72,       // 不透明度上限 / alpha ceiling
+  SPACE_FLOW_MAX_ALPHA: 0.55,       // 不透明度上限 / alpha ceiling
   /**
    * 每個色階的 RGB（不用 HSL，讓開發者能直接指定想要的顏色）。
    * 逗號分隔的 `r,g,b`，依 `SPACE_FLOW_HUE_STEPS` 平分色階；不給就自動由
@@ -477,6 +477,173 @@ export const CONFIG = {
   SPACE_FLOW_FADE_FRACTION: 0.15,   // 淡入與淡出各佔生命的比例 / fade in and out share
   SPACE_FLOW_SEED: 'space-flow',    // 噪聲種子，讓場可重現 / noise seed, so the field is reproducible
 
+  // ── 背景銀河 / Background galaxy ───────────────────────────────────────────
+  // 參考 Stellaris 的**銀河圖**：中央一團柔軟的暖核，幾條褐色塵帶沿對數螺旋旋出，
+  // 邊緣漸隱成深空。那不是粒子堆得出來的形狀——塵帶是連續、帶紋理的帶狀物。
+  //
+  // References Stellaris' **galaxy map**: a soft warm core, a few brown dust lanes
+  // spiralling out on a log spiral, fading to deep space at the edges. That shape
+  // cannot be assembled from particles — the lanes are continuous textured bands.
+  //
+  // 整顆銀河在 resize 時**一次烤進一張離屏 canvas**，之後每幀只做一次帶旋轉的
+  // `drawImage`。好處不只是省：Simplex 噪聲也跟著搬到烘焙時，所以執行時每幀的取樣
+  // 是 **0** 次（原本的流場每顆粒子每幀要 6 次）。
+  //
+  // The whole galaxy is baked into one offscreen canvas on resize, and every frame
+  // is a single rotated `drawImage`. The win is not only cost: the Simplex noise
+  // moves to bake time too, so a frame makes **zero** samples (the flow-field layer
+  // it replaces made six per particle per frame).
+  //
+  // **亮度刻意低於參考圖。** 參考圖的核是亮的，但它靠的是「細而亮」的連線；我們底下
+  // 的道路是半透明的深藍 `#1e3a5f`，而節點最多兩千個。取它的構圖與色相，不取曝光——
+  // 所以這裡每個 alpha 都保守，`SPACE_GALAXY_CORE_ALPHA` 是第一個該往下調的旋鈕。
+  //
+  // **Deliberately dimmer than the reference.** The reference core is bright, but it
+  // gets away with that because its hyperlanes are thin *bright* lines. Ours are dark
+  // and semi-transparent, with up to 2000 nodes above them. So this takes the
+  // reference's composition and hues, not its exposure — every alpha here is
+  // conservative, and `SPACE_GALAXY_CORE_ALPHA` is the first knob to lower.
+  //
+  // 幾何一律在「正規化圓盤」裡描述（圓心 (0,0)、半徑 1），像素大小由元件決定。
+  //
+  // All geometry is described in a *normalised disc* (centre (0,0), radius 1); the
+  // component decides the pixel size.
+/**
+   * 圓盤半徑（世界坐標，1 = 整個世界寬度的一半）。刻意大到佔掉世界的大部分，
+   * 所以它是真正的背景而不是小光點。由 0.72 提到 0.85：使用者要求「更大」。
+   *
+   * The disc radius in world units. Deliberately large, so the galaxy is a real backdrop
+   * rather than a small glow. Raised 0.72 → 0.85 because the request was "larger".
+   */
+  SPACE_GALAXY_RADIUS_FRACTION: 0.85,
+  /** 核的半徑（圓盤半徑的比例）/ core radius, fraction of the disc */
+  SPACE_GALAXY_CORE_RADIUS: 0.44,
+  /** 核亮度上限 / core alpha ceiling */
+  SPACE_GALAXY_CORE_ALPHA: 0.44,
+  /** 盤面中段的亮度 / mid-disc alpha */
+  SPACE_GALAXY_MID_ALPHA: 0.18,
+  /** 核的顏色：暖奶油 / core colour: warm cream */
+  SPACE_GALAXY_COLOR_CORE: '#c9b79c',
+  /** 盤面中段：灰紫 / mid-disc: dusty mauve */
+  SPACE_GALAXY_COLOR_MID: '#8b8191',
+  /** 星雲色塊數量 / number of nebula blobs */
+  SPACE_GALAXY_NEBULA_BLOBS: 12,
+  /** 星雲色塊半徑（圓盤半徑的比例）/ blob radius, fraction of the disc */
+  SPACE_GALAXY_NEBULA_RADIUS: 0.6,
+  /** 星雲不透明度上限 / nebula alpha ceiling */
+  SPACE_GALAXY_NEBULA_ALPHA: 0.22,
+  /**
+   * 星雲顏色：偏灰的紫、褐、冷石板。刻意壓低飽和度去配合暖核，否則冷色角落會和核心
+   * 打架。
+   *
+   * Nebula colours: muted plum, umber and cool slate. Saturation is held down to
+   * sit with the warm core, or the cool corners fight it.
+   */
+  SPACE_GALAXY_NEBULA_COLORS: ['#5a4a63', '#4a4358', '#6b5348', '#3f4459'] as string[],
+  /** 星點數量 / number of stars */
+  SPACE_GALAXY_STAR_COUNT: 900,
+  /** 最小半徑 / min radius */
+  SPACE_GALAXY_STAR_MIN_SIZE: 0.4,
+  /** 最大半徑 / max radius */
+  SPACE_GALAXY_STAR_MAX_SIZE: 1.5,
+  /** 星點不透明度上限 / star alpha ceiling */
+  SPACE_GALAXY_STAR_ALPHA: 0.8,
+  /** 星點顏色：冷白、藍灰、暖奶油 / star colours: cool white, blue-grey, warm cream */
+  SPACE_GALAXY_STAR_COLORS: ['#e8e4dc', '#cfd6e0', '#b9c4d6', '#e6d8c4', '#d8cfc0'] as string[],
+  /**
+   * 自轉一整圈的秒數，**<= 0 表示不轉**（`rotateAt` 直接回傳 0）。
+   * 15 分鐘一圈：一場遊戲裡看起來像「活的深度」，而不是會轉的道具。
+   *
+   * Seconds per full turn; **<= 0 disables rotation** (`rotateAt` returns 0).
+   * 15 minutes a turn reads as living depth within a session, not a spinning prop.
+   */
+  SPACE_GALAXY_ROTATE_PERIOD_SEC: 900,
+/**
+   * ratio 低於此值銀河開始變淡。銀河放在**世界座標**裡，所以它的大小真的是 `1 / ratio`；
+   * sigma 的 ratio 跨 0.05..3，拉到最近時圓盤比視窗大很多，整片畫面會變成一層暖色薄膜。
+   * 所以在拉近時降低它的存在感——但**不是**降到零，見下一個值。
+   *
+   * Below this ratio the galaxy starts to dim. It lives in **world** coordinates, so its
+   * size really is `1 / ratio`; sigma's ratio spans 0.05..3, and at maximum zoom-in the
+   * disc is many times the viewport — a flat warm film. So it dims as you zoom in, but
+   * **not** to nothing: see the floor below.
+   */
+  SPACE_GALAXY_FADE_RATIO: 0.9,
+  /**
+   * 銀河淡出的**下限**：拉到底也還剩這麼多，所以銀河永遠不會消失，只是變暗。
+   *
+   * 0 會讓銀河在拉到最近時整個不見，畫面變成一片純黑深空——那看起來像 bug 而不是意圖。
+   * 這裡保留可見的最低量，銀河就一直是「背景的一部分」。
+   *
+   * 刻意比先前高（0.42 → 0.55）：拉近時要的是「更清楚」，而不是一層看不見的薄膜。
+   * 道路對比由沒有了節點發光層來撐住，所以這裡可以亮一點。
+   *
+   * The **floor** of the galaxy's fade: this much survives even at maximum zoom-in, so the
+   * galaxy never disappears. A floor of 0 would leave a pure-black frame at deep zoom,
+   * which reads as broken rather than an intention; keeping a visible minimum makes it
+   * always part of the background.
+   *
+   * Deliberately higher than before (0.42 → 0.55): the point of zooming in is to be *more
+   * clear*, not to sit under an invisible film. Road contrast is now carried by the map
+   * having lost its node glow layer, so this can be brighter.
+   */
+  SPACE_GALAXY_FADE_MIN: 0.55,
+  /** 種子，讓整顆銀河可重現 / seed, so the galaxy is reproducible */
+  SPACE_GALAXY_SEED: 'space-galaxy',
+
+  // ── 霧氣 / Fog ──────────────────────────────────────────────────────────────
+  // 畫在銀河之上、地圖**之下**的暖色星雲。它會**緩慢**漂移（自轉，20 分鐘一圈），所以
+  // 讀起來是活的深度而不是黏在畫面上的貼圖。**沒有縮放淡入淡出**：它現在是背景的一部分，
+  // 不是蓋在地圖上的霧，所以拉近時不必消失。
+  //
+  // A warm nebula between the galaxy and the map. It drifts **slowly** (a rotation, 20
+  // minutes a turn), so it reads as living depth rather than a decal. It has **no zoom
+  // fade**: it is now part of the backdrop rather than a haze over the map, so there is
+  // no reason for it to vanish as you zoom in.
+  //
+/**
+   * 色塊的**密度**範圍。每個色塊各自抽一個 0..1 的值，映射到這個區間，所以有些地方很濃、
+   * 有些地方幾乎沒有——這就是「看起來像隨機雲層」而不是「一層均勻灰霧」的來源。
+   * 半徑也用同一個值，所以濃的地方**同時**也比較大。
+   *
+   * The per-patch **density** range. Each patch draws its own 0..1 value and maps it into
+   * this range, so some areas are dense and others nearly empty — that is what makes it
+   * read as a random cloud layer rather than a uniform grey haze. The radius keys off the
+   * same value, so a dense patch is also a large one.
+   */
+  SPACE_FOG_DENSITY_MIN: 0.1,
+  SPACE_FOG_DENSITY_MAX: 1,
+  SPACE_FOG_SEED: 'space-fog',
+  SPACE_FOG_COUNT: 16,               // 色塊數量 / number of patches
+  SPACE_FOG_RADIUS: 0.3,            // 色塊基準半徑（世界座標）/ base patch radius, world units
+  /**
+   * 不透明度上限。**必須夠高才看得見**——這一層畫在地圖**之下**的近黑深空中，0.5 是暖色
+   * 星塵要浮出來所需的門檻。但每個色塊還會乘上自己的密度，所以平均濃度遠低於 0.5，
+   * 不會變成一整片均勻的白。
+   *
+   * Alpha ceiling. It **has to be high enough to be seen** — this layer sits *under* the
+   * map in the near-black void, so 0.5 is the floor at which warm star dust surfaces. But
+   * every patch still multiplies it by its own density, so the *average* is far below 0.5
+   * and it never becomes a uniform white sheet.
+   */
+  SPACE_FOG_ALPHA: 0.5,
+  /**
+   * 顏色從近乎白的暖色到很暗的褐：**有些地方偏白、有些地方幾乎不見**。暖色調是刻意的——
+   * 這一層是「星雲 / 星塵」，不是冷灰的霧，所以它要讀起來像被照亮的塵埃。
+   *
+   * Colours run from near-white warm to dark umber: some patches read white, others barely
+   * register. The warmth is deliberate — this layer is a *nebula / star dust*, not a cold
+   * grey haze, so it has to read as lit dust.
+   */
+  SPACE_FOG_COLORS: ['#f2e6c8', '#e0cba0', '#c2a878', '#8f7a58', '#5c4c38'] as string[],
+  /**
+   * 自轉一整圈的秒數，**<= 0 表示不轉**。20 分鐘一圈：雲層會**緩慢**漂移，但一場遊戲裡
+   * 看起來是「活的深度」，而不是會轉的道具。
+   *
+   * Seconds per full turn; **<= 0 disables rotation**. 20 minutes a turn: the cloud drifts
+   * *slowly*, and within a session it reads as living depth rather than a spinning prop.
+   */
+  SPACE_FOG_ROTATE_PERIOD_SEC: 1200,
   // ── 地名標籤顯示 / Place Label Visibility ──────────────────────────────────
   // 純粹依「鏡頭縮放」決定：camera.ratio ≤ 此值才顯示地名，與兵力無關。
   // 舊做法用 sigma 的 labelRenderedSizeThreshold（比節點螢幕尺寸），結果是
@@ -493,22 +660,18 @@ export const CONFIG = {
   // would zoom right in on it and still show no name for it
   LABEL_ZOOM_RATIO: 0.6,
 
-  // ── 節點發光與陰影 / Node Glow & Shadow ────────────────────────────────────
-  // 靜態裝飾層（第二張覆蓋畫布）：節點後方先畫陰影再畫發光，營造「發亮」的層次。
-  // Static decoration layer (a second overlay canvas): a shadow pass then a glow
-  // pass behind every node, so the map reads as lit rather than flat.
-  // 螢幕半徑低於 GLOW_MIN_RADIUS_PX 的節點不畫（太小看不出來，且省下 drawImage）。
-  // Nodes whose on-screen radius is below GLOW_MIN_RADIUS_PX are skipped (invisible
-  // at that size, and it saves a drawImage each).
-  MAP_GLOW_SCALE: 3.2,           // 發光外徑 = 節點螢幕半徑 × 此值 / Glow diameter = node screen radius × this
-  MAP_GLOW_ALPHA: 0.55,          // 發光峰值透明度（再依節點大小縮放）/ Glow peak alpha (then scaled by node size)
-  MAP_GLOW_MIN_ALPHA: 0.18,      // 小節點的發光下限，避免整片糊成霧 / Floor for small nodes so the map doesn't haze over
-  MAP_GLOW_MIN_RADIUS_PX: 2,     // 低於此螢幕半徑就不畫發光 / Skip glow below this screen radius
-  MAP_GLOW_REFERENCE_PX: 10,     // 節點螢幕半徑達此值時發光達到峰值 / Screen radius at which glow reaches full strength
-  MAP_SHADOW_SCALE: 1.5,         // 陰影外徑 = 節點螢幕半徑 × 此值 / Shadow diameter = node screen radius × this
-  MAP_SHADOW_ALPHA: 0.5,         // 陰影峰值透明度 / Shadow peak alpha
-  MAP_SHADOW_OFFSET_PX: 2,       // 陰影往右下偏移（px），製造立體感 / Shadow offset down-right (px) for depth
-
+// ── 節點發光與陰影 / Node Glow & Shadow ────────────────────────────────────
+  // **已移除。** 地圖上的節點不再有發光與陰影層。
+  //
+  // **Removed.** The node glow and shadow layer is gone: places no longer carry a
+  // light effect at any zoom.
+  //
+  // 這一層原本是「靜態裝飾層」（第二張覆蓋畫布）：節點後方先畫陰影再畫發光。拿掉之後
+  // 地圖會比較平，但道路與節點本身的對比更乾淨，而且銀河與霧氣不需要再跟發光搶注意力。
+  //
+  // It used to be a static decoration layer (a second overlay canvas): a shadow pass
+  // then a glow pass behind every node. Removing it flattens the map a little, but the
+  // roads and nodes read cleaner, and the galaxy and fog no longer compete with a glow.
   // ── 鏡頭動畫 / Camera Animation ─────────────────────────────────────────────
   MAP_CAMERA_ANIM_MS: 480,       // 聚焦地點 / 全覽的鏡頭動畫時間（毫秒）/ Camera animation duration (ms)
   // ── 鏡頭比例（framed 空間）/ Camera ratios (framed space) ────────────────
@@ -574,7 +737,23 @@ export const CONFIG = {
   // CK3's province map. The band between the two values is the cross-fade, and
   // territoryAlpha() smoothsteps it so neither end has a half-transparent moment.
   TERRITORY_ZOOM_RATIO: 1.02,     // 到此比例領地圖完全顯示（全覽 1.18，所以預設視圖就是領地圖）/ Territory fully visible at this ratio (fit is 1.18, so the default view is the territory map)
-  TERRITORY_FADE_RATIO: 0.74,     // 低於此比例完全消失 / Fully gone below this
+TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully gone below this
+  /**
+   * **領地面積層可以互動的最低 ratio。** 低於此值（拉近）時，滑鼠停在某塊地面上**不再**
+   * 回報「這是誰的地」，也不再把那一片勢力色**亮起來**——那時畫面看的是節點與道路，
+   * 面積層只是一層底色，卻還搶走游標的解讀權，看起來像 bug。
+   *
+   * 地點**節點**的 hover 與點擊不受影響：那屬於地圖本身，不是領地層。
+   *
+   * The lowest ratio at which the territory **area** layer stays interactive. Below it
+   * (zoomed in), pointing at a patch of ground no longer answers "whose land is this" and
+   * no longer lights that faction's fill: the frame is showing nodes and roads at that
+   * point, so the area layer is only a backdrop — yet it would still take over the
+   * cursor's reading, which reads as a bug.
+   *
+   * Place **node** hover and click are unaffected: that is the map itself, not territory.
+   */
+  TERRITORY_INTERACTIVE_RATIO: 0.6,
   // 領地範圍往外擴張的比例（每邊）。格子邊界若剛好停在最外側的地方上，畫面會
   // 出現一條明顯的直邊；每一格都歸給最近的地方，所以外圈會自然往外延伸。
   // Grow the territory extent per side. Without this the grid stops exactly at
@@ -744,15 +923,10 @@ export const CONFIG = {
   /** 移動動畫：隊伍圓點的預設色 / the travel dot's colour when unaffiliated */
   MAP_MOVE_DOT_FALLBACK: '#5eead4',
   /**
-   * 覆蓋層文字陰影與發光陰影的備援色。
-   * 正常情況下應該讀取 `@theme static` 的 token（`--color-ds-void`）；只有在 token
-   * 還沒被讀到（例如 canvas 初始化得太早）才會用到這個後備值，所以它必須與該
-   * token 同色，否則會出現一瞬間閃爍的不同色陰影。
+   * 地名／勢力名文字陰影的備援色。名稱要在深色與淺色領地上都讀得到，所以鏤一圈深色陰影。
    *
-   * Fallback for the overlay text shadow and the glow's drop shadow. The token in
-   * `@theme static` (`--color-ds-void`) is the real source; this only applies if it
-   * cannot be read yet (the canvas can initialise very early), so it must match that
-   * token or a differently-coloured shadow will flash for a frame.
+   * Fallback for the place / faction label text shadow: the name has to stay legible on
+   * both dark and light territory, so it carries a dark halo.
    */
   MAP_SHADOW_FALLBACK: '#020617',
 } as const;

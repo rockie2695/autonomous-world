@@ -1948,37 +1948,24 @@ const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y }); // 每幀用當前
 
 時序常數位於 `src/lib/gameConfig.ts`：`SPOTLIGHT_ROUNDS`、`MOVE_ANIM_DURATION`、`MOVE_ANIM_PAUSE`。
 
-##### 節點發光與陰影 / Node Glow & Shadow
+##### 節點發光與陰影 — 已移除 / Node Glow & Shadow — removed
 
-第二張覆蓋 `<canvas>`，位於聚光燈層**之下**、sigma 容器**之上**：先鋪一層往右下偏移的
-暗影，再鋪一層依勢力色的柔和發光。節點圓盤由 WebGL 畫在更上面，因此看起來像「從地圖
-發亮起來」，而不是一張張貼圖。
+**地圖上的節點發光與陰影層已經移除，任何縮放都不再有。** 原本這裡是第二張覆蓋 `<canvas>`，
+位於聚光燈層**之下**、sigma 容器**之上**：先鋪一層往右下偏移的暗影，再鋪一層依勢力色的柔和發光。
 
-這一層**不是動畫**：只掛在 sigma 的 `afterRender` 與 `resize` 上重繪，閒置時零成本，
-也沒有額外 rAF（地圖上唯一的 rAF 是聚光燈層）。
+拿掉之後地圖比較平，但道路與節點本身的對比更乾淨，而且銀河與霧氣不再需要跟發光搶注意力。
+**不要把它加回來**：`getGlowSprite`、`SPRITE_SIZE`、`readDesignToken` 與共用的 `withAlpha`
+已從 `mapShared.ts` 一起移除，`MAP_GLOW_*` / `MAP_SHADOW_*` 也從 `gameConfig.ts` 移除。
+`MAP_SHADOW_FALLBACK` 只為一件事留下：**地名標籤的文字陰影**。
 
-```typescript
-// 以「色碼 + 透明度」快取 sprite，每次重繪只是 drawImage
-// Sprites are cached per `color|alpha`; each redraw is just a drawImage.
-// 2000 個節點時，若每幀 createRadialGradient 會慢到不可用。
-// A per-frame createRadialGradient per node would be far too slow at 2000 nodes.
-const sprite = getGlowSprite(sprites, color, alpha);
+**The node glow and drop shadow layer is removed, at every zoom.** It used to be a second overlay
+`<canvas>` (below the spotlight layer, above the sigma container) that painted an offset shadow then a
+faction-coloured glow. Do not add it back: `getGlowSprite`, `SPRITE_SIZE`, `readDesignToken` and the
+shared `withAlpha` are gone from `mapShared.ts`, and `MAP_GLOW_*` / `MAP_SHADOW_*` from
+`gameConfig.ts`. `MAP_SHADOW_FALLBACK` remains for the **label** text shadow only.
 
-// 發光強度隨節點螢幕半徑變化，避免小節點把地圖糊成一片霧
-// Glow strength scales with on-screen radius so small nodes don't haze the map
-const strength = Math.min(1, Math.max(MAP_GLOW_MIN_ALPHA / MAP_GLOW_ALPHA,
-  radius / MAP_GLOW_REFERENCE_PX));
-
-sigma.on('afterRender', draw);  // 鏡頭移動 / 兵力變化 / refresh 都會觸發
-```
-
-效能守則 / performance rules:
-
-- 只畫視窗內的節點（`viewportToGraph` 求邊界），並跳過 `MAP_GLOW_MIN_RADIUS_PX` 以下的節點
-- 畫布尺寸快取起來，不要每幀讀 `getBoundingClientRect`（會觸發版面重排）
-- 陰影色取自 `--color-ds-void` 設計 token（`readDesignToken`），**不在 TSX hardcode 顏色**
-- 幾何常數：`MAP_GLOW_SCALE`、`MAP_GLOW_ALPHA`、`MAP_GLOW_MIN_ALPHA`、`MAP_GLOW_MIN_RADIUS_PX`、`MAP_GLOW_REFERENCE_PX`、`MAP_SHADOW_SCALE`、`MAP_SHADOW_ALPHA`、`MAP_SHADOW_OFFSET_PX`
-- 地圖內陰影是設計 token `--shadow-ds-map-vignette`（`globals.css` 的 `@theme static`），以 `shadow-ds-map-vignette` 使用
+地圖內陰影仍是設計 token `--shadow-ds-map-vignette`（`globals.css` 的 `@theme static`），以
+`shadow-ds-map-vignette` 使用。
 
 ##### 鏡頭動畫 / Camera Animation
 
@@ -2048,6 +2035,17 @@ lint "Cannot access refs during render"。
 unsubscribes in its cleanup. The controls object must live in **both** a ref (imperative calls)
 and state (rendering): reading `ref.current` during render trips the lint rule above.
 
+**百分比是 `<input type="number">`，不是純顯示。** 它讀 `0` = 最遠、`100` = 最近，輸入數值會直接跳到
+那個縮放（Enter 套用，失焦也套用——只用 blur 的話按 Enter 後文字不會生效；兩者都留著才能涵蓋
+「習慣按 Enter」與「習慣點別處」）。草稿是**字串**而不是數字：數值會在第一個按鍵就把 `15` 改寫成
+`1%` 並把游標甩到最後。拖曳滑桿會清掉草稿，讓欄位重新跟著縮放走。
+
+The percentage is an `<input type="number">`, not a display. It reads `0` = furthest, `100` = closest,
+and typing a value jumps the camera there (`Enter` commits, and so does blur — Enter alone would leave
+the text unapplied for someone who tabs away). The draft is a **string**, never a number: a numeric
+value would reformat `15` to `1` on the first keystroke and throw the caret to the end. Dragging the
+slider clears the draft so the field follows the zoom again.
+
 ### 標籤的可見性例外 / The Label Visibility Exception
 
 縮放規則是純粹的 `camera.ratio <= LABEL_ZOOM_RATIO`，而 `nodeReducer` 用 `label = null`
@@ -2071,12 +2069,15 @@ if (!labelsVisibleRef.current && !isActive) res.label = null; // 絕不 null act
 
 將領／事件／統計不是版面欄位，而是絕對定位覆蓋在地圖右緣（`z-[8]`），地圖因此保留完整
 寬度。HUD 的相機控制會在面板展開時左移 `26rem` 讓位，而且**只在 `lg` 以上**——固定偏移在
-窄視窗會把控制推出畫面。
+窄視窗會把控制推出畫面。**再點一次已啟用的頁籤會關閉它的面板**（`rightTab === tab` 時
+`setRightTab(null)` + `setRightPanelOpen(false)`）——這是切換語意，讓頁籤列永遠能收起自己。
 
 The 將領 / 事件 / 統計 tabs are absolutely positioned over the map's right edge (`z-[8]`)
 rather than being a layout column, so the map keeps its full width. The HUD camera controls
 shift left by `26rem` while the panel is open, and **only from `lg` up** — a fixed offset
-pushes them off-screen on narrow viewports.
+pushes them off-screen on narrow viewports. **Clicking the already-active tab closes its
+panel** (`rightTab === tab` → `setRightTab(null)` + `setRightPanelOpen(false)`) — a toggle,
+so the rail can always dismiss its own panel.
 
 ### 領地圖 / Territory View
 
@@ -2087,7 +2088,7 @@ pushes them off-screen on narrow viewports.
 Every place projects an **equal circular force**; same-faction force **accumulates** and
 rival forces **push against** each other, so the border lands where the two are equal —
 the Stellaris / CK3 idea. The territory is a **translucent tint over the map**: nodes,
-roads and glow stay opaque and unowned land is never coloured, so topography and territory
+roads stay opaque and unowned land is never coloured, so topography and territory
 read at the same time.
 
 `src/lib/territory.ts` 是**純邏輯**，所以可以在專案的 `node` vitest 環境下直接測：
@@ -2172,6 +2173,25 @@ radius, four together ~83%.
 - **指在勢力的一片面積上（不在節點上）→ 顯示勢力提示**，由 `factionAt()` 問**密度場**
   「游標底下這塊是誰的」。用最近節點會得到一個幾乎永遠跟游標無關的小節點。
 - 滑鼠停在無主之地或空白處 → **完全沒有提示**，而不是錯顯示鄰居的勢力。
+- **拉近到 `TERRITORY_INTERACTIVE_RATIO`（0.9）以下時，面積層完全不可互動。** 低於它時，游標停在
+  一塊地面上**不再**回答「這是誰的地」，也**不再**把該勢力的色填亮起來——因為那一段看的是**節點與
+  道路**，面積層只是底色，卻還會搶走游標的解讀權，看起來像 bug。
+  
+  地點**節點**的 hover 與點擊不受影響：那屬於地圖本身。
+  
+  門檻讀自 `cameraRatioRef`（鏡頭 ratio 的鏡像），因為 `onMove` 是穩定閉包、拿不到 sigma 實例；
+  跨過門檻時會**立刻**清掉已亮起的顏色與提示，而不是等下一次 mousemove——那些提示是在比例還算大時
+  產生的，留著會變成一個已不該互動的面積層留下的殘影。
+  
+  Below `TERRITORY_INTERACTIVE_RATIO` (0.9) the area layer is fully inert: pointing at a patch of
+  ground no longer answers "whose land is this" and no longer lights that faction's fill, because that
+  range is showing **nodes and roads** and the area layer is only a backdrop. Place **node** hover and
+  click are unaffected.
+  
+  The threshold is read from `cameraRatioRef`, a mirror of the camera ratio, because `onMove` is a
+  stable closure that cannot reach the sigma instance; crossing it clears the highlight and tooltip at
+  once rather than waiting for a mousemove — they were produced while the ratio was still large, and
+  left in place they would linger as the residue of an area layer that is no longer interactive.
 
 力場在 **render 期間**用 `useMemo` 從 `places` 算出來，不在 effect 裡算完再 setState：
 `Place` 本來就帶 `layoutX`/`layoutY`，而 effect 內同步 setState 會觸發 lint 的
@@ -2182,25 +2202,127 @@ cascading-render 規則。`imageSmoothing` 保持**開啟**：場本身已把邊
 
 ## 氛圍圖層 / Ambient Layers
 
-兩個純邏輯 + 薄渲染層的疊加層，都坐在地圖與圖譜之下，都不搶資訊。
-Two layers, each a pure module plus a thin renderer, sitting under the map: atmosphere, not information.
+### 背景銀河與霧氣 / Background galaxy and fog
+
+DOM 順序就是繪製順序，而**霧氣夾在銀河與地圖之間**：
+
+| 順序 | 元素 | 角色 |
+|---|---|---|
+| 1 | `SpaceGalaxy`（`src/lib/spaceGalaxy.ts` + `src/components/SpaceGalaxy.tsx`） | 深處的場：暖核、星雲、星點 |
+| 2 | `SpaceFog`（`src/lib/spaceFog.ts` + `src/components/SpaceFog.tsx`） | 暖色星塵，疊在銀河之上、**地圖之下**；緩慢漂移，沒有縮放淡出 |
+| 3 | `SpaceFlow`（`src/lib/spaceFlow.ts` + `src/components/SpaceFlow.tsx`） | 漂移的絲帶：**全部**的視差動態 |
+| 4 | `SigmaMap` | 地圖本身：道路、節點、領地 |
+
+四者全部是 `absolute inset-0 pointer-events-none`。
+
+- **銀河、霧氣與塵埃都必須在 `SigmaMap` 之前**，因為 sigma 的容器帶一層不透明底色，會把它們完全
+  蓋掉。`SigmaMap` 的外層底色也已經拿掉，改由上層的 `bg-ds-space` 提供。
+- **霧氣原本放在 `SigmaMap` 之後**，當作蓋在道路上的霧。它現在移到地圖**之下**、銀河**之上**：
+  它是暖色星塵背景，所以道路與節點永遠在它之上、不會被它蒙住。它仍帶 `pointer-events-none`
+  （保留是為了安全與一致），所以永遠不會干擾。
+- **霧氣不會蓋到 HUD**，而這是**結構性的，不是保證**：`GameGraph` 是 `<main>` 的**第一個**子節點，
+  而每一個 HUD 元素（回合時間軸、右欄、框角）都是**後面**的兄弟節點，所以它們畫在它之上。
+  若哪天把 `GameGraph` 改成後面繪製，霧氣就會開始蓋住 HUD。
+- 只有塵埃有自己的視差比例（`SPACE_FLOW_PARALLAX: 0.35`），因為它是唯一**不在世界座標**裡的一層。
+  銀河與霧氣**完全沒有視差**：它們由 sigma 定位，所以與地圖的滾動、縮放完全一致。
+
+#### 位置與縮放完全交給 sigma，不可自行推導
+
+`SigmaMap` 透過 `MapCameraControls` 暴露 sigma 自己的框化→視窗對應：
+
+```ts
+framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number };
+```
+
+`framedPlacement(mapper, radiusFraction)` 呼叫它兩次——一次取世界中心 `(0.5, 0.5)`，一次量出
+「兩個相鄰框化點之間」得到每世界單位的像素數。它住在 `src/lib/spaceShared.ts`，那是兩層共用的
+模組，同時也放著兩個顏色工具（`parseHex` / `withAlpha`），所以任一層都不必 import 另一層。
+
+- **這取代了一個真實的 bug。** sigma 的對應是
+  `screen = (framed − camera.position) × scale + centre`，所以 `camera.x` 變大時世界內容往**左**移。
+  銀河先前是把自己的中心加上 `(camera.x − 0.5) × k`，那會讓它往**右**移——背景於是與地圖**反向**
+  漂移，看起來「不跟著地圖走」。`SPACE_GALAXY_PARALLAX`、`SCALE_EXPONENT`、
+  `SCALE_CLAMP_MIN/MAX`、`REF_RATIO` 皆已**移除**；它們的存在只是為了掩蓋「平移與縮放根本沒有
+  在跟 sigma」。`spaceGalaxy.test.ts` 會斷言它們維持不存在，且中心來自 mapper 而非 camera x/y。
+- **銀河與霧氣是世界物體**，所以平移時它們真的會滑出畫面。那是正確錨定，而不是缺陷。
+- **縮放 = `pixelsPerWorldUnit × radiusFraction`**，完全繼承 sigma 的縮放。因為 mapper 是引數，
+  這個模組仍是純的、可用 stub 測。
+
+#### 銀河的拉近淡出
+
+精確跟隨 sigma 代表縮放真的是 `1 / ratio`，而 sigma 的 ratio 跨 0.05..3。拉到 0.05 時圓盤大約是
+視窗的九倍——一整片暖色薄膜，道路對比會消失。`SPACE_GALAXY_RADIUS_FRACTION: 0.85` 讓圓盤佔掉世界的大部分，所以它是真正的背景而不是小光點（由 0.72 提高：使用者要求「更大」）。
+`SPACE_GALAXY_FADE_RATIO: 0.9` 在拉近時開始變暗，但**不是降到零**——`SPACE_GALAXY_FADE_MIN: 0.55`
+是下限，所以銀河永遠不會消失，只是變暗（降到 0 會讓畫面變成一片純黑深空，看起來像壞掉；下限太低
+則在使用者要求「拉近看得更清楚」時變成一層看不見的薄膜）。拉近的清晰度來自**提高的下限 + 更多細節**
+（`STAR_COUNT` 900、`NEBULA_BLOBS` 12），**不是**拿掉淡出——拉近時一顆明亮的圓盤就是蓋在道路上的
+暖色水洗。離屏的烘焙解析度以「還看得見的最大半徑」決定，所以它永遠不會在淡出之前先糊掉。
+
+#### 霧氣（`SPACE_FOG_*`）
+
+種子化的**暖色星塵**，畫在自己的離屏 canvas 上。它**緩慢漂移**——與銀河不同，它不能讀起來像在轉：
+20 分鐘一圈是深度，不是旋轉。它**沒有縮放淡出**：現在位於地圖**之下**，沒有東西需要它遮蔽，所以
+任何縮放都保持存在。
+
+- **它在地圖之下、銀河之上**，`spaceFog.test.ts` 斷言它不再有縮放淡出門檻（`zoomRatio` /
+  `fadeRatio` 已移除），且漂移行為正確（一圈一週期、限在 0..2π、週期 ≤ 0 時停用、比銀河慢）。
+- **「隨機」是種子的**：同一個種子永遠得到同一團霧，所以重新掛載不會讓整層跳動——全專案的慣例。
+- **密度才是讓它讀起來像雲的原因，不是灰霧。** 每個色塊抽一個 0..1 的值，映射到
+  `SPACE_FOG_DENSITY_MIN..MAX`（`0.1..1`），而那個值**同時**決定它的 alpha 與半徑：濃的地方又白又大，
+  稀的地方幾乎看不見。分開抽會讓兩者打架（出現又大又透明的色塊），看起來像 bug。
+  `spaceFog.test.ts` 會斷言這個分布：最濃的接近上限、最稀的低於上限的 30%，而**平均值**遠低於上限，
+  所以它永遠不會是一整片實心白。
+- **`SPACE_FOG_ALPHA` 是 0.5，而且是刻意的。** 它原本是 0.16，那是在霧氣畫在**地圖之上**時調的；
+  放到近黑的深空上它根本等於不存在，整層讀起來像沒有東西。讓它不會變成一整片白的是上面的密度區間，
+  不是上限。
+- **色盤是暖的**（`SPACE_FOG_COLORS`：`#f2e6c8` → `#5c4c38`，近乎白的奶油到暗褐）。重點是它讀起來像
+  **被照亮的星塵**，不是冷灰的霧；`spaceFog.test.ts` 斷言每個顏色的紅通道都大於藍通道，所以它不會
+  漂回冷色。
+- **它保留完整的可見性閘門**：漂移在離開視窗與分頁隱藏時暫停，`prefers-reduced-motion` 下只畫一幀
+  靜態圖——與其他圖層完全相同。
+
+#### 銀河本身的注意事項
+
+- **來源**：`src/lib/spaceGalaxy.ts`（純邏輯，`node` 環境可測）+ `src/components/SpaceGalaxy.tsx`
+  （只負責烘焙、畫與迴圈）
+- 整顆銀河在 resize 時一次烤進離屏 canvas，之後每幀只做一次帶旋轉的 `drawImage`；霧氣同樣是一幀
+  一次貼上自己的圖。兩者都不論星點數量。
+- **兩層都不使用任何噪聲**：銀河曾經有褐色塵帶，紋理靠 Simplex 擾動半徑；塵帶拿掉後噪聲沒有用途，
+  所以 `three` 的 `SimplexNoise` 已不再被 import。兩層都只是種子化的幾何。
+- **塵帶是刻意拿掉的，而且代價是真的**：它是唯一的螺旋結構。沒有它，這是一團柔軟發光的星雲而不是
+  可辨認的螺旋——這是刻意取捨，結構與移動交給流場層，核心也不再被褐色管子橫穿。
+- **離屏畫布必須帶 DPR 變換**（`setTransform(dpr, …)`、`clearRect` 用 CSS 像素），否則 4K 螢幕上會糊掉。
+- **銀河內部的繪製順序由大到小：核 → 星雲 → 星點**。星點放最後，否則會被半透明星雲蓋掉而變模糊，
+  而模糊正是這層最不能有的毛病，因為底下是道路。
+- **銀河的旋轉時間是累加出來的**，不是讀時鐘。`dt` 在暫停時不累加；`rotateAt` 取模成一圈。
+- **圓盤外是透明的**，讓 `bg-ds-space` 與 `bg-ds-space-nebula` 透出來。
+- **銀河刻意比參考圖暗**：參考圖的核是亮的，但它靠的是「細而亮」的連線；我們底下是半透明深藍
+  `#1e3a5f`，而節點最多兩千個。所以取它的**構圖與色相，不取曝光**。
+- **星雲 token 也跟著降飽和**：`--color-ds-space-nebula` 原本是飽和的紫與藍，現在是灰紫與石板。
+- **不做半透明拖尾填色，也不用 `lighter` 混合**：疊加會吃掉道路的對比。
+- **所有顏色都在 `gameConfig.ts`**（`SPACE_GALAXY_COLOR_CORE/MID`、`NEBULA_COLORS`、
+  `STAR_COLORS`、`SPACE_FOG_COLORS`）。
+- 星點以 `1 - d³` 的邊緣淡出畫進烘焙圖，圓盤邊緣才不會出現突兀的截斷。
 
 ### 流場太空塵埃 / Flow-field dust
 
-- **來源**：`src/lib/spaceFlow.ts`（純邏輯，`node` 環境可測）+ `src/components/SpaceFlow.tsx`（只負責畫）
+- **來源**：`src/lib/spaceFlow.ts`（純邏輯，`node` 環境可測）+ `src/components/SpaceFlow.tsx`（只負責畫與迴圈）
+- **疊在銀河之上**：銀河與霧氣提供深處的暖光、星點與雲層，這一層提供結構與移動。它是唯一有
+  視差的一層（0.35），因為它是浮在地圖上方的塵埃。
 - 粒子沿著一個 **3D Simplex noise 場**移動，所以會自然聚成絲帶、渦流與空洞——「隨機但有結構」。
   關鍵是場的**連續性**：鄰近位置回傳相近的角度，粒子才會沿著同一片場流動。
-- **噪聲來自 `three`，不是新相依**：`three/examples/jsm/math/SimplexNoise` 是同一個演算法且已經安裝。
-- **種子必須是真正的 PRNG**。`createNoise3D(rand)` 會呼叫 `rand` 兩百多次來建立 permutation
-  table；傳入 `() => 0.5` 會讓所有梯度索引相同，場就退化成一根平滑斜坡，正好失去這個技法唯一的重點。
-  本專案用既有的 `createRng()`。
-- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種顏色。取樣尺度比流動更細（色帶在絲帶內再分層）、
-  漂移更慢（顏色不隨流動翻騰）。重生時保留舊的 `size` 但**刻意不保留舊的色相**——保留會讓顏色與位置脫鉤。
-- **不做半透明拖尾填色**：樣板的每幀 `fillRect('rgba(...)')` 需要一個不透明底色才能淡出，而本頁的底是
-  漸層加星雲，半透明累積會把它抹糊。粒子各自淡入淡出。
-- **不用 `lighter` 混合**：疊加會讓交叉處發亮，但底下的地圖本來就亮，那會吃掉道路的對比。
-- **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。要更亮，先調 `LIGHTNESS` / `MAX_ALPHA`，不要先動 `SATURATION`。
-- 色相是**量化**的，所以整層只需要 `HUE_STEPS` 個預先建好的填色字串，每幀零配置。
+- **這是全專案唯一使用噪聲的 canvas 層。**
+- **噪聲來自 `three`，不是新相依**：`three/examples/jsm/math/SimplexNoise`。
+- **種子必須是真正的 PRNG**：傳入常數函式會讓所有梯度索引相同，場退化成平滑斜坡。
+- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種顏色。
+- **調色盤刻意壓進冷色半邊並降低彩度，而且斷言的是「上限」**：原本是 0–320 全色相、飽和度 78、
+  alpha 0.72，那是在它**唯一**是背景時調的。放到暖色銀河上，那些絲帶會打架並吃掉道路對比，
+  所以現在是 `195 → 280`、飽和度 45、alpha 0.55。`spaceFlow.test.ts` 斷言飽和度 < 60、
+  alpha < 0.6、色相跨度 < 200°。
+- **不做半透明拖尾填色，也不用 `lighter` 混合**。
+- **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。
+- 色相是**量化**的，每幀零配置。
+
 
 ### 體魄 (ti)：防禦屬性 / Physique: the defence attribute
 

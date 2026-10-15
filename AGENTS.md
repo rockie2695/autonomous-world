@@ -173,26 +173,24 @@ src/components/
                            # - Nodes: faction-colored (HSL→hex), sized by troops
                            # - Edges: semi-transparent roads
                            # - Dynamic labels with faction-colored backgrounds
-                           # - TWO overlay <canvas> layers (both pointer-events-none),
-                           #   stacked under the sigma container so WebGL paints the
-                           #   node discs and labels on top:
-                           #     1. glow/shadow (bottom): offset drop shadow then a
-                           #        faction-colored radial glow per node. Sprites are
-                           #        cached per colour and blitted with drawImage, and
-                           #        it redraws on sigma's `afterRender` + `resize` —
-                           #        no rAF, so an idle map costs nothing.
-                           #     2. spotlight/move (top): pulsing rings (cyan=created,
-                           #        red=attacked) + faction-colored travel dot for the
-                           #        displayed round's moves; this is the only rAF loop.
+                           # - ONE overlay <canvas> (pointer-events-none) under the sigma
+                           #   container, so WebGL paints the node discs and labels on top:
+                           #     spotlight/move: pulsing rings (cyan=created, red=attacked)
+                           #     + faction-colored travel dot for the displayed round's
+                           #     moves; this is the only rAF loop.
+                           #   The node glow/shadow layer was REMOVED (no place has a light
+                           #   effect at any zoom) — do not add a second canvas back.
                            #   NOTE: canvas is a replaced element — keep `w-full h-full`
                            #   (inset-0 alone leaves it at intrinsic 300×150).
                            # - Camera: clicking a node animates the view to centre it;
                            #   resetView animates to fit the whole graph (getBBox), not
                            #   ratio 1. Duration is CONFIG.MAP_CAMERA_ANIM_MS, or 0 when
                            #   prefers-reduced-motion is set.
-├── mapShared.ts            # SigmaMap's pure half: colour maths, glow sprites, shapes, MapCameraControls
+├── mapShared.ts            # SigmaMap's pure half: colour maths, shapes, MapCameraControls
 ├── LeaderAvatar.tsx        # Procedural leader head bust, seeded from character.id; pure trait logic in deriveAvatarTraits()
-├── SpaceFlow.tsx           # Flow-field space dust behind the map. Pure field logic in lib/spaceFlow.ts; every colour in gameConfig
+├── SpaceGalaxy.tsx         # Baked rotating galaxy, bottom layer. Pure geometry in lib/spaceGalaxy.ts
+├── SpaceFog.tsx            # Warm seeded star-dust drifting slowly, above the galaxy and UNDER the map (no zoom fade). Pure logic in lib/spaceFog.ts
+├── SpaceFlow.tsx           # Flow-field dust over the galaxy. Pure field logic in lib/spaceFlow.ts
 └── home/                   # Homepage sections (three.js scenes, live poller, hooks)
                             #   (the event log and charts live in src/app/game/)
 
@@ -338,7 +336,7 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - `CHARACTER_MOVED` events are written by `server/moveEvent.ts#recordMove()` from all four `aiMove.ts` movement sites and the three `battle.ts` escape sites; no-op when `fromPlaceId === toPlaceId`
 - Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 1`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
 - The spotlight layer is the map's **only** rAF loop and it obeys the animation rules: it pauses when the canvas leaves the viewport (`IntersectionObserver`) and when `document.hidden`, and under `prefers-reduced-motion` it renders a single static frame (`STATIC_FRAME_MS`) with no loop at all. It listens for a mid-session `matchMedia` change too. Keep the gate in `isAnimating()` and keep the initial `resize()` call **after** `isAnimating`/`renderFrame` are declared (an earlier call hits the temporal dead zone)
-- **Z-order**: the two overlay `<canvas>` elements paint first (below, glow then spotlight), the sigma container div paints last (above) — so place labels always render on top of both. Keep that DOM order.
+- **Z-order**: the single spotlight/move overlay `<canvas>` paints before the sigma container div, so place labels always render on top of it. Keep that DOM order. (The node glow/shadow canvas that used to sit below it is removed.)
 - **Label visibility**: labels are a **pure zoom rule** — they show only while `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO` (0.6), regardless of garrison. `nodeReducer` sets `label = null` when zoomed out and `labelRenderedSizeThreshold` is pinned to `0`. Do **not** reintroduce `labelRenderedSizeThreshold`: it compares on-screen node **size**, so garrisoned places kept their names when zoomed out, and the camera ratio cancels out of that comparison, so it was never a zoom threshold. The camera's `updated` event (bound via `sigma.getCamera().on`, since sigma does not re-emit it) refreshes on each crossing. Tune `LABEL_ZOOM_RATIO` in `gameConfig.ts`, not inline.
 - **One exception to the zoom rule**: the hovered node, the selected node, and the hovered node's graph neighbours always keep their label, so you can read a place and what it links to while zoomed out. `forceLabel` alone is **not** enough — it only bypasses `labelRenderedSizeThreshold`, so a `null` label has already left Sigma's label index and nothing can draw it. The gate must therefore read `if (!labelsVisibleRef.current && !isActive) res.label = null`, never null an active node.
 - `GET /api/world/events?round=N` applies read-time enrichment to `CHARACTER_MOVED`: adds `fromPlaceName`/`toPlaceName` by joining `places` (events themselves store only placeIds)
@@ -347,9 +345,11 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 ### Map HUD, Side Panel & Round Playback
 
 - The 將領 / 事件 / 統計 tabs are **absolutely positioned over the map's right edge** (`MapSidePanel`, `z-[8]`), not a layout column — the map keeps the full width. The vertical tab rail is always visible; only the 19rem content panel collapses (its own ✕), and content enters and exits with a right-to-left fade (`AnimatePresence`, `x: 28`)
+- **Clicking the already-active tab closes its panel.** `onTabChange` checks `rightTab === tab` first and, on a match, does `setRightTab(null)` + `setRightPanelOpen(false)` — a toggle, not open-only, so the rail can always dismiss its own panel
 - **Nothing is a layout column any more.** 選擇回合 (`RoundTimeline`, `GM_TIMELINE`) is absolutely positioned over the map's **left** edge (`absolute left-12 top-12 z-[7] w-60 hidden md:block`), and 勢力排行 (`FactionRanking`) moved into the **統計** tab above the charts. Both used to be a left sidebar; a sidebar column is what forced the map to share width with chrome. The mobile overlay drawer is unaffected — it still stacks timeline, leader list and event log
 - `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `26rem` so they clear the open panel, and **only from `lg` up** — a fixed offset would push them off-screen on narrow viewports, so narrow keeps `right-4`
-- The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 8`
+- The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 3`
+- **The percentage is an `<input type="number">` plus a literal `%` label**, not a display. It reads `0` = furthest, `100` = closest, and typing a value jumps the camera there (`Enter` commits, and so does blur — Enter alone would leave the text unapplied for someone who tabs away). The draft is a **string**, never a number: a numeric value would reformat `15` to `1` on the first keystroke and throw the caret to the end. Dragging the slider clears the draft so the field follows the zoom again. The `%` is a separate `<span>` beside the input so the number stays the editable body and `%` is only its unit
 - Controls are held in **both a ref and state**: `onControlsReady` sets `mapControlsRef` (imperative calls) *and* `mapControls` state (rendering). Reading `ref.current` during render is a lint error ("Cannot access refs during render")
 - **The camera must survive a data refresh.** The graph-rebuild effect runs on every `[places, factions, roads,
   characters]` change, i.e. every time a round advances, and it calls `graph.clear()` — emptying the graph can
@@ -373,22 +373,24 @@ events survived, and says so when all of them were filtered out.
 
 ### Map Glow, Shadow & Camera
 
-- The glow layer is **decoration, not animation**: it redraws on sigma's `afterRender` and `resize` only, so an idle map costs nothing. Do not add an rAF loop to it — the spotlight layer is the only rAF loop on the map
-- Node colours come from the graph (runtime faction data, converted to hex by `hslToHex`); the **shadow colour comes from the `--color-ds-void` design token**, read once per redraw via `getComputedStyle`. Never hardcode a colour here — inline styles are for runtime data only
-- Glow strength scales with the node's on-screen radius between `MAP_GLOW_MIN_ALPHA` and `MAP_GLOW_ALPHA`, so big places read as lit and small ones do not haze the map into fog. Nodes below `MAP_GLOW_MIN_RADIUS_PX` are skipped, as are nodes outside the viewport (`viewportToGraph` bounds)
-- Sprites are cached per `color|alpha` and blitted with `drawImage`; a per-frame `createRadialGradient` per node would be far too slow at `PLACE_MAX_COUNT` (2000)
-- Glow/shadow geometry and camera timing live in `gameConfig.ts`: `MAP_GLOW_*`, `MAP_SHADOW_*`, `MAP_CAMERA_ANIM_MS`, `MAP_FOCUS_ZOOM`, `MAP_FIT_PADDING`
+- **The node glow and drop shadow are REMOVED, at every zoom.** A second overlay `<canvas>` used
+  to paint an offset shadow then a faction-colored radial glow behind every node. No place has a
+  light effect now (the user's answer was "always, everywhere"), so the map is flatter but the roads
+  and nodes read cleaner, and the backdrop no longer competes with a glow. Do not add it back:
+  `getGlowSprite`, `SPRITE_SIZE`, `readDesignToken` and the shared `withAlpha` are gone from
+  `mapShared.ts` with it, and `MAP_GLOW_*` / `MAP_SHADOW_*` are gone from `gameConfig.ts`.
+  `MAP_SHADOW_FALLBACK` survives for one job only: the **label** text shadow.
+- Camera timing lives in `gameConfig.ts`: `MAP_CAMERA_ANIM_MS`, `MAP_FOCUS_ZOOM`, `MAP_FIT_PADDING`
 - **Camera coordinates are FRAMED, not raw.** Sigma's `createNormalizationFunction` maps the whole graph into a unit square centred on `(0.5, 0.5)` whose larger axis is exactly `1`, and the camera operates in that space. `graph.getNodeAttributes()` returns **raw** pre-normalisation coordinates and `sigma.getBBox()` returns the **raw** extent — feeding either to `camera.animate()` parks the camera outside the world and renders a blank map. Use `sigma.getNodeDisplayData(node)` for anything the camera consumes
 - Because the framed world is a unit square, "fit everything" is the **constant** centre `(0.5, 0.5)` + ratio `1` — independent of world size, node count, and viewport aspect (verified across 936×766, 500×900, 1600×400, 400×1200, 1200×1200). `MAP_FIT_PADDING` adds margin; `MAP_FOCUS_ZOOM` (<1) is a multiplier on that same baseline for `focusNode`, so the two views stay consistent. `resetView` uses this, **not** `animatedReset()`/`sigma.getBBox()`
 - The map's inner vignette is a design token, not a bespoke class: `--shadow-ds-map-vignette` in `@theme static` (globals.css), applied as `shadow-ds-map-vignette`
 - Camera animations run through `reducedMotionRef` (populated from `useReducedMotion`), giving `duration: 0`. It is a ref, not a direct closure, because the effect that builds the Sigma instance has an empty dependency array
-- `extract-` note: `readDesignToken` is the only sanctioned way for a canvas layer in this component to obtain a design value
 
 ### Map Territory View (the zoom-out area map)
 
 Zoomed out past `TERRITORY_ZOOM_RATIO`, each place projects a **claim** and the map marks the area
 those claims cover — the CK3 map-mode / Stellaris galaxy-map idea. The territory is a *translucent
-tint over the map*, not a replacement for it: the graph, roads and glow stay fully opaque, so you
+tint over the map*, not a replacement for it: the graph and roads stay fully opaque, so you
 read territory and topography at the same time.
 
 - **It is a force field, not a Voronoi partition.** An earlier version assigned each grid cell to
@@ -467,9 +469,9 @@ read territory and topography at the same time.
   `factionAt()` answers hover from the field; `factionRegions()` returns per-faction centroids for
   the labels; `factionOutlines()` + `smoothLoop()` turn the boundary into smoothed curves for the
   border stroke, and `factionRegions()` also returns each region's label anchor, radius and axis.
-  No DOM, so `territory.test.ts` runs under `node`. The same split is used by the ambient dust
-  layer: `spaceFlow.ts` is pure and tested under `node`, with its renderer (`SpaceFlow.tsx`)
-  doing nothing but drawing.
+  No DOM, so `territory.test.ts` runs under `node`. The same split is used by both ambient space
+  layers: `spaceGalaxy.ts` and `spaceFlow.ts` are pure and tested under `node`, with their renderers
+  (`SpaceGalaxy.tsx`, `SpaceFlow.tsx`) doing nothing but drawing.
 - **The field is built during render**, in a `useMemo` over `places`, not inside the effect and
   pushed into state — `Place` already carries `layoutX`/`layoutY`, and setting state synchronously
   in an effect trips the cascading-render lint rule.
@@ -578,17 +580,17 @@ read territory and topography at the same time.
     edge, so it under-reports. Measure two layers: equal shifts mean they are in sync.
 - **The territory layer must repaint itself, once per animation frame.** `draw()` is bound to
   `sigma.on('afterRender', draw)`, but measured, that event does **not** fire on every mousemove
-  during a drag: the glow and spotlight layers repaint and the territory canvas stays
+  during a drag: the spotlight layer repaints and the territory canvas stays
   byte-identical, so it becomes a frozen translucent underlay with the map sliding beneath it —
   which reads as the map jumping from one place to another. Calling `draw()` on each mousemove is
   wrong for the opposite reason (several mousemoves can land in one frame). The fix is
   `scheduleOverlay()`: coalesce into one `requestAnimationFrame` that repaints with the **final**
-  camera state, so territory, glow, spotlight and graph all land in the same frame. Cleanup must
+  camera state, so territory, spotlight and graph all land in the same frame. Cleanup must
   `cancelAnimationFrame` the pending frame, or an effect re-run paints a detached canvas.
 - **Do not measure camera movement by the territory bitmap's centroid.** It biases hard: the blob is
-  small and clips at the canvas edge, so a 300px drag reported 150px — and the *glow* layer reported
-  the identical 150px, which is the tell. Two layers agreeing exactly means the layers are in sync
-  and the instrument is wrong. Measure a layer, and compare two: equal ratios mean sync.
+  small and clips at the canvas edge, so a 300px drag reported 150px — and the *spotlight* layer
+  reported the identical 150px, which is the tell. Two layers agreeing exactly means the layers are
+  in sync and the instrument is wrong. Measure a layer, and compare two: equal ratios mean sync.
 - **`sigma.refresh()` is required after a camera write.** `camera.setState` only updates state and
   emits `updated`; it does **not** schedule a render. Removing the `refresh()` from the drag path
   freezes the map solid with no error.
@@ -622,14 +624,155 @@ elaborated fight.
 If a map-level battle visual is ever wanted again, it must be scoped to the round being displayed and
 tied to a real `PLACE_CAPTURED` event, not derived from standing ownership.
 
-### Space Dust (`src/lib/spaceFlow.ts` + `src/components/SpaceFlow.tsx`)
+### Space Backdrop: three space layers, four canvases
 
-A flow field: particles move along a **3D Simplex noise field**, so ribbons, vortices and voids emerge
-— random but structured. What makes it work is the field's **continuity**: nearby positions return
-similar angles, so particles flow along one shared field instead of scattering.
+DOM order is paint order, and the fog sits **between** the galaxy and the map.
+
+| order | element | role |
+|---|---|---|
+| 1 | `SpaceGalaxy` (`src/lib/spaceGalaxy.ts` + `src/components/SpaceGalaxy.tsx`) | the deep field: warm core, nebula patches, stars |
+| 2 | `SpaceFog` (`src/lib/spaceFog.ts` + `src/components/SpaceFog.tsx`) | warm star-dust over the galaxy and **under** the map; drifts slowly, no zoom fade |
+| 3 | `SpaceFlow` (`src/lib/spaceFlow.ts` + `src/components/SpaceFlow.tsx`) | the drifting ribbons: **all** of the parallax motion |
+| 4 | `SigmaMap` | the map itself: roads, nodes, territory |
+
+All four are `absolute inset-0 pointer-events-none`.
+
+- **The galaxy, the fog and the dust must come BEFORE `SigmaMap`**, because sigma's container carries
+  an opaque backdrop that would hide them entirely. `SigmaMap`'s own wrapper therefore has **no**
+  background — `bg-ds-space` (two `@theme static` tokens, not a bespoke `.space-bg` class) provides it.
+- **The fog used to come AFTER `SigmaMap`**, as a haze over the roads. It now sits *under* the map, above
+  the galaxy: it is a warm star-dust backdrop, so roads and nodes always sit on top of it and are never
+  veiled. It is still `pointer-events-none` (kept for consistency and safety), so it can never interfere.
+- **The fog does not cover the chrome**, and that is *structural, not guaranteed*: `GameGraph` is
+  `<main>`'s **first** child, and every HUD element (the round timeline, the side rail, the corner
+  brackets) is a **later** sibling, so they paint above it. Reorder `GameGraph` and the fog starts
+  covering the HUD.
+- **The territory area layer stops being interactive when zoomed in.** `TERRITORY_INTERACTIVE_RATIO: 0.6`
+  gates the *area* layer only: below it, pointing at a patch of ground no longer answers "whose land is
+  this" and no longer lights that faction's fill, because that range is showing **nodes and roads** and
+  the area layer is only a backdrop — yet it would still take over the cursor's reading, which reads as a
+  bug. Place **node** hover and click are unaffected. The gate is read from `cameraRatioRef`, a mirror of
+  the camera ratio, because `onMove` is a stable closure that cannot reach the sigma instance; crossing
+  the threshold clears the highlight and tooltip immediately rather than waiting for a mousemove.
+- Only the dust has a parallax factor of its own (`SPACE_FLOW_PARALLAX: 0.35`), because it is the
+  one layer that is **not** in world space — it floats above the map. The galaxy and the fog have
+  **no parallax at all**: they are placed by sigma and therefore scroll and zoom with the map exactly.
+
+#### Placement is sigma's job — do not hand-roll it
+
+`SigmaMap` exposes sigma's own framed→viewport mapping through `MapCameraControls`:
+
+```ts
+framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number };
+```
+
+`framedPlacement(mapper, radiusFraction)` — in `src/lib/spaceShared.ts`, which is the shared module
+for both backdrop layers — calls it twice: once for the world centre `(0.5, 0.5)`, once to measure
+pixels-per-world-unit from the gap between two adjacent framed points. `spaceShared.ts` also holds
+the two colour helpers (`parseHex` / `withAlpha`) both layers need, so neither has to import from
+the other.
+
+- **This replaced a real bug.** Sigma's mapping is
+  `screen = (framed − camera.position) × scale + centre`, so raising `camera.x` moves world content
+  **left**. The galaxy used to add `(camera.x − 0.5) × k` to its centre, which moved it **right** — so
+  the backdrop drifted *against* the map and read as "not following it". `SPACE_GALAXY_PARALLAX`,
+  `SCALE_EXPONENT`, `SCALE_CLAMP_MIN/MAX` and `REF_RATIO` are **gone**; they existed only to paper
+  over the fact that neither pan nor zoom was actually following sigma. `spaceGalaxy.test.ts` asserts
+  they stay absent, and that the centre comes from the mapper rather than from camera x/y.
+- **The galaxy and the fog are world objects**, so panning genuinely slides them off frame. That is
+  correct anchoring, not a defect.
+- **Scale is `pixelsPerWorldUnit × radiusFraction`**, and it inherits sigma's exact zoom. Because the
+  mapper argument is injected, the module stays pure and testable with a stub.
+
+#### Galaxy zoom-in fade
+
+Following sigma exactly means scale really is `1 / ratio`, and sigma's ratio spans 0.05–3. At 0.05
+the disc would be ~9× the viewport: a flat warm film that destroys road contrast.
+`SPACE_GALAXY_RADIUS_FRACTION: 0.85` makes the disc most of the world, so it is a real backdrop rather
+than a small glow (raised from 0.72: the request was "larger"). `SPACE_GALAXY_FADE_RATIO: 0.9` starts to
+dim it as you zoom in, but **never to nothing** — `SPACE_GALAXY_FADE_MIN: 0.55` is the floor, so the
+galaxy always remains part of the background (fading to 0 left a pure-black frame that read as broken,
+and a low floor read as an invisible film when the user asked to see the galaxy *more* clearly zoomed
+in). Clarity at deep zoom comes from the **raised floor plus more detail** (`STAR_COUNT` 900,
+`NEBULA_BLOBS` 12), **not** from removing the fade: a bright disc at deep zoom is a warm wash over the
+roads, so road contrast is carried by the map having lost its node glow layer instead. The offscreen bake
+is sized for the largest radius still visible, so it never blurs before it fades.
+
+#### Fog (`SPACE_FOG_*`)
+
+A warm seeded star-dust drawn from its own offscreen canvas. It **drifts slowly** — unlike the galaxy it
+must not read as a rotating prop: 20 minutes a turn is depth, not spin. It has **no zoom fade**: it now
+lives *under* the map, so there is nothing for it to veil, and it stays present at every zoom.
+
+- **It sits under the map and above the galaxy**, and `spaceFog.test.ts` asserts it carries no zoom-fade
+  thresholds (`zoomRatio` / `fadeRatio` are gone) and that its drift behaves (one turn per period, bounded
+  to 0..2π, disabled when the period is ≤ 0, and slower than the galaxy's).
+- **"Random" means seeded.** The same seed always yields the same fog, so a remount cannot make the
+  layer jump — the project-wide convention.
+- **Density is what makes it read as a cloud, not a grey sheet.** Each patch draws one 0..1 value and
+  maps it into `SPACE_FOG_DENSITY_MIN..MAX` (`0.1..1`), and that single value drives **both** its alpha
+  and its radius — so a dense patch is also a large one, and thin patches nearly vanish. Drawing them
+  independently produced big transparent patches, which read as a bug. `spaceFog.test.ts` asserts the
+  spread: the densest patch is near the ceiling, the thinnest under 30% of it, and the **mean** sits well
+  below the ceiling so it is never a solid sheet.
+- **`SPACE_FOG_ALPHA` is 0.5, and that is deliberate.** It used to be 0.16, tuned when the fog painted
+  *over* the map; against the near-black void it was simply invisible, so the whole layer read as absent.
+  What stops it becoming a uniform white sheet is the density range above, not the ceiling.
+- **The palette is warm** (`SPACE_FOG_COLORS`: `#f2e6c8` → `#5c4c38`, near-white cream to dark umber).
+  The point is that it reads as *lit star dust*, not a cold grey haze; `spaceFog.test.ts` asserts every
+  colour's red channel dominates its blue so it cannot drift back.
+- **It keeps the full visibility gate**, so the drift pauses off-viewport and on a hidden tab, and
+  `prefers-reduced-motion` renders a single static frame — exactly like the other layers.
+
+#### Shared galaxy notes
+
+- **The galaxy is baked once into an offscreen canvas, then rotated.** A frame is one blit,
+  independent of the star count. The fog is likewise one blit of its own bitmap.
+- **Neither layer uses any noise.** The galaxy used to carry brown dust lanes whose texture came from
+  wobbling the radius with Simplex noise; with the lanes removed the noise had no remaining purpose,
+  so `three`'s `SimplexNoise` is no longer imported. Both are pure seeded geometry.
+- **The lanes were removed on purpose, and the cost is real.** They were the galaxy's *only* spiral
+  structure — without them this reads as a soft glowing star cloud, not a recognisable spiral. The
+  trade is deliberate: structure and motion now come from the flow-field layer, and the core stops
+  being crossed by brown tubes. `spaceGalaxy.test.ts` asserts those keys are absent.
+- **The offscreen canvas must carry the DPR transform** (`setTransform(dpr, …)` and `clearRect` in CSS
+  pixels). Its backing store is sized in device pixels, so drawing in CSS pixels without it puts the
+  galaxy in 1/dpr of the surface and then stretches it back — soft on any 4K display.
+- **Paint order inside the galaxy bake is largest-first: core, nebula, stars.** Stars go last or the
+  translucent nebula covers them and blurs them, and blur is the one thing this layer can least
+  afford because roads sit under it.
+- **The galaxy's rotation clock is accumulated, not read from a wall clock.** `dt` does not advance
+  while paused (off-viewport, hidden tab), so returning to the tab resumes rather than spinning
+  forward. `rotateAt` takes the angle modulo a full turn, so it never grows into an astronomical
+  number.
+- **Outside the disc the canvas is transparent**, so `bg-ds-space` and `bg-ds-space-nebula` show
+  through.
+- **The galaxy is deliberately dimmer than the reference.** The Stellaris reference core is bright,
+  but it gets away with that because its hyperlanes are thin *bright* lines. Ours are semi-transparent
+  dark blue `#1e3a5f` with up to 2000 nodes above them, so this takes the reference's **composition
+  and hues, not its exposure**. `spaceGalaxy.test.ts` asserts those ceilings so they cannot be
+  quietly raised.
+- **The nebula token was desaturated with it.** `--color-ds-space-nebula` was a saturated purple and
+  blue; against a warm core those cool corners fight it. They are now muted plum and slate.
+- **No translucent trail fill and no `lighter` blending.** Additive overlap makes star crossings glow,
+  which reads as light — and the map underneath is already light, so that eats the roads' contrast.
+- **Every colour is in `gameConfig.ts`** (`SPACE_GALAXY_COLOR_CORE/MID`, `NEBULA_COLORS`,
+  `STAR_COLORS`, `SPACE_FOG_COLORS`). No component hard-codes one.
+- Stars are drawn **largest-first into the bake**, with a `1 - d³` rim fade so the disc edge does not
+  show as a hard cut. `StarSpeck` stores `x`/`y`, so the distance is derived, not read.
+- Neither layer draws React state, only canvas transforms. A per-frame `setState` would re-render the
+  whole map.
+- The graph→viewport mapping assumes **camera angle 0** (both camera animations pass `angle: 0`).
+
+#### Flow-Field Dust (`src/lib/spaceFlow.ts` + `src/components/SpaceFlow.tsx`)
+
+The foreground layer, stacked **over** the galaxy. Particles move along a **3D Simplex noise field**,
+so ribbons, vortices and voids emerge — random but structured. What makes it work is the field's
+**continuity**: nearby positions return similar angles, so particles flow along one shared field
+instead of scattering.
 
 - **The noise comes from `three`, not a new dependency.** `three/examples/jsm/math/SimplexNoise` is
-  the same algorithm and is already installed.
+  the same algorithm and is already installed. This is the **only** canvas layer that uses noise.
 - **The seed must be a real PRNG, never a constant.** `createNoise3D(rand)` calls `rand` a couple of
   hundred times to build its permutation table; `() => 0.5` makes every gradient index identical and
   collapses the field into a smooth ramp, losing the one thing the technique is for. Use the project's
@@ -639,6 +782,12 @@ similar angles, so particles flow along one shared field instead of scattering.
   than the flow (so bands layer inside a ribbon) and drifts *slower* (so colour does not churn with
   the motion). A respawn carries the old `size` but deliberately **not** the old hue — carrying it
   would decouple colour from position.
+- **The palette was deliberately pushed into the cool half and down in chroma**, and this is asserted
+  as a *ceiling*. The dust used to be a full 0–320 sweep at saturation 78 / alpha 0.72, which was
+  tuned when it was the *only* backdrop. Over a warm galaxy and a map that already carries faction
+  colour those ribbons fought both and cost the roads their contrast, so `HUE_MIN/MAX` are now
+  `195 → 280`, `SATURATION` 45 and `MAX_ALPHA` 0.4. `spaceFlow.test.ts` asserts saturation < 60,
+  alpha < 0.5 and a hue span < 200°, so it can never drift back into a rainbow.
 - **No translucent trail fill.** The sample's per-frame `fillRect('rgba(...)')` needs an *opaque*
   backdrop to fade against; this page's base is a gradient plus two nebula washes, so accumulating
   translucent fills smears it and never fully clears. Particles fade individually.
@@ -646,16 +795,13 @@ similar angles, so particles flow along one shared field instead of scattering.
   already light and that eats the roads' contrast.
 - **Every colour is in `gameConfig.ts`** (`SPACE_FLOW_HUE_MIN/MAX`, `SATURATION`, `LIGHTNESS`,
   `MAX_ALPHA`, `HUE_STEPS`, and an optional `SPACE_FLOW_COLORS` list of `r,g,b` or `#rrggbb` for
-  exact colours). The component hard-codes none. To go brighter, raise `LIGHTNESS` or `MAX_ALPHA`
-  before `SATURATION` — the map already carries faction colour.
+  exact colours). The component hard-codes none.
 - Hue is **quantised**, so the layer needs only `HUE_STEPS` pre-built fill strings and a frame
   allocates nothing.
-- The dust must paint **before** sigma: DOM order is paint order, and sigma's container carries an
-  opaque backdrop, which would hide the dust entirely. `SigmaMap`'s own wrapper therefore has **no**
-  background — `bg-ds-space` (two `@theme static` tokens, not a bespoke `.space-bg` class) provides it.
+- Parallax is damped to **0.35** against the galaxy's 1.0, which is what reads as depth; the test
+  asserts the two differ.
 - Opacities are written straight to the DOM rather than through React state — a per-frame
   `setState` would re-render the whole map.
-- The graph→viewport mapping assumes **camera angle 0** (both camera animations pass `angle: 0`).
 
 ### Income Split, Abilities & Troop Purchases
 
@@ -1307,114 +1453,6 @@ pnpm lint
 *This guide is for AI agents working on the Autonomous World project. For human developers, see README.md.*
 
 <!-- BEGIN:nextjs-agent-rules -->
-
-### 顯像、提示與地點分頁（今日） / Avatar, tooltips and the place tab (today)
-
-**識別圖形的放大個數目前穫不調，每部位統一個個數（寫作統一的試驗結果）。** `TIER_CUE_SCALE_ARM` 1.0、`TIER_CUE_SCALE_CHEST` 1.0、基準 1.45。
-
-**對象圖用一個共用的 `clipPath` id，作用在**已存在**的胸口與頭部两個组上。** 衣袍與肩章直接落到底邊，不切它會透出圍換。共用 id 是安全的：
-裁剪圖形在每個頭像里完全一樣。先前曾試國斷增一個包裹组，結果 JSX 平衡失敗；直接加属性才是安全的做法。
-The avatar clips to a rounded plate via one shared clipPath id, attached as an ATTRIBUTE on
-the two groups that already exist (chest and head). The robe and shoulder boards run to the
-bottom edge and bled outside the plate without it. A shared id is safe: the clip shape is
-identical in every avatar. An earlier attempt that inserted a wrapper group unbalances the
-JSX — adding the attribute does not.
-
-**提示在游標面上半部時改贴在游標上方。** 提示原本以游標垂直置中，一靠近容器頂端，面板就有一半裁掉。現在量容器高度（`offsetParent` + `ResizeObserver`），
-游標在上半部就翻到上方。改在 `ChartTooltip` 內部，五個圖表呼叫點全部受益。
-The tooltip flips above the pointer when it is in the top half. It was vertically centred, so
-near the container top half of it was clipped away. The container height is now measured
-(`offsetParent` + `ResizeObserver`) inside `ChartTooltip`, so all five chart call sites
-inherit the behaviour with no signature change.
-
-**將領詳情：位置可點、動力色塊在左、電轉圖可交互。** 體轉圖在詳情彌窗里使用斷的 `interactive` 属性——將領表那一列的浮動預稿必須維持 `pointer-events-none`，
-否則面板會觸發那一列的 `mouseleave` 而閃烁消失；後者是窗口內的固定圖表，可以很自然地接受游標。游標指向哪一條輪就显示該值與同動力平均，并在輪尾圍一圈。
-Leader detail: 位置 is clickable, the faction swatch sits left of the name, and the radar takes
-the pointer. The radar uses a new `interactive` prop — the leader-table hover preview must
-stay `pointer-events-none` or it flickers away on that row mouseleave, while the modal copy can
-take the pointer freely. The tooltip names the hovered axis and shows the faction mean.
-
-**「地點」分頁沒选中時列出所有地點。** 只放一句提示等於進證回地圖自己點；面板已經在這裡，就該把它們摊開。依名稱排序，因為這個列表沒有位置內容。
-With nothing selected the 地點 tab lists every place instead of a one-line prompt: the panel
-is already there, so it should show them. Sorted by name, because the list has no spatial cue.
-
-**建立列改成「一級一點」，數字改在提示。** 後要上所有位座執的每一級效果表常驛時，在 19rem 寬的面板里把真正要看的「現在幾級」埋掉。現在每座下方是一排點（已達到填满、現在級為 active、未達到只剩外框），
-數字在游標停在點點上時的 tooltip 才出現。提示固定贴在點點上方：點點本來就在卡片底邊。
-Each building row is now a row of dots, one per level: reached levels filled, the current one
-in the active colour, unreached ones reduced to an outline. The numbers live in a tooltip on
-hover. The tooltip is anchored above the dots because the dots already sit at the card edge.
-
-**`cn` 是已安裝的包，不要自己寫一份。** `src/lib/utils.ts` 已經重新察出它。它有真正的 Tailwind 矛盾解析（`cn('p-2', 'p-4')` → `'p-4'`），
-手寫的版本只會把兩個串接在一起。在空白就擁斷寫一份、沒先確認實際存在是有過 / **`cn` is an installed package — do not hand-roll another.** `src/lib/utils.ts`
-already re-exports it, and it does real Tailwind conflict resolution, which a truthy-join
-cannot. Check whether a dependency is absent before writing a replacement for it.
-
-
-### 交易只用在「半寫入會永久毀掉東西」的地方 / Transactions only where a half-write destroys something
-
-`server/tx.ts` 提供 `inTransaction()`。**這個回合裡 90 個寫入點，只有兩個包進交易。**
-
-判斷標準只有一條：**之後有沒有任何一條程式路徑會把它修回來。** 沒有 → 必須交易。有 → 不必。
-
-A round is a simulation that may stop halfway — the next round resumes from wherever it
-stopped — so most partial writes are self-correcting. Wrapping all ~90 write sites would buy
-hundreds of transactions a round and no matching correctness. The test is one question: **does
-any later code path repair this?**
-
-**包起來的兩個 / The two that are wrapped**
-
-- `adminAssign.grantAdmin` / `revokeAdmin` — 崗位搬過了而野心沒扣，就永遠不會有回復的排程；
-  這個角色從此比規則允許的更沉靜，而且沒有任何東西會把那一點還給他。免職那邊的風險相反：
-  `+1` 入了帳卻沒清掉未到期的減免，排定的回復會再記一次 `+1`。
-  A seat that moves without the ambition delta is the worst kind of half-write: no revert is
-  ever scheduled, so the deduction is simply permanent. Revoking moves no seat — its risk is the
-  mirror image, a `+1` landing while the pending reduction is not cleared, so the scheduled
-  revert would credit a second `+1`.
-- `economy` 的單一地點發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以在兩次
-  `increment` 之間崩潰，不會有任何一筆錢移動到別處：它就是消失了，而沒有任何階段會對帳。
-  `splitIncome` is exact, so a crash between two increments moves the missing gold nowhere. It
-  ceases to exist, and no later phase reconciles totals.
-
-**刻意排除 / Deliberately excluded**
-
-- **回合快照** (`runRound.ts`) — 快照是「已完成的某一回合」的快取。把它放進回合的交易裡，
-  等於讓一個交易橫跨全部 14 個階段地開著。
-- **每筆事件列** — Event 是一行日誌。少一行損失的是敘事，不是狀態。
-
-**陷阱 / The trap.** `inTransaction` 的 `fn` **只**能使用傳進去的 `tx`。在 `fn` 裡呼叫模組層級的
-`prisma` 會逃出這筆交易，不會隨之回滾——這個輔助存在的理由就是把這個陷阱寫在程式碼裡。
-
-逾時是 `TX_TIMEOUT_MS`（20 秒），比 Prisma 預設的 5 秒寬，因為一個地點的發放可能超過它。
-
-### 顯示字型與前臂 / The display face and the forearm
-
-**Orbitron 換成 Chakra Petch，`font-orbitron` 改名為 `font-display`。**
-Orbitron 在這個介面上「不清楚」不是主觀問題，而是結構性的：字幅很寬、x-height 低、
-字形切角又特殊，而它最常出現的地方——事件列標頭、圖表刻度、`RND` 計數、eyebrow
-標籤——都是 11–13px 的小字，在那些尺寸下筆畫會糊成一團。Chakra Petch 保留科幻的方正感，
-但切角是「刀」而不是「面」，筆畫對比更高、字幅更窄；斜切的收尾也帶一點武備感，剛好補上
-奇幻那一半。它只有 latin，中文一律落到 `PingFang TC`，與舊設定相同。
-類別與 CSS 變數一起改名（`--font-orbitron` → `--font-display`、`.font-orbitron` →
-`.font-display`），因為留著舊名字會指向一個根本沒有載入的字型。
-Orbitron's illegibility here was structural: very wide, low x-height, unusual geometric cuts,
-and it spends most of its life at 11–13px in this UI, where those traits smear together.
-Chakra Petch keeps the squarish sci-fi feel with blade-like terminals, higher stroke contrast
-and narrower letterforms, and the angled cuts read as martial, which supplies the fantasy half.
-The class and CSS variable were renamed along with it, because keeping the old name would
-point at a font that is no longer loaded.
-
-**體魄現在畫在一條真的手臂上，三段共用同一個尺寸。**
-原本只有護具，直接浮在衣袍上，看起來像貼在布上的色條而不是四肢；現在手臂畫在**肩章之前**，
-肩章才壓在肩膀上而不是被手臂穿過去。手臂上緣刻意壓低——高一點就會從肩章的斜邊上方露出
-一塊皮膚，讀起來像脖子旁多了一塊。
-三段護具**不再各自縮小**：階級改由材質（金／鋼／麻）、深色外框與飾線（高階甲片脊線、
-低階縫線）表達。mid 與 low 原本比較小，結果低階的線索不是「弱」而是「幾乎看不見」——
-而 40px 的列表列上，那正是唯一承載體魄資訊的地方。
-The Physique cue now sits on a real limb rather than floating on cloth, and all three bands
-share **one size**. Rank is carried by material, the dark rim and the detailing (a ridge for
-the heavy band, stitching for the worn one), not by extent — a smaller mid/low guard made the
-low band's signal "almost invisible" rather than "weak", and at the 40px list size that is
-where the only ti signal lives.
 
 # This is NOT the Next.js you know
 
