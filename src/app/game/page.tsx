@@ -441,6 +441,33 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
    * the empty frame from appearing.
    */
   const panelHasContent = rightPanelOpen && rightTab !== null;
+
+  /**
+   * 關掉右側面板，並**連帶清掉選取**。
+   *
+   * 面板只是把地點詳情「搬進」分頁而已，選取狀態仍然住在 `popupStack`。所以任何一條
+   * 關閉路徑若只關面板而不清 stack，地圖上的節點就會繼續維持選取樣式（高亮 + 強制顯示
+   * 地名）——畫面上看起來就是「面板關了卻還選著」。
+   *
+   * 這裡原本有三條各自為政的關閉路徑（分頁再點一次、分頁自己的 ✕、詳情自己的 ✕），
+   * 而其中兩條忘了清選取。這正是把它收斂成一個函式的原因：第四條路徑不會再忘記。
+   *
+   * Close the side panel **and clear the selection**.
+   *
+   * The panel only *hosts* the place detail as a tab — the selection itself lives in
+   * `popupStack`. So any close path that closes the panel without emptying the stack
+   * leaves the map node highlighted (selected colour plus a forced label), which reads
+   * as "the panel closed but it's still selected".
+   *
+   * There used to be three separate close routes — re-clicking the active tab, the panel's
+   * own ✕, and the detail's own ✕ — and two of them forgot to clear. That is the whole
+   * reason this is one function: a fourth path now has nothing to forget.
+   */
+  const closePanel = () => {
+    setRightTab(null);
+    setRightPanelOpen(false);
+    closePopup();
+  };
   // 領地圖層的開關。由使用者控制而不是跟著縮放淡入淡出：地圖拉到很遠時，領地是唯一
   // 還說得出「這裡是誰的」的東西，所以預設開著，但要能關掉看清楚節點與道路。
   //
@@ -939,33 +966,25 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
             map so it no longer consumes layout width ──────────────────────────── */}
         <MapSidePanel
           activeTab={rightTab}
-          onTabChange={(tab) => {
+onTabChange={(tab) => {
             // 再點一次**已經啟用**的分頁 = 關閉面板。這是「切換」語意，而不是只能開不能關。
+            // 走 closePanel，因為這條路徑也必須清掉選取。
             //
             // Clicking the already-active tab again closes the panel: a toggle, not open-only.
+            // It goes through closePanel because this path must clear the selection too.
             if (rightTab === tab) {
-              setRightTab(null);
-              setRightPanelOpen(false);
+              closePanel();
               return;
             }
             setRightTab(tab);
             setRightPanelOpen(true);
           }}
           open={panelHasContent}
-          // 面板自己的 ✕ 要**連帶清掉選取**。面板只是把地點詳情搬進分頁而已，選取狀態
-          // 仍然住在 popupStack 裡；只關面板而不清 stack，地圖上的節點就會繼續維持
-          // 選取樣式（高亮 + 強制顯示地名），畫面上看起來就是「關掉了卻還選著」。
-          // 詳情自己的 ✕ 走的是 closePopup，本來就會清；這裡是補上另一條路徑。
+          // 面板自己的 ✕。和分頁切換走同一個 closePanel，所以選取一定會跟著被清掉。
           //
-          // The panel's own ✕ has to clear the selection too. The panel only *hosts* the place
-          // detail as a tab — the selection itself still lives in popupStack. Closing the panel
-          // without emptying the stack leaves the map node highlighted (selected colour plus a
-          // forced label), so the map reads as "still selected" after the popup is gone. The
-          // detail's own ✕ already went through closePopup; this is the other path.
-          onClose={() => {
-            setRightPanelOpen(false);
-            closePopup();
-          }}
+          // The panel's own ✕. It shares closePanel with the tab toggle, so the selection is
+          // always cleared along with the panel.
+          onClose={closePanel}
           loading={isLoading && !worldState}
         >
           {rightTab === 'characters' && (
@@ -1286,7 +1305,7 @@ function MapSidePanel({
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 28 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
-          className={`pointer-events-auto h-full w-[19rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
+          className={`pointer-events-auto h-full w-[24rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
         >
           <div className="flex items-center justify-between px-3 pt-3 pb-2">
             <span className="font-display text-xs text-gray-400 tracking-wider">

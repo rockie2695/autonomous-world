@@ -338,7 +338,48 @@ export function EventLog({
     if (!pinnedToBottom) return;
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
+
+    /**
+     * 只在 layout pass 裡捲一次是不夠的。
+     *
+     * 量測到的失敗點有三個，而且都在第一個 layout pass 之後才發生：列是分頁抓回來的，
+     * 面板本身有進場動畫（那幾幀裡捲動容器高度還是 0），而字型也要換一個 frame 才套用。
+     * 任何一個都會讓「捲到底」算在一個太矮的內容上，於是畫面停在半路——這正是它一直
+     * 沒有生效的原因。
+     *
+     * Setting scrollTop once inside the layout pass is not enough.
+     *
+     * Three things measured to land *after* that first pass: the rows arrive paginated,
+     * the panel has an entry animation (during which the scroll container is still 0 tall),
+     * and the font swap applies a frame later. Any one of them measures the content while it
+     * is still short, so the scroll lands mid-log — which is exactly why this never worked.
+     *
+     * 所以先同步捲一次（畫面沒有閃爍），再跨兩個 frame 與一個短延遲各捲一次。
+     * 讀者一進來就看到最近的事，而不是事件的開頭。
+     *
+     * So pin synchronously (no visible flicker), then re-pin across two frames and one short
+     * timeout. The reader lands on the newest events rather than the start of the log.
+     */
+    const pin = () => {
+      el.scrollTop = el.scrollHeight;
+    };
+    pin();
+
+    let secondFrame = 0;
+    const firstFrame = requestAnimationFrame(() => {
+      pin();
+      secondFrame = requestAnimationFrame(pin);
+    });
+    // 字型／版面真正穩定後的最後一次 / one last time once font and layout have settled
+    const settle = window.setTimeout(pin, 160);
+
+    // 清理是必要的：effect 重跑時若不取消，pending frame 會寫到已經卸載的節點 /
+    // Cleanup matters: without it a re-run lets a pending frame write to a detached node
+    return () => {
+      cancelAnimationFrame(firstFrame);
+      cancelAnimationFrame(secondFrame);
+      window.clearTimeout(settle);
+    };
   }, [shown, pinnedToBottom]);
 
   /**

@@ -270,6 +270,7 @@ export function SigmaMap({
         place: attrs.placeData,
         faction: attrs.factionData,
         characterCount: attrs.characterCount,
+        leaderTroops: attrs.leaderTroops,
         linkedPlaces: linkedPlaceNames,
       });
 
@@ -560,7 +561,8 @@ export function SigmaMap({
     for (const place of places) {
       const faction = place.factionId ? factionMap.get(place.factionId) : null;
       const charCount = charsPerPlace.get(place.id) ?? 0;
-      const totalTroops = (troopsPerPlace.get(place.id) ?? 0) + place.garrison;
+      const leaderTroops = troopsPerPlace.get(place.id) ?? 0;
+      const totalTroops = leaderTroops + place.garrison;
 
       // 節點大小：使用 log 刻度避免少數巨點吃掉畫面
       // Node size: use log scale to prevent a few huge nodes from dominating
@@ -581,6 +583,7 @@ export function SigmaMap({
         placeData: place,
         factionData: faction,
         characterCount: charCount,
+        leaderTroops,
         totalTroops,
       });
     }
@@ -1096,6 +1099,7 @@ useEffect(() => {
         placeData: Place;
         factionData: Faction | null;
         characterCount: number;
+        leaderTroops: number;
       };
       setTooltip({
         kind: 'place',
@@ -1104,6 +1108,7 @@ useEffect(() => {
         place: attrs.placeData,
         faction: attrs.factionData,
         characterCount: attrs.characterCount,
+        leaderTroops: attrs.leaderTroops,
         // 這個視圖裡道路是隱藏的，所以沒有「相連地點」可列 /
         // Roads are hidden in this view, so there are no linked places to list
         linkedPlaces: [],
@@ -1849,7 +1854,16 @@ useEffect(() => {
                 </div>
               )}
               <div className="space-y-0.5 text-gray-400 text-sm">
-                <div>⚔️ 兵力: <span className="text-cyan-400 font-display">{tooltip.place.garrison}</span> (+ {tooltip.characterCount} 將領)</div>
+                {/* 駐軍與將領兵力分開列：節點大小本來就是兩者相加，只印駐軍會讓節點看起來
+                    比實際兵力弱很多。總和另外給一個小字，讀者就能對上節點的大小 /
+                    Garrison and leader troops are listed separately, because node size has
+                    always been their sum. The total is given alongside so the node's size
+                    can be accounted for. */}
+                <div>⚔️ 駐軍: <span className="text-cyan-400 font-display">{tooltip.place.garrison}</span></div>
+                <div>🛡️ 將領兵力: <span className="text-cyan-400 font-display">{tooltip.leaderTroops}</span></div>
+                <div className="text-[11px] text-gray-500">
+                  合計 {tooltip.place.garrison + tooltip.leaderTroops}
+                </div>
                 <div>🏰 堡壘: <span className="text-gray-400 font-display">{tooltip.place.fortress}</span></div>
                 <div>🏪 市場: <span className="text-gray-400 font-display">{tooltip.place.market}</span></div>
                 <div>🏯 兵營: <span className="text-gray-400 font-display">{tooltip.place.barracks}</span></div>

@@ -1430,6 +1430,36 @@ pnpm lint
 
 ---
 
+### 顯示字型與前臂 / The display face and the forearm
+
+**Orbitron 換成 Chakra Petch，`font-orbitron` 改名為 `font-display`。**
+Orbitron 在這個介面上「不清楚」不是主觀問題，而是結構性的：字幅很寬、x-height 低、
+字形切角又特殊，而它最常出現的地方——事件列標頭、圖表刻度、`RND` 計數、eyebrow 標籤——
+都是 11–13px 的小字，在那些尺寸下筆畫會糊成一團。Chakra Petch 保留科幻的方正感，但切角是
+「刀」而不是「面」，筆畫對比更高、字幅更窄；斜切的收尾也帶一點武備感，剛好補上奇幻那一半。
+它只有 latin，中文一律落到 `PingFang TC`，與舊設定相同。類別與 CSS 變數一起改名
+（`--font-orbitron` → `--font-display`、`.font-orbitron` → `.font-display`），因為留著舊名字
+會指向一個根本沒有載入的字型。
+Orbitron's illegibility here was structural: very wide, low x-height, unusual geometric cuts,
+and it spends most of its life at 11–13px in this UI, where those traits smear together.
+Chakra Petch keeps the squarish sci-fi feel with blade-like terminals, higher stroke contrast
+and narrower letterforms, and the angled cuts read as martial, which supplies the fantasy half.
+The class and CSS variable were renamed along with it, because keeping the old name would point
+at a font that is no longer loaded.
+
+**體魄現在畫在一條真的手臂上，三段共用同一個尺寸。**
+原本只有護具，直接浮在衣袍上，看起來像貼在布上的色條而不是四肢；現在手臂畫在**肩章之前**，
+肩章才壓在肩膀上而不是被手臂穿過去。手臂上緣刻意壓低——高一點就會從肩章的斜邊上方露出一塊
+皮膚，讀起來像脖子旁多了一塊。
+三段護具**不再各自縮小**：階級改由材質（金／鋼／麻）、深色外框與飾線（高階甲片脊線、低階
+縫線）表達。mid 與 low 原本比較小，結果低階的線索不是「弱」而是「幾乎看不見」——而 40px 的
+列表列上，那正是唯一承載體魄資訊的地方。
+The Physique cue now sits on a real limb rather than floating on cloth, and all three bands share
+**one size**. Rank is carried by material, the dark rim and the detailing (a ridge for the heavy
+band, stitching for the worn one), not by extent — a smaller mid/low guard made the low band's
+signal "almost invisible" rather than "weak", and at the 40px list size that is where the only
+ti signal lives.
+
 ## 頁面提升（今日） / UI changes (today)
 
 ### 新將領一後庫 1 名士兵 / A new leader starts with one soldier
@@ -1453,6 +1483,64 @@ pnpm lint
 *This guide is for AI agents working on the Autonomous World project. For human developers, see README.md.*
 
 <!-- BEGIN:nextjs-agent-rules -->
+
+### 事件日誌、雷達提示與地點兵力 / Event log, the radar tooltip and a place's soldiers
+
+**事件日誌要「捲到底」捲好幾次，不是只捲一次。** `useLayoutEffect` 裡設一次
+`scrollTop = scrollHeight` 是不夠的：三件事都發生在那個 layout pass **之後**——列是分頁抓
+回來的、面板有進場動畫（那幾幀裡捲動容器高度還是 0）、字型也要下一個 frame 才套用。任何一個
+都會讓「捲到底」算在一個太矮的內容上，於是停在半路。現在先同步捲一次（沒有閃爍），再跨兩個
+`requestAnimationFrame` 與一個 160ms 的 `setTimeout` 各捲一次，並在 cleanup 取消——否則 effect
+重跑會讓 pending frame 寫到已卸載的節點。
+Setting `scrollTop` once inside the layout pass is not enough: rows arrive paginated, the panel
+has an entry animation (the container is still 0 tall during it), and the font applies a frame
+later — so the scroll lands mid-log. Pin synchronously, then re-pin across two frames plus a
+160ms timeout, all cancelled on cleanup.
+
+**統計頁的雷達讀值改成浮動提示，不再塞進版面。** 原本 hover 會在圖下面插入一個 `div`，
+每次 hover 都把下面的圖表推下去——讀者只是在讀一列數字，版面卻在跳動。現在提示浮在圖上，
+位置規則與 `CharacterRadarHover` 相同（游標在上半部就貼在上方）。鍵盤也要看得到讀值，
+而鍵盤沒有游標，所以 focus 與方向鍵時提示釘在圖的中央。
+The radar's per-axis readout now floats over the chart instead of being inserted into the
+layout, where every hover pushed the charts below it down. It follows the same positioning rule
+as `CharacterRadarHover`, and pins to the middle of the chart for keyboard users, who have no
+pointer to follow.
+
+**地點提示分開列「駐軍」與「將領兵力」。** 節點大小本來就是 `garrison + 將領兵力`，但提示
+只印 `garrison`，於是一個節點看起來比實際兵力弱很多，而且讀者無從得知節點大小是怎麼來的。
+兩者分開列出，另外給一個小字的合計。`leaderTroops` 隨後加進節點屬性與 `PlaceTooltip`
+（territory 視圖點擊的那條路徑也補上，否則型別不過）。
+The place tooltip lists garrison and leader troops separately. Node size has always been their
+sum, but the tooltip printed only the garrison, so a node read as far weaker than it was and
+the size had no visible explanation. `leaderTroops` now rides on the node attributes and on
+`PlaceTooltip` — including the territory-view click path, which otherwise fails to typecheck.
+
+### 關閉面板必須連帶清掉選取 / Closing the panel must clear the selection
+
+**所有關閉路徑都走同一個 `closePanel()`。** 面板只是把地點詳情「搬進」分頁而已，選取狀態
+仍然住在 `popupStack`；任何一條關閉路徑若只關面板而不清 stack，地圖上的節點就會繼續維持選取
+樣式（高亮 + 強制顯示地名）——畫面上看起來就是「面板關了卻還選著」。
+
+**All close routes go through one `closePanel()`.** The panel only *hosts* the place detail as a
+tab; the selection itself lives in `popupStack`. A close path that closes the panel without
+emptying the stack leaves the map node highlighted (selected colour plus a forced label), so
+the map reads as "the panel closed but it's still selected".
+
+**曾經有三條各自為政的關閉路徑，其中兩條忘了清選取。** 分頁再點一次、分頁自己的 ✕、
+詳情自己的 ✕。修好其中兩條之後，把它收斂成一個函式——否則第四條路徑還是會忘。第四條路徑
+現在沒有東西可以忘記。
+There were three separate close routes — re-clicking the active tab, the panel's own ✕, and the
+detail's own ✕ — and two of them forgot. Fixing those two was not enough on its own, so they are
+now one function; a fourth path has nothing to forget.
+
+**建築列不能帶 `overflow-hidden`。** 提示畫在卡片**外面**（上一張卡的上方），而
+`overflow-hidden` 會把它整個裁掉——**裁切與堆疊順序是兩件事，z 再高也沒用**。正確的寫法是
+拿掉 `overflow-hidden`，改為在展開時把**卡片自己**提到 `z-30`，這樣後面的同層卡片才不會蓋掉
+提示。
+The building card must not carry `overflow-hidden`. The tooltip renders *outside* that card, over
+the card above it, and `overflow-hidden` clips it away entirely — clipping and stacking order are
+different things, and no z-index undoes a clip. The fix is to drop `overflow-hidden` and instead
+raise the **card itself** to `z-30` while expanded, so a later sibling cannot paint over it.
 
 # This is NOT the Next.js you know
 

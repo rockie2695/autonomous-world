@@ -300,6 +300,19 @@ export interface PlaceTooltip {
   place: Place;
   faction: Faction | null;
   characterCount: number;
+  /**
+   * 住在這裡的存活將領**各自帶著的兵力總和**，不含 `place.garrison`。
+   *
+   * 節點大小本來就是 `駐軍 + 將領兵力` 一起算的，但提示只印 `garrison`，於是一個節點
+   * 看起來比實際兵力小很多。兩個數字分開列，讀者才知道節點的大小是怎麼來的。
+   *
+   * The summed troops of the living characters based here, excluding `place.garrison`.
+   *
+   * Node size has always been `garrison + leader troops`, but the tooltip printed only
+   * the garrison, so a node could look far weaker than it was. Listing both makes the
+   * node size legible: the reader can see where it came from.
+   */
+  leaderTroops: number;
   linkedPlaces: string[];
 }
 

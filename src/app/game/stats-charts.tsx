@@ -1273,6 +1273,22 @@ function CharacterRadar({
    */
   const [hoverAxis, setHoverAxis] = useState<number | null>(null);
   const [enlarged, setEnlarged] = useState(false);
+  /**
+   * 游標位置（相對於雷達圖容器），提示就跟著它走。
+   *
+   * 這裡是為了讓讀值**浮在圖上**，而不是把一整塊面板塞進版面。塞進版面的後果是每次
+   * hover 都會把下面的圖表推下去，讀者只是在讀一列數字，版面卻在跳動。
+   *
+   * The pointer position, relative to the radar's container, so the readout can float.
+   *
+   * This exists so the numbers hover *over* the chart rather than being inserted into the
+   * layout. Inline, every hover pushed the charts below it down: the reader was only
+   * looking at a column of numbers, but the whole panel was moving under them.
+   */
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+  const radarBoxRef = useRef<HTMLDivElement | null>(null);
+  /** 鍵盤沒有游標，所以提示釘在圖的中央 / Keyboard has no pointer, so pin it to the middle */
+  const centerHoverPos = { x: 120, y: 120 };
 
   const hoverRows = useMemo(() => {
     if (hoverAxis === null) return null;
@@ -1299,6 +1315,11 @@ function CharacterRadar({
     const dx = (event.clientX - rect.left) * scale - RADAR_SIZE / 2;
     const dy = (event.clientY - rect.top) * scale - RADAR_SIZE / 2;
     setHoverAxis(nearestRadarAxis(dx, dy));
+    // 提示要定位在容器內，所以把游標換算成容器座標，而不是頁面座標 /
+    // The tooltip is positioned inside the container, so convert the cursor into
+    // container coordinates rather than using page coordinates
+    const box = radarBoxRef.current?.getBoundingClientRect();
+    if (box) setHoverPos({ x: event.clientX - box.left, y: event.clientY - box.top });
   };
 
   return (
@@ -1308,25 +1329,42 @@ function CharacterRadar({
         <p className="text-xs text-gray-500 py-6 text-center">{t('game.noData')}</p>
       ) : (
         <>
+          {/* 提示定位在這個容器裡，所以容器本身要是 relative / The tooltip is positioned
+              inside this container, so it has to be the positioning context */}
+          <div ref={radarBoxRef} className="relative">
           <svg
             viewBox={`0 0 ${RADAR_SIZE} ${RADAR_SIZE}`}
             role="img"
             aria-label={t('stats.attributes')}
             onPointerMove={handlePointerMove}
-            onPointerLeave={() => setHoverAxis(null)}
+            onPointerLeave={() => {
+              setHoverAxis(null);
+              setHoverPos(null);
+            }}
             onClick={() => setEnlarged(true)}
             tabIndex={0}
-            onFocus={() => setHoverAxis(0)}
-            onBlur={() => setHoverAxis(null)}
+            onFocus={() => {
+              setHoverAxis(0);
+              // 鍵盤也要看得到讀值，而鍵盤沒有游標，所以提示釘在圖的中央 /
+              // Keyboard users need the readout too, and they have no pointer, so the
+              // tooltip is pinned to the middle of the chart
+              setHoverPos(centerHoverPos);
+            }}
+            onBlur={() => {
+              setHoverAxis(null);
+              setHoverPos(null);
+            }}
             onKeyDown={(e) => {
               // The radar has to be readable without a pointer: arrow keys walk the axes,
               // Enter opens the enlarged copy.
               if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                 e.preventDefault();
                 setHoverAxis((prev) => ((prev ?? -1) + 1) % RADAR_AXES.length);
+                setHoverPos(centerHoverPos);
               } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
                 e.preventDefault();
                 setHoverAxis((prev) => ((prev ?? 1) - 1 + RADAR_AXES.length) % RADAR_AXES.length);
+                setHoverPos(centerHoverPos);
               } else if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 setEnlarged(true);
@@ -1387,16 +1425,26 @@ function CharacterRadar({
               </li>
             )}
           </ul>
-          {/* 游標指向哪一條軸，就把那條軸的各勢力平均一次列清楚。這正是雷達圖單獨讀不出來的
-              資訊：形狀看得出強弱，數字要靠這裡才拿得到 /
-              Whichever axis the cursor points at, its per-faction means are listed here.
-              This is exactly the information a radar hides: the shape shows strength,
-              the number needs this readout. */}
-          {hoverRows && (
+          {/* 游標指向哪一條軸，就浮在圖上把那一條軸的各勢力平均一次列清楚。這正是雷達圖
+              單獨讀不出來的資訊：形狀看得出強弱，數字要靠這裡才拿得到。
+              定位跟 `CharacterRadarHover` 用同一套規則：游標在上半部就貼在上方，
+              否則面板會有一半裁掉 /
+              Whichever axis the cursor points at, its per-faction means float over the chart.
+              This is exactly the information a radar hides: the shape shows strength, the
+              number needs this readout. Positioned by the same rule as `CharacterRadarHover`:
+              above the pointer when it is in the top half, or half the panel is clipped. */}
+          {hoverRows && hoverPos && (
             <div
-              className={`mt-2 rounded-md border border-white/10 ${GM_PANEL} px-2 py-1.5`}
-              role="status"
-              aria-live="polite"
+              className="pointer-events-none absolute z-20 min-w-[9rem] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
+              style={{
+                left: hoverPos.x,
+                top: hoverPos.y,
+                transform:
+                  hoverPos.y < 60
+                    ? 'translate(-50%, calc(-100% - 10px))'
+                    : 'translate(-50%, 10px)',
+              }}
+              role="tooltip"
             >
               <div className="flex items-baseline justify-between gap-2 mb-1">
                 <span className="text-[13px] text-gray-200">{t(hoverRows.axis.label)}</span>
@@ -1422,6 +1470,7 @@ function CharacterRadar({
               </ul>
             </div>
           )}
+          </div>
         </>
       )}
     </ChartFrame>
