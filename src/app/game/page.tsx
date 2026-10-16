@@ -2228,6 +2228,19 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
   /** 擁有權過濾 / Ownership filter */
   const [placeOwnerFilter, setPlaceOwnerFilter] = useState<'all' | 'owned' | 'unowned'>('all');
   /**
+   * 勢力過濾。`'all'` 是「不依勢力篩」，其餘是勢力 id。
+   *
+   * Faction filter. `'all'` means "don't filter by faction"; anything else is a faction id.
+   *
+   * 選了勢力會**同時**把擁有權過濾切回 `all`：兩個條件可以自由組合，但「某勢力 + 無主」
+   * 在定義上永遠是空集合，留著只會給人一個看不懂的空清單。
+   *
+   * Choosing a faction also switches the ownership filter back to `all`: the filters compose,
+   * but "this faction + unowned" is empty by construction, and leaving it selectable only
+   * produces a list nobody can read.
+   */
+  const [placeFactionFilter, setPlaceFactionFilter] = useState('all');
+  /**
    * 已顯示的筆數。這是「無窮載入」而不是一次畫完：世界可以到 2000 個地點，而這個面板
    * 只有 24rem 寬，一次建立兩千列等於每次開分頁都重建整個列表。
    *
@@ -2249,10 +2262,16 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
   if (!place) {
     const ownedFilter = placeOwnerFilter;
     const query = placeQuery.trim().toLowerCase();
+    const factionFilter = placeFactionFilter;
     const filtered = places.filter((p) => {
       const isOwned = p.factionId !== null;
       if (ownedFilter === 'owned' && !isOwned) return false;
       if (ownedFilter === 'unowned' && isOwned) return false;
+      // 勢力過濾。無主之地的 factionId 是 null，永遠不會等於任何一個 id，所以選了勢力
+      // 就自動把它們排除 —— 不需要另外寫一個 unowned 分支 /
+      // Faction filter. Unowned places have a null factionId, which never equals any id, so
+      // picking a faction excludes them automatically — no separate unowned branch needed.
+      if (factionFilter !== 'all' && p.factionId !== factionFilter) return false;
       // 名稱比對不分大小寫：中文沒有大小寫，但英文地名有，所以一律轉小寫再比 /
       // Name matching is case-insensitive: Chinese has no case but English place names do
       return query === '' || p.name.toLowerCase().includes(query);
@@ -2304,6 +2323,51 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
               {label}
             </button>
           ))}
+        </div>
+        {/* 勢力過濾。用下拉選單而非同樣式的一排按鈕：勢力動輒上百個，按鈕排不下。
+            樣式與事件日誌的勢力過濾一致，兩個過濾讀起來才像同一個東西。標示沿用
+            faction.* 既有的三個狀態用字，不另造字串 —— 這三個狀態正是
+            leader-detail.tsx 的 statusRank() 排序用的同一組 /
+            Faction filter. A dropdown rather than another chip row: there can be hundreds of
+            factions, which no row of buttons can hold. Styled to match the event log's faction
+            filter so the two read as the same control. The markers reuse the existing
+            `faction.*` state words rather than inventing strings — and they are the same three
+            states `statusRank()` in leader-detail.tsx sorts by. */}
+        <div className="mb-1.5 flex items-center gap-2">
+          <label
+            className="shrink-0 text-xs text-gray-400"
+            htmlFor="gm-place-faction"
+          >
+            {t('place.filterFaction')}
+          </label>
+          <select
+            id="gm-place-faction"
+            value={placeFactionFilter}
+            onChange={(e) => {
+              setPlaceFactionFilter(e.target.value);
+              // 選了勢力就代表要「有主」的地點，所以把擁有權過濾拉回全部 /
+              // Picking a faction means "places that are owned", so pull ownership back to All
+              if (e.target.value !== 'all') setPlaceOwnerFilter('all');
+              setPlaceVisibleCount(CONFIG.PLACE_LIST_PAGE_SIZE);
+            }}
+            className="min-w-0 flex-1 rounded-md border border-white/10 bg-gray-900/80 px-2 py-1.5 text-xs text-gray-200 focus:border-cyan-400/50 focus:outline-none"
+          >
+            <option value="all">{t('place.allFactions')}</option>
+            {/* 已滅亡／瓦解中的勢力仍然列出：地點會留下來，仍然找得到，但標出來讓你知道
+                這個勢力已經沒了。排序用 localeCompare，和地點清單本身的排序一致 /
+                Destroyed and collapsing factions stay in the list: their places persist and
+                should remain findable, but marked so it is clear the faction is gone. Sorted
+                with localeCompare, matching the list's own sort. */}
+            {[...factions]
+              .sort((a, b) => a.name.localeCompare(b.name))
+              .map((faction) => (
+                <option key={faction.id} value={faction.id}>
+                  {faction.name}
+                  {!faction.alive ? ` · ${t('faction.collapsed')}` : ''}
+                  {faction.collapsing ? ` · ${t('faction.collapsing')}` : ''}
+                </option>
+              ))}
+          </select>
         </div>
         {sorted.length === 0 ? (
           <p className="text-base text-gray-400 px-1">{t('game.noData')}</p>

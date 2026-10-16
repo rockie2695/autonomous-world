@@ -283,8 +283,14 @@ export const zh = {
   allPlaces: '所有地方',
   searchPlaces: '搜尋地點…',
   filterOwnership: '擁有權過濾',
+  filterAll: '全部',
   filterOwned: '有主',
   filterUnowned: '無主',
+  // 勢力過濾用下拉選單而不是同樣式的一排按鈕：勢力動輒上百個，按鈕排不下 /
+  // The faction filter is a dropdown rather than a chip row like ownership: there can be
+  // hundreds of factions, which no row of buttons can hold.
+  filterFaction: '勢力',
+  allFactions: '全部勢力',
   tab: '地點',
     name: '地方名稱',
     owner: '所屬勢力',

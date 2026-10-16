@@ -284,8 +284,13 @@ export const en = {
   allPlaces: 'All places',
   searchPlaces: 'Search places…',
   filterOwnership: 'Ownership filter',
+  filterAll: 'All',
   filterOwned: 'Owned',
   filterUnowned: 'Unowned',
+  // The faction filter is a dropdown rather than a chip row like ownership: there can be
+  // hundreds of factions, which no row of buttons can hold.
+  filterFaction: 'Faction',
+  allFactions: 'All factions',
   tab: 'Places',
     name: 'Place Name',
     owner: 'Owner',

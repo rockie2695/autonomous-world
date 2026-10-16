@@ -429,7 +429,7 @@ export const CONFIG = {
   // Both layers go on the existing overlay (a new canvas would cover the place labels),
   // and both must sit **outside** the node disc: the overlay is behind sigma, so only
   // the ring beyond the disc's edge is ever visible.
-  MAP_NODE_BORDER_COLOR: 'rgba(255, 255, 255, 0.92)', // 白邊 / White border
+  MAP_NODE_BORDER_COLOR: 'rgba(255, 255, 255, 0.7)', // 白邊 / White border
   MAP_NODE_BORDER_WIDTH: 1.3,     // 白邊線寬（px）/ Border stroke width (px)
   MAP_NODE_SHADOW_COLOR: 'rgba(0, 0, 0, 0.7)', // 黑影 / Black shadow
   MAP_NODE_SHADOW_SPREAD: 3.4,    // 黑影外擴（px）/ Shadow spread (px)
