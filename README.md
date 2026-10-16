@@ -202,7 +202,37 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Incremental layout** — new places spawn near their parent
 - **HSL → Hex conversion** for faction colors (WebGL requires hex/rgb)
 - Node size: `4 + log(totalTroops + 1) × 2` (logarithmic growth)
+- **White border + black shadow on every place** — a star cloud and a near-black backdrop swallow a disc that has no edge, so each node gets a crisp `MAP_NODE_BORDER_WIDTH` ring and a soft dark halo (`MAP_NODE_SHADOW_SPREAD`). Both are painted on the existing overlay canvas, **outside** the disc, because the overlay sits behind sigma's WebGL canvas; that also means roads cross the ring where they meet a place, which reads as roads attaching. Sigma 3.0.3's ESM build has no node-border support, so this cannot be configured on the node program
+- **White casing on every road**, same reason as the places: `MAP_ROAD_COLOR` is a deep blue
+  (`#1e3a5f`) that barely survives on a near-black star cloud, so once the nodes had a border the
+  roads became the only thing left invisible. The overlay sits behind sigma's canvas, so a slightly
+  wider white stroke underneath shows on both sides while sigma's road paints over the middle — a
+  casing, not a second road, and no second canvas (which would cover the place names)
+- **Star systems scale with the camera.** Every `MAP_STAR_*_PX` is the size at the moment you enter
+  star view; what gets drawn is multiplied by
+  `clamp((MAP_STAR_ZOOM_RATIO / ratio) ^ MAP_STAR_ZOOM_SCALE_EXPONENT)` with a `0.5` exponent, which
+  is sigma's own `size / sqrt(ratio)` — so a system reacts to zoom exactly the way a place node does.
+  Anchoring on `MAP_STAR_ZOOM_RATIO` means the frame that crosses the threshold is exactly 1× and
+  nothing pops on the way in. Across the star band (ratio 0.2 → 0.05) that is 1× → 2×. Planet counts,
+  tilts and colours still come from the place id alone, so zooming never re-rolls a planet
+- **Star systems past `MAP_STAR_ZOOM_RATIO` (0.2)** — zoom in and a place stops being a dot and reads as a system: a warm **sun** (sigma's own node disc, so roads never cut across it), 1–4 **planets** on tilted elliptical orbits, and **moons orbiting each planet from outside it**. Orbit lines carry the faction colour; unowned land uses `MAP_STAR_ORBIT_COLOR_UNOWNED`, because an unowned node's deliberately dimmed grey is invisible at partial alpha on black. Planets and moons derive from the place id alone, so a place always looks the same and nothing is stored. The place name is drawn **above** the system. The trade-off: at this zoom the garrison is no longer readable — the size is fixed on screen. Note this is ~95% of the zoom slider's travel, so a normal view has no systems at all
+- **Every system is a different colour.** The sun draws one of six spectral classes
+  (`MAP_STAR_SUN_CLASSES`, a `core`/`edge` pair) from the place id, so no two systems look alike.
+  The class is picked **once, at graph-build time**, and stored on the node: the disc is painted
+  by Sigma and the glow by the overlay, and one stored value is what keeps the two in step instead
+  of two separate draws that happen to match. Planets within one system never share a colour
+  (the palette is shuffled once, then taken in order), and each moon draws its own. Nothing is
+  stored in the database. Deliberately no deep red or deep blue: the **orbits** are the faction
+  channel, and the sun is the largest block of colour in the system
 - Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.6), independent of garrison; labels always paint above the spotlight overlay. The hovered place, the selected place, and the hovered place's connected neighbours are the one exception — they keep their names at any zoom, so you can read what a place links to
+- **A place's hover target includes its own name label.** Sigma draws the name to the right of the
+  disc, so the cursor routinely rests on a name while that name and its neighbours' names are being
+  force-shown. The hit box is measured from the real rendered text (same font, same label size as
+  the renderer) rather than estimated from the character count, because CJK is ~1em per glyph and
+  Latin ~0.55em, so a count-based estimate misses by an order of magnitude. Moving off both the disc
+  and the name clears the place name, the linked names and the tooltip - the same effect as moving
+  off the place. A name that is **not drawn** (zoomed out past `LABEL_ZOOM_RATIO`) is not a hit
+  target either, so the cursor is never glued to a place with nothing on screen
 - **Zoom controls** — a slider between the zoom-out and zoom-in buttons scrubs the camera ratio directly and shows the level as a percentage (`MAP_ZOOM_MIN_RATIO` 0.05 – `MAP_ZOOM_MAX_RATIO` 3). The **ratio** is bounded, so the world can never be zoomed to a speck; **panning is deliberately unbounded**, because the space is infinite — the reset (↺) button brings the view back
 - **Drag tracks the cursor 1:1 at any zoom** — panning is sigma's own maths (both the pixel positions converted to *framed* coordinates, then `previous − current` added to the camera), which matters most when zoomed out: an earlier version clamped the camera centre to `[0, 1]`, and since the framed world is a unit square, anything below ~75% zoom needs to leave that range to be dragged across the screen — so every move hit the limit and the map stuck and jittered instead of following the pointer
 - **Territory view** — zoom out past `TERRITORY_ZOOM_RATIO` and every place projects an equal
@@ -803,12 +833,16 @@ Below the midpoint the chance is exactly 0, and ambition averages 17 — so roug
 all leaders can never defect. That follows from the formula as written (0.05 is a gradient,
 not a floor); a floor would need `(value / 17.5) × 0.05`.
 
-**建立新勢力時仍會重骰野心**（`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`）。這是
-「成為君王這個新角色」，不是事件 nudges，但它確實與「永不變動」抵觸——一個野心 25 的
-將領叛變後會掉到 5–15，叛變行為因此驟變。若要嚴格遵守固定值，這五處也要拿掉。
-Founding a new faction still re-rolls ambition. That is a new role rather than an event
-nudge, but it does contradict "never changes" — a leader at 25 drops to 5–15 and their
-defection behaviour shifts sharply. Strictly honouring the fixed stat means removing those too.
+**建立新勢力與叛變都「不」重骰野心。** 原本五處用 `CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`
+把野心拉回 5–15，設定值已刪除。取而代之是**帳本冷卻**：`ambitionEvents` 每回合為視窗內
+每一次叛變寫一筆 −2（`AMBITION_DEFECTION_DELTA`），持續 20 回合
+（`AMBITION_DEFECTION_ROUNDS`）。**每次叛變各自一筆，所以會疊加**：叛變兩次就是 −4。
+只寫帳本、不寫可見 Event，因為符合條件的人每回合上百。
+Founding a faction and defecting both **no longer** re-roll ambition — all five re-roll sites and
+the config keys are gone. What replaced it is **cooling in the ledger**: one −2 row
+(`AMBITION_DEFECTION_DELTA`) per defection inside a 20-round window
+(`AMBITION_DEFECTION_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
+Event: a hundred-odd leaders match per round.
 
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
 
@@ -859,6 +893,20 @@ The place list gained search, an ownership filter and incremental loading. The w
 whole list each time the tab opens. Only `CONFIG.PLACE_LIST_PAGE_SIZE` (100) rows render,
 with the next page revealed on scroll. **The revealed count has to reset when the filter
 changes**, or it points into the tail of a different set and the list looks unresponsive.
+
+**勢力過濾是一個下拉選單，不是又一排按鈕。** 地點清單現在有搜尋、擁有權過濾
+（全部／有主／無主）與勢力過濾。勢力動輒上百個，一排按鈕排不下，所以用 `<select>`——
+樣式與事件日誌的勢力過濾一致。**選了勢力會把擁有權過濾切回「全部」**，因為「某勢力 +
+無主」在定義上永遠是空集合，留著只會給人一個看不懂的空清單。已滅亡與瓦解中的勢力仍然
+列出（地點會留下來，仍然找得到），但用既有的 `faction.collapsed` / `faction.collapsing`
+標出來，不另造字串。三個控制項都必須重設已顯示筆數。
+The faction filter is a **dropdown, not another chip row**: there can be hundreds of factions,
+which no row of buttons can hold, so it is a `<select>` styled to match the event log's. Picking
+a faction **switches the ownership filter back to All**, because "this faction + unowned" is
+empty by construction and leaving it selectable only produces a list nobody can read. Destroyed
+and collapsing factions stay in the list (their places persist) but are marked with the existing
+`faction.collapsed` / `faction.collapsing` words. All three controls must reset the revealed
+count.
 
 **`CONFIG` 是 `as const`，所以頁數要用 `useState<number>(...)`。** 否則 state 會被推成字面值
 `100`，setter 只接受回傳 `100`，第一次「再載入 100 筆」就編譯不過。這和自動播放速度 slider

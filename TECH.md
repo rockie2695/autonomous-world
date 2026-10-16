@@ -1281,7 +1281,7 @@ export const CONFIG = {
   PLACE_NEW_PER_ROUND: 1,        // 每回合新增地方
 
   // 道路 / Roads
-  ROAD_MAX_PER_PLACE: 3,         // 每個地方最多連接道路
+  ROAD_MAX_PER_PLACE: 4,         // 每個地方最多連接道路
   ROAD_NEW_PER_PLACE_MIN: 1,     // 新地方最少道路
   ROAD_NEW_PER_PLACE_MAX: 3,     // 新地方最多道路
 
@@ -1298,8 +1298,8 @@ export const CONFIG = {
 
   // 經濟 / Economy
   PLACE_BASE_INCOME: 10,
-  INCOME_KING_SHARE: 0.40,
-  INCOME_ADMIN_SHARE: 0.30,
+  INCOME_KING_SHARE: 0.30,
+  INCOME_ADMIN_SHARE: 0.40,
   INCOME_OTHER_SHARE: 0.30,
 
   // 戰鬥 / Battle
@@ -1680,7 +1680,7 @@ return { ..., crown: isKing, wuTier: tierFor(character.wu) };
 舊規則只有 `high` 給配件，結果約八成的將領身上完全讀不出能力差異。`mid` 是最常見的一檔，
 所以「大多數將領有額帶、素肩章、銅錢」本身就是資訊；`low` 則刻意畫成破舊的樣子，讓強弱一眼可辨。
 
-`TIER_MATERIAL` 把三段對應到**三種材質**（金 / 鋼 / 麻），三項能力共用同一組顏色，所以階級
+`TIER_MATERIAL` 把三段對應到**三種材質**（金 / 鋼 / 麻），三項能力共用同一組題色，所以階級
 是橫向可比的。銅錢一定要挖方孔——圓外形人人會畫，方孔才是辨識關鍵。
 
 四條渲染規則是實際渲染 27 種組合後才發現的 / four rendering rules, each learned from
@@ -1690,7 +1690,7 @@ rendering all 27 combinations:
    算盤珠／銅錢／補丁全擠在胸口與腰間，於是互相干擾而看不清楚。
 2. **同一個物件逐級劣化**：肩章是金寬板 → 素鋼板 → 細麻補丁；經濟是滿算盤 → 一枚銅錢 → 空袋。
    漸層看得見「順序」，三個無關物件則看不出來。肩章劣化時**還會變小**，因此大小也帶著階級。
-3. **弱的線索要比衣袍亮，且絕不用衣袍的顏色**：深色腰帶疊在深色衣袍上等於看不見，與衣袍同色的
+3. **弱的線索要比衣袍亮，且絕不用衣袍的題色**：深色腰帶疊在深色衣袍上等於看不見，與衣袍同色的
    縫線等於沒有縫線——兩者都會讓 `low` 段悄悄地退回「沒有訊號」。`low` 肩帶刻意是一條素帶，
    因為毛邊會模仿 `high` 肩章的流蘇。頭盔也往上挪到眉毛之上，原本的高度讓盔緣直接橫切過雙眼。
 4. **王冠壓掉頭飾**：君王不戴 `high` 頭盔、也不戴 `mid` 額帶，但保留 `low` 疤痕——疤痕不是
@@ -1811,7 +1811,7 @@ graph.addNode(place.id, {
 
 標籤顯示規則 / Label visibility：**純粹看縮放** —— 只有 `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO`（0.5，定義於 `gameConfig.ts`）才渲染地名，與兵力無關；由 `nodeReducer` 在拉遠時把 `label` 設為 `null`，並把 `labelRenderedSizeThreshold` 釘為 `0`。不要改回用節點尺寸過濾：那样兵多的地名在拉遠時仍會留著，而且縮放比例在該比較中會被抵消，本來就不是縮放門檻。跨過門檻時由 camera 的 `updated` 事件觸發 `refresh()`。覆蓋 `<canvas>`（聚光燈層）畫在 sigma 容器之下，故標籤永遠疊在光環之上。
 
-### 顏色轉換 / Color Conversion
+### 題色轉換 / Color Conversion
 
 Sigma.js/WebGL 不支援 HSL 格式，需轉換為 hex：
 
@@ -1943,7 +1943,7 @@ const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y }); // 每幀用當前
 //   created → #22d3ee（青）、attacked → #f87171（紅）
 // 移動點：easeInOutQuad 行進（尾跡 0.12），週期
 //   MOVE_ANIM_DURATION (1500ms) 行進 + MOVE_ANIM_PAUSE (2500ms) 停頓
-//   顏色 = 移動者陣營色（hslToHex），無陣營 → #5eead4
+//   題色 = 移動者陣營色（hslToHex），無陣營 → #5eead4
 ```
 
 時序常數位於 `src/lib/gameConfig.ts`：`SPOTLIGHT_ROUNDS`、`MOVE_ANIM_DURATION`、`MOVE_ANIM_PAUSE`。
@@ -2079,6 +2079,61 @@ pushes them off-screen on narrow viewports. **Clicking the already-active tab cl
 panel** (`rightTab === tab` → `setRightTab(null)` + `setRightPanelOpen(false)`) — a toggle,
 so the rail can always dismiss its own panel.
 
+
+### 白邊、黑影與星系 / Node border, shadow and star systems
+
+**每個地點都有一圈白邊與一層柔和黑影。** 星雲與近黑的底會吞掉沒有邊界的圓盤
+（"otherwise the star cloud and dark space background make place is difficult to see"）。
+兩者都畫在**既有的覆蓋層**上、且必須落在圓盤**之外**，因為覆蓋層的 DOM 在 sigma 的 WebGL
+canvas **之前** —— 只有圓盤外面那一圈會露出來。新開一張 canvas 蓋在 sigma 上面會擋住地名
+標籤，而專案規則禁止那樣做。
+
+**Sigma 3.0.3 的 ESM 組建沒有節點邊框支援。** `borders` 選項只存在於過期的 `sigma.min.js`
+UMD 產物、不可匯入，所以邊框無法設定在節點程式上，只能手繪 —— 這就是它畫在覆蓋層的原因。
+
+黑影用**幾圈同心描邊、透明度逐圈遞減**（`MAP_NODE_SHADOW_LAYERS` / `_FALLOFF`），
+而不是每個節點一個 `createRadialGradient`：後者是每幀上千個漸層物件。**近黑底上的黑影
+本來就近乎無效** —— 那是真實物理，不是 bug，它只在銀河真正亮的地方才看得出來，而那正是
+使用者要求的場景。
+
+**節點半徑的數學，因為它決定了這裡每一個尺寸。** Sigma 的 `scaleSize` 就是
+`size / sqrt(camera.ratio)`（預設 `itemSizesReference: "screen"`，沒有別的因子）。所以
+`size: 5.7` 的節點在 ratio 3 時半徑約 3.3px、預設視野（約 1.18）約 5.25px、ratio 0.08 約 20px。
+在預設縮放下圍著圓盤畫「1.3px」是算術上的細線，不是美感問題 —— 請對著數字調，不要靠眼睛。
+
+**放大到 `MAP_STAR_ZOOM_RATIO`（0.2）以下，地點變成星系。** sigma 的 ratio 越小越近，
+所以那是縮放滑桿約 95% 的位置 —— **一般視圖完全沒有星系**，別把「沒有」當成 bug。
+太陽 **不再是同一個題色**：`starClassOf(placeId)` 由地點 id 抽一個 `MAP_STAR_SUN_CLASSES`
+（`core` / `edge` 成對），在**建圖時**就存進節點的 `starClass`。圓盤由 sigma 畫、柔光由覆蓋層
+畫，是兩條路徑；讓兩邊各自抽並不會錯，但那是兩次雜湊，而且只靠「實作剛好一致」才會保持同步 ——
+節點層是唯一的事實來源，改動時不可能只改到一邊。`nodeReducer` 設 `res.color = starClass.core`，
+柔光用同一組的 `edge`，外圈是 `transparent(edge)`（`#rrggbb00`）而不是寫死的 rgba。
+大小是 `MAP_STAR_SUN_SCREEN_PX * starScale / sigma.scaleSize(1)`，所以跟著鏡頭走。
+**刻意不選深紅與深藍**：軌道才是勢力的通道，而太陽是星系裡最大的一塊題色。
+The sun is **no longer one colour**: `starClassOf(placeId)` draws one `MAP_STAR_SUN_CLASSES`
+entry (a `core`/`edge` pair) from the place id and stores it on the node as `starClass` **at
+graph-build time**. The disc is painted by Sigma and the glow by the overlay, two code paths;
+letting both draw their own is not wrong, but it is two hashes that agree only because the two
+implementations happen to match. `nodeReducer` sets `res.color = starClass.core` and the glow
+uses the same `edge`, with `transparent(edge)` for its outer stop rather than a hardcoded rgba.
+之下，畫在那裡會被道路壓過，太陽中央就多一道黑線。讓 sigma 畫圓盤才能維持「道路 → 太陽」
+的順序。因為大小是螢幕固定的，`nodeReducer` 必須跟著鏡頭重算，所以 `syncStarView` 在
+星系層是**每個 camera `updated` 都 `refresh()`**，不只是跨門檻時 —— 只在跨門檻 refresh 會讓
+太陽停在剛跨過時的大小。它與 `syncLabelVisibility` 是兩個不同的監聽，因為 0.2 與 0.6 是
+兩個不同門檻，跨過其中一個不會觸發另一個。
+
+**月球的軌道在行星之外**（`planetRadius + MAP_STAR_MOON_GAP_PX + n × _STEP_PX`）。第一版
+用 `0.34 × 節點半徑`，所以每顆月球都在圓盤裡面 —— 那正是「月球和行星都跑到地點裡面去」的
+來源。**軌道的勢力色要讀 `attrs.factionData?.color`，不能退回 `attrs.color`**：無主節點的
+題色是刻意壓暗的灰，在近黑背景上疊半透明幾乎等於沒畫，整個星系會塌成一個光點。
+行星與月球純粹由地點 id 決定，什麼都不存。地名畫在星系**上方**，靠 `defaultDrawNodeLabel`；
+sigma 內建的標籤程式只會把文字畫在節點右側、沒有垂直偏移，所以非星系層完全委派回去。
+
+**不要為「沒有聚光燈也沒有移動點」提早返回。** 這段 early return 存在過，而且會無聲地讓
+地圖整片空白：迴圈原本只為那兩個會動的東西存在，現在還負責**常駐裝飾**（白邊、黑影、
+星系）。剛重灌的世界是回合 1、零 `PLACE_CREATED`、零 `CHARACTER_MOVED`，於是兩個陣列都
+是空的、門檻就觸發了 —— 地點還看得見（圓盤是 sigma 畫的），但覆蓋層從未啟動。**症狀是
+「地點還在但裝飾全沒了」，看起來像渲染 bug 而不像迴圈沒跑。**
 ### 領地圖 / Territory View
 
 每個地方各自推出**一個一樣大的圓形力**，同勢力的力**累加**，不同勢力的力互相**抵擋**，
@@ -2180,7 +2235,7 @@ radius, four together ~83%.
   地點**節點**的 hover 與點擊不受影響：那屬於地圖本身。
   
   門檻讀自 `cameraRatioRef`（鏡頭 ratio 的鏡像），因為 `onMove` 是穩定閉包、拿不到 sigma 實例；
-  跨過門檻時會**立刻**清掉已亮起的顏色與提示，而不是等下一次 mousemove——那些提示是在比例還算大時
+  跨過門檻時會**立刻**清掉已亮起的題色與提示，而不是等下一次 mousemove——那些提示是在比例還算大時
   產生的，留著會變成一個已不該互動的面積層留下的殘影。
   
   Below `TERRITORY_INTERACTIVE_RATIO` (0.9) the area layer is fully inert: pointing at a patch of
@@ -2236,7 +2291,7 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
 
 `framedPlacement(mapper, radiusFraction)` 呼叫它兩次——一次取世界中心 `(0.5, 0.5)`，一次量出
 「兩個相鄰框化點之間」得到每世界單位的像素數。它住在 `src/lib/spaceShared.ts`，那是兩層共用的
-模組，同時也放著兩個顏色工具（`parseHex` / `withAlpha`），所以任一層都不必 import 另一層。
+模組，同時也放著兩個題色工具（`parseHex` / `withAlpha`），所以任一層都不必 import 另一層。
 
 - **這取代了一個真實的 bug。** sigma 的對應是
   `screen = (framed − camera.position) × scale + centre`，所以 `camera.x` 變大時世界內容往**左**移。
@@ -2276,7 +2331,7 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
   放到近黑的深空上它根本等於不存在，整層讀起來像沒有東西。讓它不會變成一整片白的是上面的密度區間，
   不是上限。
 - **色盤是暖的**（`SPACE_FOG_COLORS`：`#f2e6c8` → `#5c4c38`，近乎白的奶油到暗褐）。重點是它讀起來像
-  **被照亮的星塵**，不是冷灰的霧；`spaceFog.test.ts` 斷言每個顏色的紅通道都大於藍通道，所以它不會
+  **被照亮的星塵**，不是冷灰的霧；`spaceFog.test.ts` 斷言每個題色的紅通道都大於藍通道，所以它不會
   漂回冷色。
 - **它保留完整的可見性閘門**：漂移在離開視窗與分頁隱藏時暫停，`prefers-reduced-motion` 下只畫一幀
   靜態圖——與其他圖層完全相同。
@@ -2300,7 +2355,7 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
   `#1e3a5f`，而節點最多兩千個。所以取它的**構圖與色相，不取曝光**。
 - **星雲 token 也跟著降飽和**：`--color-ds-space-nebula` 原本是飽和的紫與藍，現在是灰紫與石板。
 - **不做半透明拖尾填色，也不用 `lighter` 混合**：疊加會吃掉道路的對比。
-- **所有顏色都在 `gameConfig.ts`**（`SPACE_GALAXY_COLOR_CORE/MID`、`NEBULA_COLORS`、
+- **所有題色都在 `gameConfig.ts`**（`SPACE_GALAXY_COLOR_CORE/MID`、`NEBULA_COLORS`、
   `STAR_COLORS`、`SPACE_FOG_COLORS`）。
 - 星點以 `1 - d³` 的邊緣淡出畫進烘焙圖，圓盤邊緣才不會出現突兀的截斷。
 
@@ -2314,13 +2369,13 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
 - **這是全專案唯一使用噪聲的 canvas 層。**
 - **噪聲來自 `three`，不是新相依**：`three/examples/jsm/math/SimplexNoise`。
 - **種子必須是真正的 PRNG**：傳入常數函式會讓所有梯度索引相同，場退化成平滑斜坡。
-- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種顏色。
+- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種題色。
 - **調色盤刻意壓進冷色半邊並降低彩度，而且斷言的是「上限」**：原本是 0–320 全色相、飽和度 78、
   alpha 0.72，那是在它**唯一**是背景時調的。放到暖色銀河上，那些絲帶會打架並吃掉道路對比，
   所以現在是 `195 → 280`、飽和度 45、alpha 0.55。`spaceFlow.test.ts` 斷言飽和度 < 60、
   alpha < 0.6、色相跨度 < 200°。
 - **不做半透明拖尾填色，也不用 `lighter` 混合**。
-- **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。
+- **所有題色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。
 - 色相是**量化**的，每幀零配置。
 
 
@@ -2723,13 +2778,18 @@ Below the midpoint the chance is exactly 0, and ambition averages 17 — so roug
 all leaders can never defect. That follows from the formula as written (0.05 is a gradient,
 not a floor); a floor would need `(value / 17.5) × 0.05`.
 
-**建立新勢力時仍會重骰野心**（`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`）。這是
-「成為君王這個新角色」，不是事件 nudges，但它確實與「永不變動」抵觸——一個野心 25 的
-將領叛變後會掉到 5–15，叛變行為因此驟變。若要嚴格遵守固定值，這五處也要拿掉。
-Founding a new faction still re-rolls ambition. That is a new role rather than an event
-nudge, but it does contradict "never changes" — a leader at 25 drops to 5–15 and their
-defection behaviour shifts sharply. Strictly honouring the fixed stat means removing those too.
+**建立新勢力與叛變都「不」重骰野心。** 原本有五處用
+`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`（`factionCollapse.ts` 兩處、`loyaltyCheck.ts` 三處）
+把野心拉回 5–15，設定值已一併刪除。取而代之的是**帳本冷卻**：`ambitionEvents` 每回合為視窗內
+每一次叛變寫一筆 `AMBITION_DEFECTION_DELTA`（−2），持續 `AMBITION_DEFECTION_ROUNDS`（20）回合。
+**每次叛變各自一筆，所以會疊加**：短時間叛變兩次是 −4 —— 連續叛變本身就是更強傾向的證據，
+封頂 −2 等於把它丟掉。只寫帳本、不寫可見 Event，因為符合條件的人每回合上百。
 
+Founding a faction and defecting both **no longer** re-roll ambition: all five re-roll sites
+and the config keys are gone. What replaced it is **cooling in the ledger** — one
+`AMBITION_DEFECTION_DELTA` (−2) row per defection inside a 20-round window
+(`AMBITION_DEFECTION_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
+Event: a hundred-odd leaders match per round.
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
 
 **`BarChart` 的取值也要走 `valueAt()`，不能走 `s.values[i]`。** 長條圖的**軸標籤**本來
@@ -2779,6 +2839,18 @@ The place list gained search, an ownership filter and incremental loading. The w
 whole list each time the tab opens. Only `CONFIG.PLACE_LIST_PAGE_SIZE` (100) rows render,
 with the next page revealed on scroll. **The revealed count has to reset when the filter
 changes**, or it points into the tail of a different set and the list looks unresponsive.
+
+**勢力過濾是一個下拉選單，不是又一排按鈕。** 地點清單有搜尋、擁有權過濾（全部／有主／無主）
+與勢力過濾。勢力動輒上百個，一排按鈕排不下，所以用 `<select>`，樣式與事件日誌的勢力過濾
+一致。**選了勢力會把擁有權過濾切回「全部」**，因為「某勢力 + 無主」在定義上永遠是空集合，
+留著只會給人一個看不懂的空清單。已滅亡與瓦解中的勢力仍然列出（地點會留下來，仍然找得到），
+但用既有的 `faction.collapsed` / `faction.collapsing` 標出來，不另造字串 —— 這三個狀態正是
+`leader-detail.tsx` 的 `statusRank()` 排序用的同一組。三個控制項都必須重設已顯示筆數。
+The faction filter is a **dropdown, not another chip row**: hundreds of factions will not fit in
+a row of buttons, so it is a `<select>` styled to match the event log's. Picking a faction
+switches ownership back to All, because "this faction + unowned" is empty by construction.
+Destroyed and collapsing factions stay listed — their places persist — but are marked with the
+existing `faction.collapsed` / `faction.collapsing` words. All three controls reset the count.
 
 **`CONFIG` 是 `as const`，所以頁數要用 `useState<number>(...)`。** 否則 state 會被推成字面值
 `100`，setter 只接受回傳 `100`，第一次「再載入 100 筆」就編譯不過。這和自動播放速度 slider

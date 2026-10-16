@@ -139,9 +139,20 @@ src/
     ├── api.ts             # apiFetch helper (unified 401 handling)
     ├── queryClient.tsx    # TanStack Query provider
     ├── validations.ts     # Zod validation schemas
-    ├── gameConfig.ts      # All tunable game values
-    ├── rng.ts             # Seeded RNG
-    ├── snapshot.ts        # Snapshot compression
+    ├── gameConfig.ts      # All tunable game values (the project's ONE config)
+    ├── rng.ts             # Seeded RNG (mulberry32, FNV-1a hashed seed, serialisable state)
+    ├── snapshot.ts        # Snapshot compression (gzip)
+    ├── defection.ts       # Defection value + chance, PURE — the stat is never stored
+    ├── placeEffects.ts    # Building effects + place output, one definition four consumers
+    ├── password.ts        # argon2id hashing (SERVER ONLY — never import from a client)
+    ├── passwordPolicy.ts  # Password length rule; imports NOTHING (see Authentication)
+    ├── publicWorld.ts     # Unauthenticated world read for the home page
+    ├── territory.ts       # Territory force field (pure logic, no DOM)
+    ├── spaceGalaxy.ts     # Background galaxy: core, nebula, stars (pure logic)
+    ├── spaceFog.ts        # Warm star-dust drift (pure logic)
+    ├── spaceFlow.ts       # Flow-field dust (pure logic; the only layer using noise)
+    ├── spaceShared.ts     # framedPlacement() + colour helpers shared by the space layers
+    ├── utils.ts           # Small shared helpers
     ├── i18n/              # Internationalization
     └── nameGenerator/     # Name generation (pure functions + unique-name scans)
         ├── person.ts      # Character names (classic 張飛 / epithet 霜狼·蓋爾)
@@ -157,6 +168,10 @@ server/
 ├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
 ├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (used by aiMove + battle escape)
 ├── adminAssign.ts         # grantAdmin/revokeAdmin — the ONLY writers of Place.administratorId
+├── income.ts              # splitIncome() — king 30% / admin 40% / everyone else 30%, never stored wrong
+├── battleReport.ts        # PLACE_CAPTURED arithmetic behind the event log's 戰報 panel
+├── uniqueNames.ts         # DB-backed alive-only uniqueness scans over the pure name generators
+├── tx.ts                  # Transaction helpers — only where a half-write destroys something
 ├── graph/
 │   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
@@ -177,9 +192,14 @@ src/components/
                            #   container, so WebGL paints the node discs and labels on top:
                            #     spotlight/move: pulsing rings (cyan=created, red=attacked)
                            #     + faction-colored travel dot for the displayed round's
-                           #     moves; this is the only rAF loop.
-                           #   The node glow/shadow layer was REMOVED (no place has a light
-                           #   effect at any zoom) — do not add a second canvas back.
+                           #     moves; this is the only rAF loop, and it also owns the
+                           #     persistent decoration: every node's white border + black
+                           #     shadow (non-star zoom) and, at star zoom, the sun glow,
+                           #     orbits, planets and moons. The loop must never be
+                           #     short-circuited when there are no events — see
+                           #     "Map Spotlight & Move Animation".
+                           #   The old radial glow sprite stays removed; do not add a
+                           #   second canvas back.
                            #   NOTE: canvas is a replaced element — keep `w-full h-full`
                            #   (inset-0 alone leaves it at intrinsic 300×150).
                            # - Camera: clicking a node animates the view to centre it;
@@ -202,6 +222,7 @@ everything it delegates to lives in a sibling file:
 ├── styles.ts               # The `GM_*` surface strings (GM_PANEL, GM_BTN, GM_SKEL…). Shared because the page, the event log, the charts and the leader modal all render the same surfaces
 ├── EventLog.tsx            # Bilingual event log (i18n t() with parameter substitution) + the faction / category / info-kind filters; header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
 ├── stats-charts.tsx        # Stats panel: 9 time-series charts in 4 switchable styles, the faction-power treemap, the character radar, and the shared ChartTooltip / ChartLegend. See "Stats Charts" below.
+├── BattleReport.tsx       # 戰報 panel for PLACE_CAPTURED; portalled to document.body so it does not scroll away with the log
 └── leader-detail.tsx       # DetailModal + FactionRanking. These two MUST stay together: the modal embeds the ranking, and the radar's hover preview opens the modal — splitting them would make stats-charts.tsx import page.tsx back
 ```
 
@@ -336,6 +357,7 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - `CHARACTER_MOVED` events are written by `server/moveEvent.ts#recordMove()` from all four `aiMove.ts` movement sites and the three `battle.ts` escape sites; no-op when `fromPlaceId === toPlaceId`
 - Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 1`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
 - The spotlight layer is the map's **only** rAF loop and it obeys the animation rules: it pauses when the canvas leaves the viewport (`IntersectionObserver`) and when `document.hidden`, and under `prefers-reduced-motion` it renders a single static frame (`STATIC_FRAME_MS`) with no loop at all. It listens for a mid-session `matchMedia` change too. Keep the gate in `isAnimating()` and keep the initial `resize()` call **after** `isAnimating`/`renderFrame` are declared (an earlier call hits the temporal dead zone)
+- **Do NOT reintroduce an early return for "no spotlights and no moves".** One existed, and it silently blanked the map. It was originally sound — the loop existed only for those two animated things — but the loop now also owns **persistent decoration**: the node border and shadow, and at star zoom the sun glow, orbits, planets and moons. A freshly seeded world is at round 1 with zero `PLACE_CREATED` and zero `CHARACTER_MOVED`, so both arrays are empty and that gate tripped: the places stayed visible (sigma paints the discs itself) while the whole overlay never started. **The symptom is a split screen — bare discs, no decoration — which looks like a rendering bug rather than a skipped loop.** Under `prefers-reduced-motion` the single static frame is still drawn, so nothing has to give for that rule.
 - **Z-order**: the single spotlight/move overlay `<canvas>` paints before the sigma container div, so place labels always render on top of it. Keep that DOM order. (The node glow/shadow canvas that used to sit below it is removed.)
 - **Label visibility**: labels are a **pure zoom rule** — they show only while `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO` (0.6), regardless of garrison. `nodeReducer` sets `label = null` when zoomed out and `labelRenderedSizeThreshold` is pinned to `0`. Do **not** reintroduce `labelRenderedSizeThreshold`: it compares on-screen node **size**, so garrisoned places kept their names when zoomed out, and the camera ratio cancels out of that comparison, so it was never a zoom threshold. The camera's `updated` event (bound via `sigma.getCamera().on`, since sigma does not re-emit it) refreshes on each crossing. Tune `LABEL_ZOOM_RATIO` in `gameConfig.ts`, not inline.
 - **One exception to the zoom rule**: the hovered node, the selected node, and the hovered node's graph neighbours always keep their label, so you can read a place and what it links to while zoomed out. `forceLabel` alone is **not** enough — it only bypasses `labelRenderedSizeThreshold`, so a `null` label has already left Sigma's label index and nothing can draw it. The gate must therefore read `if (!labelsVisibleRef.current && !isActive) res.label = null`, never null an active node.
@@ -371,20 +393,197 @@ events survived, and says so when all of them were filtered out.
 - Filtering is derived (`filterKey` + `useMemo`), never applied by mutating the fetched list, so toggling filters back off restores the full set for free
 - Rows are paged at `CONFIG.EVENT_LOG_PAGE_SIZE` (60); the total can reach tens of thousands
 
-### Map Glow, Shadow & Camera
+### Map Node Border, Shadow & Camera
 
-- **The node glow and drop shadow are REMOVED, at every zoom.** A second overlay `<canvas>` used
-  to paint an offset shadow then a faction-colored radial glow behind every node. No place has a
-  light effect now (the user's answer was "always, everywhere"), so the map is flatter but the roads
-  and nodes read cleaner, and the backdrop no longer competes with a glow. Do not add it back:
-  `getGlowSprite`, `SPRITE_SIZE`, `readDesignToken` and the shared `withAlpha` are gone from
-  `mapShared.ts` with it, and `MAP_GLOW_*` / `MAP_SHADOW_*` are gone from `gameConfig.ts`.
-  `MAP_SHADOW_FALLBACK` survives for one job only: the **label** text shadow.
+- **A white border and a small black shadow are drawn on every place, at every non-star zoom.** A
+  star cloud and a near-black backdrop eat node edges: a disc with no border smears into the
+  background and becomes genuinely hard to find. The user's words: "otherwise the star cloud and dark
+  space background make place is difficult to see."
+- Both layers go on the **existing** overlay `<canvas>`, and both must sit **outside** the node disc,
+  because the overlay is behind sigma's WebGL canvas. A new canvas *above* sigma would cover the place
+  labels, and the project forbids that (see "Space Backdrop" — one rAF loop, one overlay).
+- **Sigma 3.0.3's ESM build has no node-border support.** The `borders` option only exists in a stale
+  `sigma.min.js` UMD artifact and is not importable, so a border cannot be configured on the node
+  program. This is why the border is painted by hand. Do not try to reintroduce node borders.
+- The shadow is **concentric strokes at falling alpha** (`MAP_NODE_SHADOW_LAYERS`,
+  `MAP_NODE_SHADOW_LAYER_FALLOFF`), not one `createRadialGradient` per node — the latter is a thousand
+  gradient objects every frame.
+- **A black shadow on a near-black background is close to a no-op.** That is real physics, not a bug:
+  it only registers where the galaxy is genuinely bright. That is precisely the case the user asked
+  for, so keep it, but do not expect it to be visible over pure void.
+- Config: `MAP_NODE_BORDER_COLOR` / `MAP_NODE_BORDER_WIDTH` / `MAP_NODE_SHADOW_COLOR` /
+  `MAP_NODE_SHADOW_SPREAD` and the `MAP_NODE_SHADOW_LAYER_*` group.
+- **Node radius maths, because it governs every size choice here.** Sigma's `scaleSize` is
+  `size / sqrt(camera.ratio)` with the default `itemSizesReference: "screen"` — nothing else. So a
+  `size: 5.7` node is ~3.3px of radius at ratio 3, ~5.25px at the default fit (~1.18) and ~20px at
+  ratio 0.08. Anything drawn "1.3px" around a default-zoom disc is a hairline by arithmetic, not by
+  taste. Tune against those numbers, not by eye.
+- **Roads paint over the border** where they meet a place, because the overlay is behind sigma. It
+  reads as roads attaching to the place. Sigma's `EdgeClampedProgram` would stop them at the ring, but
+  that changes edge rendering wholesale and was deliberately not done.
+- The old **radial glow sprite** stays removed. Only the border and shadow came back;
+  `getGlowSprite`, `SPRITE_SIZE`, `readDesignToken` and `MAP_GLOW_*` are still gone from
+  `mapShared.ts` / `gameConfig.ts`, and `MAP_SHADOW_FALLBACK` survives for the **label** text shadow only.
+- **Roads get the same treatment, for the same reason, with the same trick.** `MAP_ROAD_COLOR` is a
+  deep blue (`#1e3a5f`) and on a near-black star cloud it is very hard to see. Once the nodes had
+  a border the roads became the only thing left invisible — the map read as "places you can see,
+  roads you cannot". The overlay sits BEFORE sigma's canvas, so a **wider** white stroke on the
+  overlay shows on both sides while sigma's road paints over the middle: that is a casing, not a
+  second road. It needs no second canvas (which would cover the place labels) and no
+  `EdgeClampedProgram` (which would change edge rendering wholesale).
+  - **The casing width is the road's own width plus the border on each side**, with the road's
+    width converted through the *same* `sigma.scaleSize(1)` the nodes use, so the casing keeps its
+    proportion to the road at every zoom.
+  - **Cull on "either endpoint inside the padded viewport"**, not a proper segment-vs-AABB test.
+    Roads join neighbouring places (ForceAtlas2, at most `ROAD_MAX_PER_PLACE` each), so an edge
+    crossing the frame with both ends far outside is vanishingly unlikely, and a real segment test
+    costs arithmetic per edge per frame.
+  - **Where a road meets a place both casings are white**, so they read as one continuous casing
+    rather than fighting. The old trade-off here (roads painting over the node ring) is unchanged.
+  - `MAP_ROAD_BORDER_COLOR` / `MAP_ROAD_BORDER_WIDTH`. No dark casing was added: the request was a
+    white border, and on this backdrop the white one already carries it.
+
 - Camera timing lives in `gameConfig.ts`: `MAP_CAMERA_ANIM_MS`, `MAP_FOCUS_ZOOM`, `MAP_FIT_PADDING`
 - **Camera coordinates are FRAMED, not raw.** Sigma's `createNormalizationFunction` maps the whole graph into a unit square centred on `(0.5, 0.5)` whose larger axis is exactly `1`, and the camera operates in that space. `graph.getNodeAttributes()` returns **raw** pre-normalisation coordinates and `sigma.getBBox()` returns the **raw** extent — feeding either to `camera.animate()` parks the camera outside the world and renders a blank map. Use `sigma.getNodeDisplayData(node)` for anything the camera consumes
 - Because the framed world is a unit square, "fit everything" is the **constant** centre `(0.5, 0.5)` + ratio `1` — independent of world size, node count, and viewport aspect (verified across 936×766, 500×900, 1600×400, 400×1200, 1200×1200). `MAP_FIT_PADDING` adds margin; `MAP_FOCUS_ZOOM` (<1) is a multiplier on that same baseline for `focusNode`, so the two views stay consistent. `resetView` uses this, **not** `animatedReset()`/`sigma.getBBox()`
 - The map's inner vignette is a design token, not a bespoke class: `--shadow-ds-map-vignette` in `@theme static` (globals.css), applied as `shadow-ds-map-vignette`
 - Camera animations run through `reducedMotionRef` (populated from `useReducedMotion`), giving `duration: 0`. It is a ref, not a direct closure, because the effect that builds the Sigma instance has an empty dependency array
+
+- **`camera.setState()` does not schedule a render — it only updates state and emits `updated`.**
+  Every programmatic camera write in this file therefore has to call `sigma.refresh()` after it.
+  `setZoom` (the zoom slider and the percentage box) did not, and the symptom was genuinely strange:
+  **the percentage changed and the map did not**. The backdrop layers looked fine because they
+  repaint from the camera's own `updated` event, and the map looked "stuck" only because it was.
+  It also meant the star systems could never be judged by zooming, since zoom did not repaint them.
+  If you add a camera write, put the `refresh()` next to it.
+
+### Map Star Systems (Stellaris-style, zoomed in)
+
+Past `MAP_STAR_ZOOM_RATIO` (0.2) a place stops being a dot and reads as a system: a sun, planets
+around it, moons around those. Sigma's ratio is **smaller when closer**, so "zoomed in" is
+`camera.ratio <= MAP_STAR_ZOOM_RATIO`. That is ~95% of the zoom slider's travel, so **at any normal
+zoom there are no systems at all** — do not go looking for a bug when a default view has none.
+
+- **The sun is sigma's own node disc, NOT overlay canvas.** The overlay sits before sigma's WebGL
+  canvas in the DOM, so anything painted there gets roads drawn over it — a dark line straight
+  through a bright sun. Letting sigma draw the disc keeps the order "roads → sun", identical to a
+  normal node. `nodeReducer` sets `res.color` to that class's `core` and
+  `res.size = MAP_STAR_SUN_SCREEN_PX * starScale / sigma.scaleSize(1)`.
+- **The sun has a colour per place, not one colour for every sun.** `starClassOf(placeId)` picks
+  one `MAP_STAR_SUN_CLASSES` entry (a `core`/`edge` pair) from the place id.
+  - **The class is decided ONCE, at graph-build time, and stored as the node's `starClass`.**
+    The disc is painted by `nodeReducer` and the glow by the overlay — two code paths in two
+    places. Both calling `createRng(node)` would not be *wrong*, but it is two hashes and it
+    only agrees because the two implementations happen to match. One value on the node means a
+    change cannot land on one side only.
+  - **`core` and `edge` travel together.** Split them and a sun wears another star's halo.
+  - **`createRng(placeId)`, never `id.charCodeAt(0) % n`.** The latter only sees the first
+    character, and ids often share a prefix, which would hand a whole batch of places one sun.
+  - **No deep red, no deep blue.** The *orbits* are the faction channel, and the sun is the
+    largest block of colour in the system; if suns could be any colour, a dark faction's orbits
+    would read as "a star".
+  - **The glow's outer stop is `transparent(edge)` (`#rrggbb00`), not a hardcoded rgba.** It used
+    to be `rgba(255, 154, 46, 0)` — one sun's colour, which stops matching the moment a sun
+    changes, and no config value governed it.
+- **Size follows the camera, through one multiplier.** Every `MAP_STAR_*_PX` is the size *at the
+  moment star view is entered*; what actually gets drawn is multiplied by `starScale`, computed by
+  `starScaleAt(ratio)` in `mapShared.ts`:
+  `clamp((MAP_STAR_ZOOM_RATIO / ratio) ^ MAP_STAR_ZOOM_SCALE_EXPONENT, MIN, MAX)`.
+  - **Anchored on `MAP_STAR_ZOOM_RATIO`, so the frame that crosses the threshold is exactly 1×.**
+    There is no jump on the way in. Anchoring anywhere else would make the systems pop.
+  - **Exponent 0.5 is sigma's own `size / sqrt(ratio)`**, so a system reacts to zoom exactly the
+    way a place node does. Across the whole star band (ratio 0.2 → 0.05) that is 1× → 2×: sun
+    11 → 22px, system radius 46 → 92px. `MAP_STAR_ZOOM_SCALE_MAX` is what stops the systems
+    overlapping at the closest zoom; the `MIN` floor of 1 is what keeps "pull back a little and you
+    are back to how it looked on entry" true, rather than a trail of unreadable specks.
+  - **What was drawn must not change with the camera.** Planet *count*, tilt and colour come from
+    `createRng(node)` and stay put; only the *radii* scale. Drawing a fresh radius per frame would
+    make a planet re-roll on every zoom.
+- **Planets within one system never share a colour, and neither do moons.** Each planet used to
+  `pick` its own from `MAP_STAR_PLANET_COLORS`, so four planets could come up the same colour and
+  read as one planet drawn twice — while "this system has four planets" is the entire point of the
+  layer. Fix: **shuffle once, then take the first N**, not re-pick per planet. Re-picking advances
+  the RNG an extra step, and since the RNG is seeded from the place id, one extra step re-rolls
+  the system's whole draw. The `[... ]` before `shuffle` is load-bearing: `CONFIG` is `as const`
+  and `shuffle` mutates in place.
+- **Moons are a palette, not one colour** (`MAP_STAR_MOON_COLORS`). They were all the same
+  near-white, so a planet with four moons read as four identical dots. Kept desaturated and lunar:
+  a moon is tiny, so anything vivid is noise and steals attention from its planet.
+- `starScale` lives in `starScaleRef`, because `nodeReducer` needs it and cannot reach the sigma
+  instance. `syncStarView` refreshes it on **every** camera `updated` while in star view and calls
+  `sigma.refresh()` there — not only on the threshold crossing, or the sun freezes at the size it
+  had when you crossed. This is a separate listener from `syncLabelVisibility` because 0.2 and
+  `LABEL_ZOOM_RATIO` (0.6) are two different thresholds, and crossing one does not fire the other.
+- **Planets and moons are derived from the place id alone** (`createRng(node)`), so a place always
+  looks the same and every client agrees with nothing stored. Purely decorative: giving them gameplay
+  meaning would need a simulation for it, and a mock would only look like one.
+- **Moon orbits are outside the planet** (`planetRadius + (GAP + n * STEP) * starScale`).
+  The first version used `0.34 × node radius`, so every moon sat *inside* the disc — which is exactly
+  the "moons and planets are inside the place" complaint. Do not reintroduce a radius relative to the
+  node. The gaps take `starScale` too: the planet radius is already scaled, so unscaled gaps would
+  keep the moon pinned while its planet grew.
+- **Orbits carry the faction colour, read from `attrs.factionData?.color`, never from
+  `attrs.color`.** An unowned node's colour is a deliberately dimmed grey, and at partial alpha on a
+  near-black background it is indistinguishable from nothing — the whole system collapses to a bare
+  sun. Unowned land gets `MAP_STAR_ORBIT_COLOR_UNOWNED` instead. This was found by looking, not by
+  reading: the code was correct and the feature was still invisible.
+- **The place name is drawn above the system**, so there is a `defaultDrawNodeLabel` that centres
+  the text at `-(MAP_STAR_SYSTEM_RADIUS_PX + MAP_STAR_LABEL_GAP_PX) * starScale` converted into graph
+  units. Sigma's built-in label program only draws text to the *right* of a node and offers no
+  vertical offset, so it is delegated to unchanged outside star view. The conversion factor is
+  shared with the sun size, so the two can never disagree — and both carry `starScale`, so the name
+  cannot outrun the system it names.
+- The trade-off: at this zoom **the garrison is no longer readable** (system size follows the camera,
+  not the garrison). That is the accepted cost; what this level of zoom is for is the number and
+  spread of systems.
+
+### Map Place Tooltip
+
+- **There are two hover paths, and they used to disagree.** `sigma.on('enterNode')` fires from
+  sigma's own container listener; the territory layer's `onMove` fires from the **wrapper** that
+  contains the container, so it runs on the bubble phase — *after* sigma's. Both wrote a place
+  tooltip for the same node, and the one that ran last won.
+- The loser used to pass `linkedPlaces: []`, commented "roads are hidden in this view". **That was
+  false**: edges are added unconditionally (`graph.addEdge`, no `hidden` setting anywhere) and are
+  fully visible in the territory view. The user-visible result was "two tooltips on a place, one
+  shows the linked places and one does not" — and because the empty one wrote last, **the empty one
+  is the only one you ever saw**.
+- **Both paths now go through `linkedPlaceNames(graph, nodeId)`** in `mapShared.ts`. One helper is
+  the fix; anything else leaves the two free to drift apart again. It is pure and tested.
+- **Only string labels count.** `nodeReducer` nulls `label` when zoomed out (that is the zoom rule),
+  so listing every neighbour would put a column of blanks in the tooltip. Note the helper reads the
+  **stored** attribute, which `nodeReducer` never writes back — so the names are available at every
+  zoom, which is exactly when the tooltip is most needed.
+- **The territory path also sets `hoveredNodeRef` / `hoveredNeighborsRef`** and refreshes, so
+  pointing at a place forces its neighbours' labels there too. `onLeave` clears both. Without this
+  the same node got two different treatments depending on which listener noticed it.
+- **Whoever sets the hover refs has to be able to clear them.** The territory path sets them, and
+  the only thing that used to clear them was Sigma's `leaveNode` — so the one case of "off the disc
+  and off the name" had nobody clearing them, and the place name plus its neighbours' names stayed
+  on screen long after the cursor had lost track of them. `onMove` therefore clears the refs when it
+  hits nothing **and** `sigmaHoverRef.current === null`.
+  - **`sigmaHoverRef` exists only for that check.** `leaveNode` and `mousemove` are two listeners on
+    one event; if they ran in the other order, clearing here would wipe the hover Sigma had just set
+    and the node's own name would flash off. Sharing `hoveredNodeRef` for both makes "I set it" and
+    "Sigma set it" indistinguishable, which is exactly what would break it.
+- **A place's hover target includes its own name label, and nothing that is not drawn.** Sigma draws
+  the name to the *right* of the disc, so the cursor routinely rests on a name while that name and
+  its neighbours' names are being force-shown. Without the label in the target, moving onto the name
+  made all of them vanish while the pointer was still on one of them. `placeLabelRect()` +
+  `pointInRect()` in `mapShared.ts` are pure and tested; `measureLabelWidth` **measures** the text
+  with the same font and the same `labelSizeOf()` expression `nodeReducer` uses, because a
+  character-count estimate is wrong by an order of magnitude for CJK (≈1em vs ≈0.55em) and the hit
+  box has to line up with the ink.
+  - **A label that is not drawn must not be a hit target.** Past `LABEL_ZOOM_RATIO` `nodeReducer`
+    nulls every label, so allowing the hit would mean "there is visibly nothing here, yet the cursor
+    stays glued to a place". Gated on `labelsVisibleRef`.
+  - **At star zoom the label is skipped**: it is drawn *above* the system, and the system is large
+    enough that the disc hit already covers it. A second geometry would only be a second thing to
+    get wrong.
+  - **A label hit beats any disc hit** (it scores distance 0). It is closer to the reader's intent
+    than being inside the disc of some other place.
+  - The width cache is keyed `place id + size` and cleared in the graph-rebuild effect, because a
+    dead place must not leave a stale width behind.
 
 ### Map Territory View (the zoom-out area map)
 
@@ -1586,12 +1785,25 @@ Below the midpoint the chance is exactly 0, and ambition averages 17 — so roug
 all leaders can never defect. That follows from the formula as written (0.05 is a gradient,
 not a floor); a floor would need `(value / 17.5) × 0.05`.
 
-**建立新勢力時仍會重骰野心**（`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`）。這是
-「成為君王這個新角色」，不是事件 nudges，但它確實與「永不變動」抵觸——一個野心 25 的
-將領叛變後會掉到 5–15，叛變行為因此驟變。若要嚴格遵守固定值，這五處也要拿掉。
-Founding a new faction still re-rolls ambition. That is a new role rather than an event
-nudge, but it does contradict "never changes" — a leader at 25 drops to 5–15 and their
-defection behaviour shifts sharply. Strictly honouring the fixed stat means removing those too.
+**建立新勢力與叛變都「不」重骰野心。** 原本有五處用
+`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`（`factionCollapse.ts` 兩處、`loyaltyCheck.ts` 三處）
+把野心拉回 5–15，設定值已一併刪除。取而代之的是**帳本冷卻**：`ambitionEvents` 每回合為
+視窗內每一次叛變寫一筆 `AMBITION_DEFECTION_DELTA`（−2），持續
+`AMBITION_DEFECTION_ROUNDS`（20）回合。**每次叛變各自一筆，所以會疊加**：短時間叛變兩次是
+−4。這是刻意選的——連續叛變本身就是更強傾向的證據，封頂 −2 等於把訊息丟掉。
+`charId` 存在 `Event.data` JSON 裡（事件表比欄位老），所以冷卻是查出 `DEFECTION` 事件後在
+JS 裡分組計數，不是 Prisma groupBy。**只寫帳本、不寫可見 Event**：符合條件的人每回合上百，
+逐筆寫進日誌只會淹掉其他資訊；`AmbitionEvent.reason` 已記錄原因。
+
+Founding a faction and defecting both **no longer** re-roll ambition. All five re-roll sites
+(`factionCollapse.ts` ×2, `loyaltyCheck.ts` ×3) and the config keys are gone. What replaced it is
+**cooling in the ledger**: `ambitionEvents` writes one `AMBITION_DEFECTION_DELTA` (−2) row per
+defection inside a `AMBITION_DEFECTION_ROUNDS` (20) round window. **One row per defection, so
+they stack** — two defections in quick succession is −4. That is deliberate: defecting twice in a
+row is itself the evidence, and capping at −2 would throw it away. `charId` lives inside the
+`Event.data` JSON (the events table predates the column), so the window is counted in JS rather
+than with a Prisma `groupBy`. **Ledger only, no visible Event**: a hundred-odd leaders match per
+round and per-row events would drown the log; `AmbitionEvent.reason` already carries the reason.
 
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
 

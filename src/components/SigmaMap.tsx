@@ -1,7 +1,7 @@
 // ============================================================================
 // Sigma 地圖元件 / Sigma Map component
 // ----------------------------------------------------------------------------
-// 純邏輯（顏色換算、sprite 快取、資料型別、`MapCameraControls`）都在
+// 純邏輯（題色換算、sprite 快取、資料型別、`MapCameraControls`）都在
 // `./mapShared`，這個檔案只留元件本身。
 //
 // The pure logic (colour conversion, the sprite cache, the data shapes and
@@ -13,7 +13,14 @@ import {
   brightenColor,
   hexToRgb,
   hslToHex,
+  linkedPlaceNames,
+  placeLabelRect,
+  pointInRect,
   solveLabelFontSize,
+  starClassOf,
+  starScaleAt,
+  transparent,
+  type StarClass,
   type Faction,
   type Place,
   type Tooltip,
@@ -78,6 +85,30 @@ export function SigmaMap({
   const focusPlaceRef = useRef<((node: string) => void) | null>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
   const hoveredNodeRef = useRef<string | null>(null);
+  /**
+   * sigma 自己「目前」掛在某個節點上嗎？
+   *
+   * Is Sigma itself currently hovering a node?
+   *
+   * 領地層的 `onMove` 也會設定 hover refs（讓它與 `enterNode` 待遇一致），但那兩件事
+   * 必須分開記：`onMove` 若什麼都沒指到要能清掉 refs，卻**不能**踩掉 sigma 真正掛著的
+   * 節點。共用一個 ref 就分不出「是我設的」與「是 sigma 設的」。
+   *
+   * The territory layer's `onMove` also sets the hover refs (so both paths treat a place the
+   * same), but those two facts have to be tracked separately: when `onMove` hits nothing it
+   * must be able to clear the refs without trampling a node Sigma is genuinely hovering.
+   * Sharing one ref makes "I set it" and "Sigma set it" indistinguishable.
+   */
+  const sigmaHoverRef = useRef<string | null>(null);
+  /**
+   * 地名文字寬度快取（`地點 id + 字級` → px）。放在元件層而不是效果層，是因為圖形重建的
+   * 效果也要清它，而那個效果看不到領地層的區域變數。
+   *
+   * The label-width cache (`place id + size` → px). It lives at component level rather than in
+   * an effect because the graph-rebuild effect has to clear it, and that effect cannot see the
+   * territory layer's locals.
+   */
+  const labelWidthCacheRef = useRef(new Map<string, number>());
   const hoveredNeighborsRef = useRef<Set<string>>(new Set());
   const selectedPlaceIdRef = useRef(selectedPlaceId);
   /** 目前是否顯示地名（純粹看鏡頭 ratio）/ Whether place names are currently shown (purely camera-ratio driven) */
@@ -109,6 +140,20 @@ export function SigmaMap({
    * sigma instance, so it is mirrored into a ref.
    */
   const starViewRef = useRef(false);
+  /**
+   * 星系尺寸相對於「剛進入星系層」的倍率。1 = 與改動前一模一樣；再放大就 > 1。
+   *
+   * The factor every star-system pixel constant is multiplied by, relative to the moment
+   * star view was entered. 1 = exactly as before; zooming further in makes it grow.
+   *
+   * 放在這裡（而不是每次在繪製迴圈裡算）是因為 `nodeReducer` 也要讀它，而那裡沒有
+   * sigma 實例。`syncStarView` 每個 camera `updated` 都更新一次。
+   *
+   * It is mirrored here rather than recomputed inside the draw loop because `nodeReducer`
+   * needs it too and has no sigma instance. `syncStarView` refreshes it on every camera
+   * `updated`.
+   */
+  const starScaleRef = useRef(1);
   /**
    * 星系名的抬升量（圖座標）。標籤程式畫在**圖座標**上，所以「星系外緣 + 間距」
    * 這段螢幕像素要先換算成圖座標；換算用的比例和太陽大小是同一個，所以兩者
@@ -247,21 +292,29 @@ export function SigmaMap({
         res.labelSize = Math.max(14, Math.min(20, data.size / 2));
 
         // ── 星系層：地點圓盤變成一顆太陽 / Star view: the place disc becomes a sun ──
-        // 星系在螢幕上是**固定大小**，所以節點大小必須隨鏡頭反向換算，否則拉遠時
-        // 太陽會跟著圓盤一起縮小——那就不是固定大小了。
+        // 太陽的**螢幕**大小是 `MAP_STAR_SUN_SCREEN_PX × starScale`，而節點大小是圖座標，
+        // 所以要用 `pxPerUnit` 換算回來。少了換算，拉遠時太陽會跟著圓盤一起縮水。
         //
-        // The system is a fixed size on screen, so the node size has to be converted
-        // against the camera; otherwise the sun shrinks with the disc as you pull back,
-        // which is the opposite of a fixed size.
+        // The sun's **screen** size is `MAP_STAR_SUN_SCREEN_PX × starScale`, but the node
+        // size is in graph coordinates, so it has to be converted back through `pxPerUnit`.
+        // Without the conversion the sun shrinks with the disc as you pull back.
+        //
+        // `starScale` 就是讓星系**跟著鏡頭走**的那個倍率（見 mapShared 的 `starScaleAt`）：
+        // 剛跨進星系層那一幀是 1×，繼續放大就長大。
+        //
+        // `starScale` is what makes the system follow the camera (see `starScaleAt` in
+        // mapShared): exactly 1× on the frame that enters star view, growing from there.
         if (starViewRef.current) {
           const pxPerUnit = sigmaRef.current?.scaleSize(1) || 1;
-          res.size = CONFIG.MAP_STAR_SUN_SCREEN_PX / pxPerUnit;
+          const starScale = starScaleRef.current;
+          res.size = (CONFIG.MAP_STAR_SUN_SCREEN_PX * starScale) / pxPerUnit;
           starLabelLiftRef.current =
-            (CONFIG.MAP_STAR_SYSTEM_RADIUS_PX + CONFIG.MAP_STAR_LABEL_GAP_PX) /
-            pxPerUnit;
+            ((CONFIG.MAP_STAR_SYSTEM_RADIUS_PX + CONFIG.MAP_STAR_LABEL_GAP_PX) *
+              starScale) /
+              pxPerUnit;
           // 暖色，不帶陣營色：陣營色留給軌道 /
           // Warm, and carrying no faction colour — that goes to the orbits
-          res.color = CONFIG.MAP_STAR_SUN_COLOR_CORE;
+          res.color = ((data.starClass ?? starClassOf(node)) as StarClass).core;
         }
 
         // 正在指向的地方（hover／選中／其鄰居）永遠保留地名 /
@@ -313,6 +366,7 @@ export function SigmaMap({
 
     sigma.on('enterNode', ({ node }) => {
       hoveredNodeRef.current = node;
+      sigmaHoverRef.current = node;
       // 找出所有連接的鄰居 / Find all connected neighbors
       const neighborIds = graph.neighbors(node);
       hoveredNeighborsRef.current = new Set(neighborIds);
@@ -324,14 +378,6 @@ export function SigmaMap({
         y: attrs.y,
       });
 
-      // 相連地點名稱 / Linked place names
-      const linkedPlaceNames = neighborIds
-        .map((id) => {
-          const attrs = graph.getNodeAttributes(id);
-          return typeof attrs.label === 'string' ? attrs.label : null;
-        })
-        .filter((name): name is string => name !== null);
-
       setTooltip({
         kind: 'place',
         x: viewportPos.x,
@@ -340,7 +386,9 @@ export function SigmaMap({
         faction: attrs.factionData,
         characterCount: attrs.characterCount,
         leaderTroops: attrs.leaderTroops,
-        linkedPlaces: linkedPlaceNames,
+        // 走**共用**的 helper，不要在這裡再寫一份鄰居→名字的邏輯 /
+        // Through the **shared** helper — do not re-derive neighbour→name here.
+        linkedPlaces: linkedPlaceNames(graph, node),
       });
 
       if (containerRef.current) {
@@ -350,6 +398,7 @@ export function SigmaMap({
 
     sigma.on('leaveNode', () => {
       hoveredNodeRef.current = null;
+      sigmaHoverRef.current = null;
       hoveredNeighborsRef.current = new Set();
       sigma.refresh(); // 強制重繪以觸發 nodeReducer / Force redraw to trigger nodeReducer
       setTooltip(null);
@@ -483,17 +532,24 @@ export function SigmaMap({
     // calls `refresh()` — the discs would never become suns. Listen for it separately and
     // refresh only on the crossing.
     const syncStarView = () => {
-      const star = sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
+      const ratio = sigma.getCamera().ratio;
+      const star = ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
       const flipped = star !== starViewRef.current;
       starViewRef.current = star;
-      // 星系層**每幀**都要 refresh：太陽是固定的螢幕大小，所以節點大小必須每次
-      // 跟著鏡頭換算；只在跨門檻時 refresh 會讓太陽在繼續縮放時停在舊大小。
+      // 星系大小跟著鏡頭走，所以倍率每次都要重算。它放在 ref 裡是因為 `nodeReducer`
+      // 需要讀它，而那裡抓不到 sigma 實例。
+      //
+      // The system's size follows the camera, so the factor is recomputed every time. It
+      // lives in a ref because `nodeReducer` needs it and cannot reach the sigma instance.
+      starScaleRef.current = star ? starScaleAt(ratio) : 1;
+      // 星系層**每幀**都要 refresh：太陽大小是鏡頭的函數，節點大小必須每次跟著換算；
+      // 只在跨門檻時 refresh 會讓太陽在繼續縮放時停在舊大小。
       // 不在星系層時只有跨門檻那一次需要。
       //
-      // Refreshing every frame at star zoom: the sun is a fixed size on screen, so the
-      // node size has to be recomputed against the camera each time. Refreshing only on
-      // the crossing would freeze the sun at the size it had when the threshold was
-      // passed. Outside star view the crossing alone is enough.
+      // Refreshing every frame at star zoom: the sun's size is a function of the camera, so
+      // the node size has to be recomputed each time. Refreshing only on the crossing would
+      // freeze the sun at the size it had when the threshold was passed. Outside star view
+      // the crossing alone is enough.
       if (star || flipped) sigma.refresh();
     };
     starViewRef.current = sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
@@ -563,6 +619,19 @@ export function SigmaMap({
       setZoom: (t: number) => {
         camera.setState({ ratio: zoomToRatio(t) });
         emitZoom();
+      // `setState` **只更新狀態並發出 `updated`，它不會排程重繪**。少了這一行，
+      // sigma 的 WebGL canvas 與覆蓋層都停在最後一個畫面：百分比會變、地圖不會。
+        //
+        // `setState` only updates the state and emits `updated`; it does **not** schedule a
+        // render. Without this line Sigma's WebGL canvas and the overlay both stay on the
+        // last painted frame: the percentage changes and the map does not.
+        //
+        // 覆蓋層會在下一個 rAF 影格自己追上（它每幀都從**活的**鏡頭狀態重畫），所以這裡
+        // 只需要讓 sigma 畫這一幀。
+        //
+        // The overlay catches up on the next rAF tick (it redraws from the *live* camera
+        // state every frame), so all that is needed here is to make Sigma paint this frame.
+        sigma.refresh();
       },
       onZoomChange: (cb: (zoom: number) => void) => {
         zoomSubscribers.add(cb);
@@ -633,8 +702,12 @@ export function SigmaMap({
     };
 
     graph.clear();
+    // 地名寬度快取跟著圖一起作廢：地方會死掉、會新增，節點 id 對應的名字也不再一樣 /
+    // The label-width cache dies with the graph: places die and are added, and a node id no
+    // longer means the same name.
+    labelWidthCacheRef.current.clear();
 
-    // 建立勢力顏色對照 / Create faction color map
+    // 建立勢力題色對照 / Create faction color map
     const factionMap = new Map<string, Faction>();
     for (const faction of factions) {
       factionMap.set(faction.id, faction);
@@ -673,6 +746,20 @@ export function SigmaMap({
         size: nodeSize,
         color,
         label: place.name,
+        // 太陽的光譜級在**建圖時**決定並存在節點上，而不是各自去抽。
+        //
+        // The star's spectral class is decided **here**, at build time, and stored on the node
+        // rather than drawn separately by each consumer.
+        //
+        // `nodeReducer`（畫圓盤）與覆蓋層（畫柔光）是兩個地方，兩邊各自 `createRng(node)`
+        // 抽一次並不會出錯，但那是兩次雜湊、而且**要靠「實作剛好一樣」才會一致**。
+        // 節點層是唯一的事實來源，改動時不可能只改到一邊。
+        //
+        // `nodeReducer` (the disc) and the overlay (the glow) are two different places. Both
+        // calling `createRng(node)` would not actually be wrong, but it is two hashes and it
+        // only agrees because the two implementations happen to match. One source of truth on
+        // the node means a change cannot land on one side only.
+        starClass: starClassOf(place.id),
         // 儲存額外資料 / Store extra data for tooltips
         placeData: place,
         factionData: faction,
@@ -804,7 +891,7 @@ useEffect(() => {
   // **不要**在這裡把 `territoryLabelEls.current` 重設成 null。這個 effect 跑在
   // render/commit 之後，而 `<span>` 的 ref 回呼是由 React 在 commit 階段填的；重設
   // 會把剛綁好的元素清掉，於是 draw() 的 label 迴圈每次都 `continue`，名字就永遠
-  // 停在 opacity 0 且沒有 transform（實測：元素在 DOM 裡、文字與顏色都正確，但
+  // 停在 opacity 0 且沒有 transform（實測：元素在 DOM 裡、文字與題色都正確，但
   // 停在 left:0/top:0）。
   //
   // **Never** reset `territoryLabelEls.current` here. This effect runs after
@@ -819,7 +906,7 @@ useEffect(() => {
   // The array only ever grows; surplus slots are `undefined` and are skipped by the
   // same guard, so there is no length bookkeeping to do here.
 
-  // 每個勢力索引的 RGB；索引順序對應 field.factions。顏色一律經過 hslToHex，
+  // 每個勢力索引的 RGB；索引順序對應 field.factions。題色一律經過 hslToHex，
   // 因為勢力色在資料庫裡是 hsl，WebGL 與 canvas 都要 hex。
   // RGB per faction index, in field.factions order. Colours always go through
   // hslToHex because faction colours are stored as hsl and both WebGL and canvas
@@ -970,8 +1057,8 @@ useEffect(() => {
     // 填色用平滑貼上：密度場本身就把邊界算成曲線，平滑只去掉最後的格子階梯 / 
     // The fill is blitted smoothed: the density field already computes the border as a
     // curve, so smoothing only removes the last of the cell stepping.
-    // 填色**關閉**平滑：整塊領地要是同一個顏色，開平滑會把邊緣糊成漸層（就是那個
-    // 「霧」）。每個格子用同一個顏色與同一個 alpha 填滿，所以區塊內部完全一致；邊緣的
+    // 填色**關閉**平滑：整塊領地要是同一個題色，開平滑會把邊緣糊成漸層（就是那個
+    // 「霧」）。每個格子用同一個題色與同一個 alpha 填滿，所以區塊內部完全一致；邊緣的
     // 階梯由上面那條向量邊界線蓋掉，所以關平滑不會變成馬賽克。
     //
     // The fill is drawn with smoothing **off**: an area must be one flat colour, and
@@ -981,7 +1068,7 @@ useEffect(() => {
     // into a mosaic.
     ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
 
-    // 填色：直接把同一組平滑曲線填滿。這是**平塗**（單一顏色、單一 alpha），所以不會
+    // 填色：直接把同一組平滑曲線填滿。這是**平塗**（單一題色、單一 alpha），所以不會
     // 有霧；而它的邊緣就是那條曲線，與邊界完全重合。
     //
     // Fill: flood the same smoothed loops. It is **flat** (one colour, one alpha), so
@@ -1139,6 +1226,50 @@ useEffect(() => {
   }
 
   /**
+   * 地名字級，必須和 `nodeReducer` 用**完全相同**的算式 —— 這裡算錯，標籤的命中框就會
+   * 和實際畫出來的文字對不準，而那正是這個功能唯一要做的事。
+   *
+   * The label size, and it must use **exactly** the same expression as `nodeReducer`: get this
+   * wrong and the hit box stops lining up with the text actually drawn, which is the only
+   * thing this feature has to get right.
+   */
+  const labelSizeOf = (size: number): number =>
+    Math.max(14, Math.min(20, size / 2));
+
+  /**
+   * 地名文字寬度，**量**出來而不是用字數估算。中文約 1em、拉丁約 0.55em，用字數估出來的
+   * 數字會整個錯一個量級，於是命中框不是太寬就是太窄。
+   *
+   * The label's text width, **measured** rather than estimated from the character count. CJK
+   * runs about 1em and Latin about 0.55em, so a character-count estimate is wrong by an order
+   * of magnitude and the hit box comes out far too wide or too narrow.
+   *
+   * 結果依 `地點 + 字級` 快取：每次 mousemove 都對每個地點量一次太貴，而名字不會變，
+   * 字級也只在兵力跨過門檻時才動。快取在圖形重建時清掉。
+   *
+   * Cached per `place + size`: measuring every place on every mousemove is far too expensive,
+   * and a name never changes while the size only moves when the garrison crosses a threshold.
+   * The cache is cleared when the graph is rebuilt.
+   */
+  const measureLabelWidth = (
+    node: string,
+    label: string,
+    size: number
+  ): number => {
+    const cache = labelWidthCacheRef.current;
+    const key = `${node}:${size}`;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    // 字體必須和 sigma 的 `labelFont` / `labelWeight` 一致，否則量到的是另一種字寬 /
+    // The font has to match Sigma's `labelFont` / `labelWeight`, or a different width is
+    // measured.
+    ctx.font = `bold ${labelSizeOf(size)}px monospace`;
+    const w = ctx.measureText(label).width;
+    cache.set(key, w);
+    return w;
+  };
+
+  /**
    * 游標是否指在某個**地方**節點上（螢幕距離）。
    * Whether the cursor is over a *place* node, in screen distance.
    *
@@ -1165,6 +1296,48 @@ useEffect(() => {
       const d = Math.hypot(vp.x - vx, vp.y - vy);
       if (d < bestDistance) {
         bestDistance = d;
+        best = site;
+        continue;
+      }
+      // 圓盤之外不算「指到這個地方」—— **但地名標籤算**。
+      //
+      // Outside the disc does not mean "not pointing at this place" — but its **name label**
+      // does. Sigma's built-in label sits to the *right* of the disc, so the name is routinely
+      // under the cursor while the forced labels (its own and its neighbours') are on screen.
+      // Without this, moving onto the name made every one of those labels vanish while the
+      // cursor was still resting on one of them.
+      //
+      // 星系層的地名畫在**正上方**，而且星系本身就很大，所以圓盤命中已經涵蓋得到，那裡
+      // 不特別處理標籤。
+      //
+      // At star zoom the name is drawn *above* the system and the system is already large, so
+      // the disc hit covers it and the label needs no special case there.
+      if (cameraRatioRef.current <= CONFIG.MAP_STAR_ZOOM_RATIO) continue;
+      // **地名沒有被畫出來時，它就不能算命中區。** 拉遠到 `LABEL_ZOOM_RATIO` 之上，
+      // `nodeReducer` 會把 label 設成 `null` —— 名字根本不在螢幕上，卻還讓它攔截游標的話，
+      // 就會出現「這裡明明什麼都沒有，游標卻一直黏著某個地方」。
+      //
+      // A name that is **not drawn** must not be a hit target. Past `LABEL_ZOOM_RATIO`,
+      // `nodeReducer` nulls every label: nothing is on screen, so letting it capture the
+      // cursor produces "there is visibly nothing here, yet the cursor stays glued to a place".
+      if (!labelsVisibleRef.current) continue;
+      const attrs = graph.getNodeAttributes(site.id) as {
+        size: number;
+        label?: unknown;
+      };
+      if (typeof attrs.label !== 'string' || attrs.label.length === 0) continue;
+      const rect2 = placeLabelRect({
+        cx: vp.x,
+        cy: vp.y,
+        radius: sigma.scaleSize(attrs.size),
+        textWidth: measureLabelWidth(site.id, attrs.label, attrs.size),
+        labelSize: labelSizeOf(attrs.size),
+      });
+      if (pointInRect(vx, vy, rect2)) {
+        // 標籤命中算「零距離」：它比圓盤命中更貼近意圖，必須贏過任何圓盤 /
+        // A label hit counts as distance zero: it is closer to the reader's intent than any
+        // disc hit, so it must win.
+        bestDistance = 0;
         best = site;
       }
     }
@@ -1203,10 +1376,37 @@ useEffect(() => {
         faction: attrs.factionData,
         characterCount: attrs.characterCount,
         leaderTroops: attrs.leaderTroops,
-        // 這個視圖裡道路是隱藏的，所以沒有「相連地點」可列 /
-        // Roads are hidden in this view, so there are no linked places to list
-        linkedPlaces: [],
+        // 與 `enterNode` **走同一個 helper**。
+        //
+        // Through the **same helper** as `enterNode`.
+        //
+        // 這裡原本是空的 `[]`，註解寫「這個視圖裡道路是隱藏的」—— 那是錯的：道路無條件
+        // 加入圖（`graph.addEdge`，沒有任何 `hidden` 設定），在領地視圖裡完全看得見。
+        //
+        // It used to be a literal `[]`, commented "roads are hidden in this view" — which is
+        // false: edges are added unconditionally (`graph.addEdge`, with no `hidden` setting
+        // anywhere) and are fully visible in the territory view.
+        //
+        // 而且這個空白其實**永遠看不到**，因為它寫得太晚：wrapper 的 `mousemove` 是冒泡
+        // 到 sigma container 之後才跑的，所以它覆蓋掉 `enterNode` 剛寫好的完整提示。
+        // 於是指向節點時會有兩個提示在搶，最後留下的一定是沒有「相連地點」的那一個。
+        //
+        // And the empty version was never actually visible anyway, because it wrote too
+        // late: this wrapper's `mousemove` bubbles *after* sigma's container listener, so it
+        // overwrote the complete tooltip `enterNode` had just written. Two tooltips were
+        // fighting over the same place and the one without the linked places always won.
+        linkedPlaces: linkedPlaceNames(graph, site.id),
       });
+      // 這一條路徑也要設定 hover 狀態，否則指到節點時不會像 `enterNode` 那樣把相連
+      // 地點的名稱強制顯示出來 —— 同一個節點，兩條路徑給兩種待遇。
+      //
+      // This path has to set the hover state too, or pointing at a node does not force its
+      // neighbours' names the way `enterNode` does — the same node, two different treatments.
+      if (hoveredNodeRef.current !== site.id) {
+        hoveredNodeRef.current = site.id;
+        hoveredNeighborsRef.current = new Set(graph.neighbors(site.id));
+        sigma.refresh();
+      }
       canvas.style.cursor = 'pointer';
       hoveredPlaceId = site.id;
 
@@ -1223,6 +1423,28 @@ useEffect(() => {
         draw();
       }
       return;
+    }
+
+    // ── 什麼都沒指到 → 把 hover refs 清掉 ──
+    // 這一段是**必要**的，不是保險。上面這條路徑會設定 hover refs，而先前唯一的清除來源是
+    // sigma 的 `leaveNode`；於是「離開圓盤、也離開地名」這一種情況，就完全沒有任何人負責
+    // 清除 —— 地名與相連地名會一直留在畫面上，游標早就不知道自己在哪了。
+    //
+    // This branch is **load-bearing**, not a belt-and-braces. The branch above sets the hover
+    // refs, and the only thing that used to clear them was Sigma's `leaveNode`. So the one case
+    // of "off the disc and off the name" had nobody clearing them: the name and its neighbours'
+    // names stayed on screen long after the cursor had lost track of them.
+    //
+    // **不能**踩掉 sigma 真正掛著的節點：`leaveNode` 與 `mousemove` 是同一個事件裡的兩個
+    // 監聽器，若順序反過來，這裡會把 sigma 剛設好的 hover 清掉，節點名稱反而會閃一下不見。
+    //
+    // It must not trample a node Sigma is genuinely hovering: `leaveNode` and `mousemove` are two
+    // listeners on one event, and if they run in the other order this would wipe the hover Sigma
+    // just set, making the node's own name flash off.
+    if (sigmaHoverRef.current === null && hoveredNodeRef.current !== null) {
+      hoveredNodeRef.current = null;
+      hoveredNeighborsRef.current = new Set();
+      sigma.refresh();
     }
 
     // ── 指在勢力的一片面積上 → 勢力提示 ──
@@ -1296,6 +1518,14 @@ useEffect(() => {
     canvas.style.cursor = '';
     hoveredPlaceId = null;
     setTooltip(null);
+    // `onMove` 現在也會設定 hover refs（與 `enterNode` 同一套待遇），所以離開這一層
+    // 時必須一起清掉，否則會留下一個永遠亮著、還強制顯示名稱的節點。
+    //
+    // `onMove` now sets the hover refs too (the same treatment `enterNode` gets), so leaving
+    // has to clear them, or a node is left permanently highlighted with a forced label.
+    hoveredNodeRef.current = null;
+    hoveredNeighborsRef.current = new Set();
+    sigmaRef.current?.refresh();
     if (lit !== null) {
       lit = null;
       draw();
@@ -1523,7 +1753,7 @@ useEffect(() => {
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
 
-    // 動畫點顏色 = 移動者陣營色（無陣營用青綠）/
+    // 動畫點題色 = 移動者陣營色（無陣營用青綠）/
     // Move dot color = mover's faction color (teal fallback)
     const factionColors = new Map<string, string>();
     for (const faction of factions) {
@@ -1571,6 +1801,64 @@ useEffect(() => {
       const maxX = Math.max(tl.x, br.x) + pad;
       const minY = Math.min(tl.y, br.y) - pad;
       const maxY = Math.max(tl.y, br.y) + pad;
+
+      // ── 道路白邊 / Road casing ──────────────────────────────────────────────
+      // 和節點白邊**完全同一個理由**：星雲與近黑的底會吃掉邊界，`MAP_ROAD_COLOR`
+      // 是一條深藍 (#1e3a5f)，壓在星雲上幾乎看不見。節點加了白邊之後看得見了，
+      // 道路卻還是幽靈線 —— 整張圖變成「看得見的地方、看不見的路」。
+      //
+      // Exactly the node border's reason: a star cloud and a near-black backdrop eat
+      // edges, and `MAP_ROAD_COLOR` is a deep blue (#1e3a5f) that barely survives on top of
+      // one. Once the nodes gained a border the roads became the only thing left invisible —
+      // the map read as "places you can see, roads you cannot".
+      //
+      // 手法也一樣，而且**必須**一樣：覆蓋層在 sigma 的 canvas **之前**，所以在這裡描
+      // 一條**比較粗的**白線，sigma 的道路正好壓在白線中間，兩側各露出一條白邊。這就是
+      // 一個「外框」而不是第二條路。**不需要**新開一張 canvas（會蓋住地名標籤），
+      // 也不需要 `EdgeClampedProgram`（會改掉整個邊的渲染）。
+      //
+      // The trick is the same, and has to be: the overlay sits BEFORE sigma's canvas, so a
+      // **wider** white stroke here shows on both sides while sigma's road paints over the
+      // middle. That makes a casing rather than a second road. It needs no second canvas
+      // (which would cover the place labels) and no `EdgeClampedProgram` (which would change
+      // edge rendering wholesale).
+      //
+      // 與節點白邊相遇時兩者都是白的，讀起來就是一條連續的白邊，不會打架。
+      //
+      // Where a road meets a place both this and the node border are white, so they read as
+      // one continuous casing rather than fighting.
+      const pxPerUnit = sigma.scaleSize(1);
+      ctx.strokeStyle = CONFIG.MAP_ROAD_BORDER_COLOR;
+      ctx.lineCap = 'round';
+      graph.forEachEdge((_edge, attrs, source, target) => {
+        const a = graph.getNodeAttributes(source) as { x: number; y: number };
+        const b = graph.getNodeAttributes(target) as { x: number; y: number };
+        // 只畫「有端點在視窗內」的道路。用端點判斷而不是線段對 AABB 逐格測試：道路
+        // 連的是相鄰據點（ForceAtlas2 + 每地最多 4 條），兩端都遠在視窗外卻橫穿畫面
+        // 的情形幾乎不存在，而逐格測試每幀要多付一次線段運算。
+        //
+        // Only roads with an endpoint in the viewport. Testing "either endpoint" rather than
+        // a proper segment-vs-AABB overlap: roads join neighbouring places (ForceAtlas2,
+        // at most 4 each), so an edge crossing the frame with both ends far outside is
+        // vanishingly unlikely, and a real segment test costs arithmetic per edge per frame.
+        const aIn = a.x >= minX && a.x <= maxX && a.y >= minY && a.y <= maxY;
+        const bIn = b.x >= minX && b.x <= maxX && b.y >= minY && b.y <= maxY;
+        if (!aIn && !bIn) return;
+        const va = sigma.graphToViewport({ x: a.x, y: a.y });
+        const vb = sigma.graphToViewport({ x: b.x, y: b.y });
+        // 道路本身在螢幕上的粗細，用和節點**同一套**換算（`scaleSize`），所以兩層的
+        // 相對比例在任何縮放下都一致。
+        //
+        // The road's own on-screen thickness, converted with the **same** `scaleSize` the
+        // nodes use, so the casing keeps its proportion to the road at every zoom.
+        const roadPx = pxPerUnit * ((attrs.size as number) ?? 1);
+        ctx.lineWidth = roadPx + CONFIG.MAP_ROAD_BORDER_WIDTH * 2;
+        ctx.beginPath();
+        ctx.moveTo(va.x, va.y);
+        ctx.lineTo(vb.x, vb.y);
+        ctx.stroke();
+      });
+      ctx.lineCap = 'butt';
 
       if (!starView) {
         for (const node of graph.nodes()) {
@@ -1652,7 +1940,16 @@ useEffect(() => {
       // It rides the existing rAF loop and adds no second one: the map having exactly one
       // animation loop is what keeps it cheap and keeps the pause rules enforceable.
       if (starView) {
-        const systemRadius = CONFIG.MAP_STAR_SYSTEM_RADIUS_PX;
+        // 星系**跟著鏡頭走**：所有 `*_PX` 都是「剛進入星系層」時的大小，實際畫出來要乘上
+        // 這個倍率。倍率由 `syncStarView` 在每個 camera `updated` 更新，所以這一幀讀到的
+        // 一定是當下的鏡頭，而不是開始繪製時的舊值。
+        //
+        // The system follows the camera: every `*_PX` is the size at the moment star view
+        // was entered, and what gets drawn is multiplied by this. `syncStarView` refreshes
+        // the factor on every camera `updated`, so this frame reads the current camera
+        // rather than a stale value from when drawing started.
+        const starScale = starScaleRef.current;
+        const systemRadius = CONFIG.MAP_STAR_SYSTEM_RADIUS_PX * starScale;
         const sunPulse =
           0.5 + 0.5 * Math.sin((t / CONFIG.MAP_STAR_SUN_PULSE_MS) * Math.PI);
         const moonPhase =
@@ -1663,30 +1960,60 @@ useEffect(() => {
             x: number;
             y: number;
             color?: string;
+            factionData?: { color: string } | null;
+            starClass?: StarClass;
           };
           if (attrs.x < minX || attrs.x > maxX) continue;
           if (attrs.y < minY || attrs.y > maxY) continue;
 
           const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y });
-          // 軌道是陣營色 —— 放大到星系層之後，這是唯一還看得到陣營的地方 /
-          // Orbits carry the faction colour, the only place it survives at this zoom
-          const orbitColor = attrs.color ?? CONFIG.MAP_MOVE_DOT_FALLBACK;
+          // 軌道是勢力色 —— 放大到星系層之後，這是唯一還看得到陣營的地方。
+          // **不能**退回節點自己的題色：無主之地的節點色是刻意壓暗的灰，在近黑背景上
+          // 幾乎等於沒畫，整個星系會塌成一個光點。所以無主之地改用一個站得住的冷色 /
+          // Orbits carry the faction colour — the only place ownership survives at this zoom.
+          // It must NOT fall back to the node's own colour: an unowned node's colour is a
+          // deliberately dimmed grey, which on a near-black background is almost the same as
+          // nothing, collapsing the whole system into a single dot. Unowned land gets a
+          // colour that actually holds up instead.
+          const factionHsl = attrs.factionData?.color;
+          const orbitColor = factionHsl
+            ? hslToHex(factionHsl)
+            : CONFIG.MAP_STAR_ORBIT_COLOR_UNOWNED;
 
           // 太陽柔光 / The sun's glow
+          // 柔光跟著星星一起放大。不跟的話，拉遠時太陽長大而光暈縮成一圈小點。
+          //
+          // 柔光用**同一個**光譜級的外圈色 —— 圓盤由 sigma 畫、柔光在這裡畫，兩邊不同步
+          // 就會變成「一個核心配著別顆星的光暈」。`attrs.starClass` 是建圖時就存好的，
+          // 所以它和 `nodeReducer` 讀的是同一份，不靠兩邊「剛好抽到一樣」。
+          //
+          // The glow uses **the same** class's edge colour: the disc is painted by Sigma and
+          // the glow right here, and if the two drift you get one core wearing another star's
+          // halo. `attrs.starClass` was stored at build time, so this and `nodeReducer` read
+          // one value rather than both happening to draw the same one.
+          const starClass = (attrs.starClass ?? starClassOf(node)) as StarClass;
+          const sunRadiusPx = CONFIG.MAP_STAR_SUN_SCREEN_PX * starScale;
           const glowOuter =
-            CONFIG.MAP_STAR_SUN_SCREEN_PX *
-              (1 + CONFIG.MAP_STAR_SUN_PULSE_AMP * sunPulse) +
-            CONFIG.MAP_STAR_SUN_GLOW;
+            sunRadiusPx * (1 + CONFIG.MAP_STAR_SUN_PULSE_AMP * sunPulse) +
+            CONFIG.MAP_STAR_SUN_GLOW * starScale;
           const glow = ctx.createRadialGradient(
             vp.x,
             vp.y,
-            CONFIG.MAP_STAR_SUN_SCREEN_PX * 0.75,
+            sunRadiusPx * 0.75,
             vp.x,
             vp.y,
             glowOuter
           );
-          glow.addColorStop(0, CONFIG.MAP_STAR_SUN_COLOR_EDGE);
-          glow.addColorStop(1, 'rgba(255, 154, 46, 0)');
+          // 外圈是**同一個題色的全透明版**（`#rrggbb00`），所以漸層一定收在太陽的色相上。
+          // 原本這裡寫死 `rgba(255, 154, 46, 0)` —— 那是其中一種太陽的題色，太陽一換色就
+          // 對不上了，而且那個 rgba 沒有任何設定值在管它。
+          //
+          // The outer stop is **the same hue at zero alpha** (`#rrggbb00`), so the gradient can
+          // only ever fade out in the sun's own colour. It used to be a hardcoded
+          // `rgba(255, 154, 46, 0)` — one sun's colour, which stops matching the moment a sun
+          // changes colour, and not a single config value governed it.
+          glow.addColorStop(0, starClass.edge);
+          glow.addColorStop(1, transparent(starClass.edge));
           ctx.globalAlpha = CONFIG.MAP_STAR_SUN_GLOW_ALPHA;
           ctx.fillStyle = glow;
           ctx.beginPath();
@@ -1705,6 +2032,13 @@ useEffect(() => {
             CONFIG.MAP_STAR_PLANET_MIN,
             CONFIG.MAP_STAR_PLANET_MAX
           );
+          // 每個星系洗一次牌，四顆行星各拿一個**不重複**的題色。`[... ]` 是必要的：
+          // `CONFIG` 是 `as const`，`shuffle` 會就地改寫，不複製會動到設定本身。
+          //
+          // One shuffle per system, so the planets take distinct colours. The `[... ]` matters:
+          // `CONFIG` is `as const` and `shuffle` mutates in place, so copying is what keeps the
+          // config itself intact.
+          const planetColors = rng.shuffle([...CONFIG.MAP_STAR_PLANET_COLORS]);
 
           for (let i = 0; i < planetCount; i++) {
             const orbit =
@@ -1718,13 +2052,29 @@ useEffect(() => {
               ) *
                 Math.PI) /
               180;
-            const radius = rng.float(
+            // 抽的是**倍率**不是像素：同一顆行星在放大時會跟著長大，而重抽的結果（哪些地點有幾顆
+          // 行星、哪顆是氣態巨行星）不變 —— 那是從地點 id 抽出來的，不該因為縮放而改變。
+          //
+          // The draw is a **factor**, not a pixel count: the same planet grows as you zoom,
+          // while what was drawn (how many planets, which one is the gas giant) is derived
+          // from the place id and must not change with the camera.
+          const radius =
+            rng.float(
               CONFIG.MAP_STAR_PLANET_MIN_PX,
               CONFIG.MAP_STAR_PLANET_MAX_PX
-            );
-            const color =
-              rng.pick([...CONFIG.MAP_STAR_PLANET_COLORS]) ??
-              CONFIG.MAP_STAR_PLANET_COLORS[0];
+            ) * starScale;
+            // 同一個星系裡的行星**題色不重複**。原本每顆各自 `pick`，所以四顆行星有時會抽到同一個題色，
+            // 看起來就像同一顆行星畫了兩次 —— 而「這是一個有四顆行星的星系」正是這一層要說的
+            // 事情。做法是**先洗牌再取前 N 個**，不是逐顆重抽：重抽會讓 rng 的狀態多走一步，
+            // 而 rng 是從地點 id 種出來的，多走一步就代表這個星系整組抽樣都換了。
+            //
+            // Planets within one system **never share a colour**. Each used to `pick` its own,
+            // so four planets could come up the same colour and read as one planet drawn twice
+            // — while "this system has four planets" is the whole point of the layer. The fix is
+            // **shuffle once, then take the first N**, not re-picking per planet: re-picking
+            // advances the RNG one extra step, and since the RNG is seeded from the place id,
+            // one extra step re-rolls this system's entire draw.
+            const color = planetColors[i % planetColors.length];
             const moonCount = rng.int(0, CONFIG.MAP_STAR_MOON_MAX);
 
             // 開普勒第三式：內圈轉得比外圈快，否則四顆行星像同一個時鐘 /
@@ -1751,7 +2101,7 @@ useEffect(() => {
             );
             ctx.strokeStyle = orbitColor;
             ctx.globalAlpha = CONFIG.MAP_STAR_ORBIT_COLOR_ALPHA;
-            ctx.lineWidth = CONFIG.MAP_STAR_ORBIT_WIDTH;
+            ctx.lineWidth = CONFIG.MAP_STAR_ORBIT_WIDTH * starScale;
             ctx.stroke();
             ctx.globalAlpha = 1;
 
@@ -1770,10 +2120,16 @@ useEffect(() => {
             // 月球繞的是**行星**，軌道半徑在行星之外 /
             // Moons orbit the **planet**, at a radius outside it
             for (let m = 0; m < moonCount; m++) {
+              // 行星本身已經是螢幕像素（含倍率），所以這裡的間距只要同樣乘上倍率，
+              // 月球就不會變成「行星變大、月球還擠在同樣距離」的比例失真。
+              //
+              // The planet radius is already screen pixels (scale included), so the gaps
+              // take the same factor — otherwise the planet grows while the moon stays
+              // pinned at the same distance, which distorts the proportion.
               const moonOrbit =
                 radius +
-                CONFIG.MAP_STAR_MOON_GAP_PX +
-                m * CONFIG.MAP_STAR_MOON_STEP_PX;
+                (CONFIG.MAP_STAR_MOON_GAP_PX + m * CONFIG.MAP_STAR_MOON_STEP_PX) *
+                  starScale;
               const a =
                 moonPhase * (1 + m * CONFIG.MAP_STAR_MOON_SPEED_STEP) +
                 (m / CONFIG.MAP_STAR_MOON_MAX) * Math.PI * 2;
@@ -1781,11 +2137,17 @@ useEffect(() => {
               ctx.arc(
                 px + moonOrbit * Math.cos(a),
                 py + moonOrbit * Math.sin(a),
-                CONFIG.MAP_STAR_MOON_SIZE,
+                CONFIG.MAP_STAR_MOON_SIZE * starScale,
                 0,
                 Math.PI * 2
               );
-              ctx.fillStyle = CONFIG.MAP_STAR_MOON_COLOR;
+              // 每顆月球各抽一個題色。單一題色的月球在四顆並排時會看起來像四個一樣的點。
+              //
+              // Each moon draws its own colour. With one colour, four moons in a row read as
+              // four identical dots.
+              ctx.fillStyle =
+                rng.pick([...CONFIG.MAP_STAR_MOON_COLORS]) ??
+                CONFIG.MAP_STAR_MOON_COLORS[0];
               ctx.fill();
             }
           }
@@ -1864,18 +2226,26 @@ useEffect(() => {
       // A paused ring still leaves one frame on screen, so it never blanks out
     };
 
-    // 沒有聚光燈也沒有移動 → 不啟動動畫迴圈。這個提早返回必須放在
-    // isAnimating / renderFrame 宣告之後：resize 閉包會用到它們，而
-    // ResizeObserver 已經註冊了。提早返回會讓那兩個 const 永遠停在 TDZ，
-    // 於是每次容器改變尺寸（切換桌機／手機）都丟 ReferenceError /
-    // No spotlights and no moves means no animation loop — but this early
-    // return must come *after* isAnimating / renderFrame are declared: the
-    // resize closure touches them and the ResizeObserver is already live.
-    // Returning early left both consts in the TDZ, so every container resize
-    // (desktop <-> mobile) threw.
-    if (visibleSpotlights.length === 0 && validMoves.length === 0) {
-      return () => resizeObserver.disconnect();
-    }
+    // 這裡**不能**因為「沒有聚光燈也沒有移動點」就提早返回。
+    //
+    // There must be NO early return here for "no spotlights and no moves".
+    //
+    // 那個判斷原本是合理的：迴圈只為了那兩個會動的東西而存在，沒有事件就不必燒
+    // requestAnimationFrame。但現在這個迴圈還負責**常駐裝飾** —— 節點白邊、黑影，
+    // 以及星系層的柔光、軌道、行星與月球。少了它們，一個剛重灌、還沒有任何事件的
+    // 世界（回合 1、零 PLACE_CREATED、零 CHARACTER_MOVED）就會整片空白：地點看得到，
+    // 因為圓盤是 sigma 自己畫的，而覆蓋層從來沒有啟動過。
+    //
+    // That check was once reasonable: the loop existed for those two animated things, so no
+    // events meant no reason to burn requestAnimationFrame. But the loop now also owns
+    // **persistent decoration** — the node border and shadow, and at star zoom the glow,
+    // orbits, planets and moons. Skipping it leaves a freshly seeded world (round 1, zero
+    // PLACE_CREATED, zero CHARACTER_MOVED) drawing nothing at all: the places stay visible
+    // because Sigma paints the discs itself, while the overlay never started.
+    //
+    // 減少動態效果時 `isAnimating()` 為 false，仍然只畫一幀靜態畫面 —— 那條規則沒有變，
+    // 也不需要為此讓步。/ Under reduced motion `isAnimating()` is false and a single static
+    // frame is still drawn — that rule is unchanged and needs no concession here.
 
     const tick = (now: number) => {
       if (!isAnimating()) {

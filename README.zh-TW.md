@@ -110,7 +110,7 @@ autonomous-world/
 │       ├── territory.ts           # 領地形力場（純邏輯，不碰 DOM）
 │       ├── spaceGalaxy.ts          # 背景銀河：核、星雲、星點（純邏輯）
 │       ├── spaceFog.ts             # 銀河之上、地圖之下的暖色星塵，緩慢漂移（純邏輯）
-│       ├── spaceShared.ts          # 共用：sigma 的框化→視窗定位 + canvas 顏色工具
+│       ├── spaceShared.ts          # 共用：sigma 的框化→視窗定位 + canvas 題色工具
 │       ├── i18n/                  # 國際化（中/英）
 │       │   ├── index.ts           # 語言管理
 │       │   ├── zh.ts              # 繁體中文翻譯
@@ -122,7 +122,7 @@ autonomous-world/
 │           └── epithet.ts         # 共用的兩字稱號元件
 ├── src/components/
 │   ├── SigmaMap.tsx               # 互動式圖形地圖（Sigma.js + graphology）
-│   ├── mapShared.ts               # SigmaMap 的純邏輯：顏色換算、型別、MapCameraControls
+│   ├── mapShared.ts               # SigmaMap 的純邏輯：題色換算、型別、MapCameraControls
 │   ├── BattleReport.tsx           # 戰報彈窗（攻守算式）
 │   ├── SpaceGalaxy.tsx             # 烘焙後自轉的銀河，最底層（Canvas 2D）
 │   ├── SpaceFog.tsx                # 銀河之上、地圖之下的暖色星塵，緩慢漂移（Canvas 2D）
@@ -184,7 +184,7 @@ autonomous-world/
 
 ### 勢力
 - 角色可歸屬於某個勢力（王國/國家）
-- 每個勢力有國王、顏色、領地
+- 每個勢力有國王、題色、領地
 - 當國王死亡，勢力進入「瓦解中」狀態並逐漸解散
 - 只有勢力控制的地方才能被指派行政官（自動指派略過無主之地；管理員 API 對無主之地回傳 400）
 - 地點彈窗顯示該地的行政官（管理者姓名，國王加 👑），無人管理時顯示「無行政官」
@@ -199,7 +199,39 @@ autonomous-world/
 - **增量佈局** — 新地方在母節點附近生成
 - **HSL → Hex 轉換**（WebGL 需要 hex/rgb 格式）
 - 節點大小：`4 + log(totalTroops + 1) × 2`（對數成長）
+- **每個地點都有白邊與黑影** — 星雲與近黑的底會吞掉沒有邊界的圓盤，所以每個節點都加上一圈
+  `MAP_NODE_BORDER_WIDTH` 的白邊與一層柔和暗暈（`MAP_NODE_SHADOW_SPREAD`）。兩者都畫在既有的
+  覆蓋層上、且落在圓盤**之外**，因為覆蓋層在 sigma 的 WebGL canvas 之下；也因此道路會壓過白邊，
+  讀起來像道路接入該地。Sigma 3.0.3 的 ESM 組建沒有節點邊框支援，所以這無法設定在節點程式上
+- **每條道路也有白邊**，理由和地點完全一樣：`MAP_ROAD_COLOR` 是一條深藍（`#1e3a5f`），
+  壓在近黑的星雲上幾乎看不見，所以地點加了白邊之後，道路反而成為唯一看不見的東西。
+  覆蓋層在 sigma 的 canvas 之下，所以在底下描一條略粗的白線，sigma 的道路正好壓在
+  中間，兩側各露出一條白邊 —— 是一個外框，不是第二條路，也不需要新開一張 canvas。
+- **星系尺寸跟著鏡頭走。** 所有 `MAP_STAR_*_PX` 都是「剛進入星系層」時的大小，實際畫出來
+  會乘上 `clamp((MAP_STAR_ZOOM_RATIO / ratio) ^ MAP_STAR_ZOOM_SCALE_EXPONENT)`，指數 0.5 就是
+  sigma 自己的 `size / sqrt(ratio)`，所以星系對縮放的反應與一般地點節點完全一致。以
+  `MAP_STAR_ZOOM_RATIO` 當基準代表剛跨過門檻那一幀剛好是 1×，進來時不會有跳變。在整段
+  星系層（ratio 0.2 → 0.05）之間是 1× → 2×。行星數量、傾斜與題色仍然純粹由地點 id 決定，
+  所以縮放不會讓行星重新抽出。
+- **放大到 MAP_STAR_ZOOM_RATIO（0.2）以下會顯示星系** — 放大地點不再只是一個點，而是一整套太陽系：
+- **每個星系的題色都不一樣。** 太陽由地點 id 抽一個光譜級（`MAP_STAR_SUN_CLASSES`，`core` / `edge`
+  成對），所以沒有兩個星系長得一樣。這個題色**在建圖時抽一次**並存在節點上：圓盤由 sigma 畫、
+  柔光由覆蓋層畫，存一份才保得住兩邊同步，而不是靠兩次抽獎碰巧抽到同一組。同一個星系裡的行星
+  **不重複**題色（色盤先洗牌再依序取），每顆月球也各抽各的。資料庫什麼都不必存。刻意不選深紅與
+  深藍 —— **軌道**才是勢力的通道，而太陽是星系裡最大的一塊題色
+  暖色**太陽**（由 sigma 自己的節點圓盤畫，所以道路不會穿過它）、1～4 顆各有傾斜橢圓軌道的
+  **行星**，以及**繞著行星、位於行星之外**的**月球**。軌道線帶勢力色；無主之地用
+  `MAP_STAR_ORBIT_COLOR_UNOWNED`，因為無主節點刻意壓暗的灰在半透明下疊在黑底上等於看不見。
+  行星與月球純粹從地點 id 抽出，所以同一個地點每次都長得一樣，什麼都不必存。地名畫在星系的
+  **上方**。取捨是：這一層縮放下看不到兵力，因為星系大小固定。注意這是縮放滑桿約 95% 的位置，
+  所以一般視圖完全不會有星系
 - 節點標籤共用單一縮放規則：僅當鏡頭比例 ≤ `LABEL_ZOOM_RATIO`（0.6）時顯示，與兵力無關；標籤永遠疊在聚光燈覆蓋層之上。唯一的例外是「正在指向的地方」——被 hover 的節點、被選取的節點，以及被 hover 節點的相連鄰居，任何縮放下都保留地名，因此拉遠時也能看清某地連到哪裡
+- **地點的可點範圍包含它自己的地名。** sigma 把地名畫在圓盤右側，所以游標經常停在名字上，
+  而那個名字與相連地點的名字正被強制顯示。命中框是用**實際畫出來的文字量出來的**（同一套
+  字型、同一個字級），不是用字數估算 —— 中文約 1em、拉丁約 0.55em，用字數估會整個錯一個
+  量級。離開圓盤**也**離開名字之後，地名、相連地名與提示會一起消失，與離開地點的效果相同。
+  **沒有被畫出來**的名字（拉遠超過 `LABEL_ZOOM_RATIO`）也不算命中區，游標不會黏在一個
+  螢幕上什麼都沒有的地方
 - **縮放控制** — 縮小與放大按鈕之間的滑桿直接拖曳鏡頭比例，並以百分比顯示目前層級（`MAP_ZOOM_MIN_RATIO` 0.05 ～ `MAP_ZOOM_MAX_RATIO` 3）。比例與鏡頭中心**都有上下限**，所以世界不可能被縮放或拖出畫面
 - **領地視圖** — 拉遠超過 `TERRITORY_ZOOM_RATIO` 後，每個地方各自推出**一樣大的圓形力**，地圖標出
   這些力覆蓋的區域，也就是 CK3 map mode 與 Stellaris 星系圖的做法。同一勢力的力會**累加**，所以
@@ -223,7 +255,7 @@ autonomous-world/
     像雲而不是灰霧的原因——每個色塊抽一個值，同時決定它的 alpha 與半徑，所以濃的地方又白又大，稀的地方幾乎
     看不見。色盤刻意偏**暖**（近乎白的奶油到暗褐），所以讀起來像**被照亮的星塵**，而不是冷灰的霧。
   - **塵埃**是最上層的背景（仍在地圖之下），負責全部的結構與移動：粒子沿著 3D Simplex noise 場移動，所以
-    會聚成絲帶、渦流與空洞而不是隨機亂飛；每顆粒子的顏色取自**它所在位置**的噪聲，所以一條絲帶就是一種顏色。
+    會聚成絲帶、渦流與空洞而不是隨機亂飛；每顆粒子的題色取自**它所在位置**的噪聲，所以一條絲帶就是一種題色。
   - 銀河與霧氣**由 sigma 自己定位**（走 `framedGraphToViewport`），所以它們真的躺在**世界座標**裡，
     跟著地圖一起滾動與縮放。這取代了一個真實的 bug：手寫的平移方向算反，背景於是與地圖**反向**漂移。
     只有塵埃有自己的視差比例（`SPACE_FLOW_PARALLAX: 0.35`）——它是唯一浮在地圖上方、而非躺在世界裡的一層。
@@ -719,12 +751,16 @@ Below the midpoint the chance is exactly 0, and ambition averages 17 — so roug
 all leaders can never defect. That follows from the formula as written (0.05 is a gradient,
 not a floor); a floor would need `(value / 17.5) × 0.05`.
 
-**建立新勢力時仍會重骰野心**（`CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`）。這是
-「成為君王這個新角色」，不是事件 nudges，但它確實與「永不變動」抵觸——一個野心 25 的
-將領叛變後會掉到 5–15，叛變行為因此驟變。若要嚴格遵守固定值，這五處也要拿掉。
-Founding a new faction still re-rolls ambition. That is a new role rather than an event
-nudge, but it does contradict "never changes" — a leader at 25 drops to 5–15 and their
-defection behaviour shifts sharply. Strictly honouring the fixed stat means removing those too.
+**建立新勢力與叛變都「不」重骰野心。** 原本五處用 `CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`
+把野心拉回 5–15，設定值已刪除。取而代之是**帳本冷卻**：`ambitionEvents` 每回合為視窗內
+每一次叛變寫一筆 −2（`AMBITION_DEFECTION_DELTA`），持續 20 回合
+（`AMBITION_DEFECTION_ROUNDS`）。**每次叛變各自一筆，所以會疊加**：叛變兩次就是 −4。
+只寫帳本、不寫可見 Event，因為符合條件的人每回合上百。
+Founding a faction and defecting both **no longer** re-roll ambition — all five re-roll sites and
+the config keys are gone. What replaced it is **cooling in the ledger**: one −2 row
+(`AMBITION_DEFECTION_DELTA`) per defection inside a 20-round window
+(`AMBITION_DEFECTION_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
+Event: a hundred-odd leaders match per round.
 
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
 
@@ -775,6 +811,16 @@ The place list gained search, an ownership filter and incremental loading. The w
 whole list each time the tab opens. Only `CONFIG.PLACE_LIST_PAGE_SIZE` (100) rows render,
 with the next page revealed on scroll. **The revealed count has to reset when the filter
 changes**, or it points into the tail of a different set and the list looks unresponsive.
+
+**勢力過濾是一個下拉選單，不是又一排按鈕。** 地點清單現在有搜尋、擁有權過濾
+（全部／有主／無主）與勢力過濾。勢力動輒上百個，一排按鈕排不下，所以用 `<select>`——
+樣式與事件日誌的勢力過濾一致。**選了勢力會把擁有權過濾切回「全部」**，因為「某勢力 +
+無主」在定義上永遠是空集合。已滅亡與瓦解中的勢力仍然列出（地點會留下來），但用既有的
+`faction.collapsed` / `faction.collapsing` 標出來，不另造字串。三個控制項都必須重設已顯示筆數。
+The faction filter is a **dropdown, not another chip row**: hundreds of factions will not fit in
+a row of buttons. Picking a faction switches ownership back to All, because "this faction +
+unowned" is empty by construction. Destroyed and collapsing factions stay listed but are marked
+with the existing `faction.collapsed` / `faction.collapsing` words.
 
 **`CONFIG` 是 `as const`，所以頁數要用 `useState<number>(...)`。** 否則 state 會被推成字面值
 `100`，setter 只接受回傳 `100`，第一次「再載入 100 筆」就編譯不過。這和自動播放速度 slider
@@ -832,4 +878,3 @@ inherit from a parent who just died, or childbirth becomes a resurrection spell.
 **事件**：`CHILD_BORN`（填在 character 類別）與 `KING_INHERITED`（faction 類別），
 兩者都在 `EventLog.tsx` 的 `EVENT_CATEGORY` 與 `icons.tsx` 的 glyph switch 登記，否則會静默落到預記點。
 `CHILD_BORN` (category `character`) and `KING_INHERITED` (category `faction`) are registered in
-`EVENT_CATEGORY` and given glyphs, or they would silently fall through to the default dot.

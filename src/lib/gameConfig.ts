@@ -290,7 +290,7 @@ export const CONFIG = {
   // ForceAtlas2 佈局重新計算間隔
   // ForceAtlas2 layout recalculation interval
   LAYOUT_RECALC_INTERVAL: 100, // 每 100 回合重新計算 / Recalc every 100 rounds
-  COLOR_NEIGHBOR_RANGE: 2, // 檢查 2 跳內的顏色衝突 / Check 2 hops for color conflicts
+  COLOR_NEIGHBOR_RANGE: 2, // 檢查 2 跳內的題色衝突 / Check 2 hops for color conflicts
 
   // ── 增量佈局 / Incremental Layout ────────────────────────────────────────
   // 新節點放在鄰居重心附近 + 隨機偏移
@@ -344,17 +344,36 @@ export const CONFIG = {
   // SMALLER when closer, so "zoomed in" is `camera.ratio <= MAP_STAR_ZOOM_RATIO`.
   MAP_STAR_ZOOM_RATIO: 0.2,        // 放大到这個 ratio 以入就顯示星系效果 / Star systems appear at or below this ratio
 
-  // 星系在螢幕上的**固定**大小，不隨兵力變化：放大到星系層時，每個地點都是
-  // 一個同樣大小的星系，而不是「兵多就大一點的圓點」。
+  // 星系大小**不隨兵力變化**：放大到星系層時，每個地點都是一個同樣大小的星系，
+  // 而不是「兵多就大一點的圓點」。
   //
-  // The star system's size is **fixed on screen** and does not follow the garrison:
-  // once zoomed in, every place is a system of the same size rather than a dot that
-  // happens to be bigger when it holds more troops.
+  // A star system's size does not follow the garrison: once zoomed in, every place is a
+  // system of the same size rather than a dot that happens to be bigger when it holds
+  // more troops.
   //
-  // 這是刻意的取捨：兵力大小在星系層就**不再**看得到（要看得更遠，或看右側面板）。
-  // 代價是真的——所以星系的數量與分佈才是放大後該讀到的資訊。
-  // That is a real trade-off: the garrison is no longer readable at this zoom, and the
-  // number and spread of systems is what this level of zoom is for instead.
+  // 但它**跟著鏡頭走**。下面所有 `*_PX` 都是「剛進入星系層時」的螢幕像素，實際畫出來
+  // 的尺寸一律乘上 `starScale`：
+  //
+  //     starScale = clamp( (MAP_STAR_ZOOM_RATIO / ratio) ^ MAP_STAR_ZOOM_SCALE_EXPONENT )
+  //
+  // 以 `MAP_STAR_ZOOM_RATIO` 當基準，所以**剛跨過門檻那一幀是 1×，與改動前完全一致**，
+  // 沒有跨門檻時的跳變。指數 0.5 就是 sigma 自己縮放節點的 `size / sqrt(ratio)`，
+  // 所以星系和一般地點對縮放的的反應一模一樣。
+  //
+  // Every `*_PX` below is the size at the moment star view is entered, and whatever is
+  // actually drawn is multiplied by `starScale`. Anchoring on `MAP_STAR_ZOOM_RATIO` means
+  // the crossing frame is exactly 1× — identical to before, so there is no jump — and an
+  // exponent of 0.5 reproduces sigma's own `size / sqrt(ratio)`, so a system reacts to zoom
+  // exactly the way a place node does. Over the whole star band (ratio 0.2 → 0.05) that is
+  // 1× → 2×.
+  //
+  // 兵力大小在星系層就**不再**看得到（要看得更遠，或看右側面板）。代價是真的 ——
+  // 這一檔要讀的是星系的數量與分佈。
+  // The garrison is genuinely no longer readable at this zoom, and the number and spread
+  // of systems is what this level of zoom is for instead.
+  MAP_STAR_ZOOM_SCALE_EXPONENT: 0.5, // starScale 指數 / exponent (0.5 = sigma's own scaling)
+  MAP_STAR_ZOOM_SCALE_MIN: 1,// starScale 下限，永遠不小於剛進入時的樣子 / floor
+  MAP_STAR_ZOOM_SCALE_MAX: 2,// starScale 上限，防止最靠近時星系大到互相重疊 / ceiling
   MAP_STAR_SYSTEM_RADIUS_PX: 46,  // 星系外緣半徑（螢幕像素）/ System outer radius (screen px)
 
   // 太陽由 sigma 的節點圓盤畫，**不是**畫在覆蓋層上。理由是繪圖順序：覆蓋層的
@@ -367,8 +386,33 @@ export const CONFIG = {
   // over by the roads — a dark line straight through a bright sun. Letting sigma draw
   // the disc keeps the ordering "roads then sun", identical to a normal node.
   MAP_STAR_SUN_SCREEN_PX: 11,     // 太陽半徑（螢幕像素）/ Sun radius (screen px)
-  MAP_STAR_SUN_COLOR_CORE: '#fff8dc', // 太陽核心（亮部）/ Sun core (bright centre)
-  MAP_STAR_SUN_COLOR_EDGE: '#ff9a2e', // 太陽外緣（暖橙）/ Sun edge (warm orange)
+  //
+  // The sun is **no longer one colour**. Each star draws one of these spectral classes from
+  // its place id, so no two systems look alike.
+  //
+  // 太陽的題色**不再是同一個**。每一顆太陽從這組「光譜級」裡挑一個，由地點 id 決定，
+  // 所以每個星系看起來都不一樣。
+  //
+  // `core` is the disc itself (Sigma draws it) and `edge` is the outer glow. They travel as
+  // a pair, or a sun ends up looking like one core wearing another star's halo.
+  //
+  // `core` 是圓盤本身（由 sigma 畫），`edge` 是柔光的外圈。兩者必須成套共用，否則太陽會
+  // 看起來像「一個核心配著別顆恆星的光暈」。
+  //
+  // 刻意不選**深紅**與**深藍**：軌道才是勢力的通道（見 `MAP_STAR_ORBIT_*`），而太陽是
+  // 整個星系裡最大的一塊題色。若太陽可以是任何題色，勢力的深色軌道就會被誤讀成「一顆恆星」。
+  //
+  // Deliberately no deep red and no deep blue: the **orbits** are the faction channel (see
+  // MAP_STAR_ORBIT_*), and the sun is the largest block of colour in the system. If suns could
+  // be any colour, a dark faction's orbits would read as "a star".
+  MAP_STAR_SUN_CLASSES: [
+    { core: '#fff8dc', edge: '#ff9a2e' }, // 橙星 / orange
+    { core: '#fffdf0', edge: '#ffc94d' }, // 黃星 / yellow
+    { core: '#fff4e2', edge: '#ff7a3d' }, // 橘紅星 / amber
+    { core: '#ffffff', edge: '#ffe9b0' }, // 白星 / white
+    { core: '#f2f7ff', edge: '#bcd8ff' }, // 藍白星 / blue-white
+    { core: '#ffeede', edge: '#ff5f6d' }, // 紅巨星 / red giant
+  ],
   MAP_STAR_SUN_GLOW: 16,          // 太陽外柔光半徑（px）/ Sun outer glow radius (px)
   MAP_STAR_SUN_GLOW_ALPHA: 0.5,   // 柔光不透明度 / Glow opacity
   MAP_STAR_SUN_PULSE_MS: 2400,    // 太陽明暗半週期（毫秒）/ Sun brightness half-period (ms)
@@ -386,12 +430,18 @@ export const CONFIG = {
   MAP_STAR_PLANET_ORBIT_STEP: 0.17, // 每多一顆行星，軌道外推多少 / Orbit growth per extra planet
   MAP_STAR_PLANET_TILT_DEG: 26,  // 軌道最大傾斜（度）/ Maximum orbit tilt (degrees)
   MAP_STAR_PLANET_SQUASH: 0.42,   // 軌道橢圓壓扁比例（1 = 正圓）/ Ellipse squash (1 = circle)
-  MAP_STAR_PLANET_MIN_PX: 2.4,    // 行星最小半徑（px）/ Smallest planet radius (px)
-  MAP_STAR_PLANET_MAX_PX: 5,      // 行星最大半徑（px）/ Largest planet radius (px)
+  MAP_STAR_PLANET_MIN_PX: 3.2,    // 行星最小半徑（px）/ Smallest planet radius (px)
+  MAP_STAR_PLANET_MAX_PX: 6.5,    // 行星最大半徑（px）/ Largest planet radius (px)
   MAP_STAR_PLANET_ORBIT_MS: 14000, // 內圈一圈的時間；外圈依開普勒第三式更慢 /
                                    // One inner orbit; outer ones slow by Kepler's third law
-  MAP_STAR_ORBIT_COLOR_ALPHA: 0.5, // 軌道線不透明度 / Orbit line opacity
-  MAP_STAR_ORBIT_WIDTH: 1,        // 軌道線寬（px）/ Orbit line width (px)
+  MAP_STAR_ORBIT_COLOR_ALPHA: 0.75, // 軌道線不透明度 / Orbit line opacity
+  MAP_STAR_ORBIT_WIDTH: 1.2,      // 軌道線寬（px）/ Orbit line width (px)
+  // 無主之地的軌道題色。**不能**沿用節點本身的無主色：那是刻意壓暗的灰，在近黑的
+  // 背景上畫 50% 透明度等於沒畫，整個星系會只剩一個太陽。給它一個站得住的冷色 /
+  // Orbit colour for unowned land. It must NOT reuse the node's own unowned colour: that is
+  // a deliberately dimmed grey, and at 50% alpha on a near-black background it is
+  // indistinguishable from nothing — the whole system would collapse to just a sun.
+  MAP_STAR_ORBIT_COLOR_UNOWNED: '#7fd4e8',
   MAP_STAR_PLANET_COLORS: ['#9fd8ff', '#ffd9a0', '#c8b6ff', '#a8e6c4', '#ffb3c1', '#e8d7a0'],
   // 行星色偏冷、飽和度低：底層已經是暖色太陽與彩色的道路，行星再搶眼會打架。
   // Planet colours lean cool and desaturated: the sun is already warm and the roads are
@@ -406,8 +456,17 @@ export const CONFIG = {
   MAP_STAR_MOON_MAX: 3,           // 每顆行星最多幾個月球 / Most moons a planet may have
   MAP_STAR_MOON_GAP_PX: 3.2,      // 月球軌道半徑 = 行星半徑 + 這個值 / Moon orbit radius = planet radius + this
   MAP_STAR_MOON_STEP_PX: 2.6,     // 第二顆起每顆再外推 / Each extra moon steps out by this
-  MAP_STAR_MOON_SIZE: 1.3,        // 月球半徑（px）/ Moon radius (px)
-  MAP_STAR_MOON_COLOR: '#e8e2d4', // 月球顏色（近白，月岩）/ Moon colour (near-white, lunar)
+  MAP_STAR_MOON_SIZE: 1.9,        // 月球半徑（px）/ Moon radius (px)
+  // 月球的題色，每顆各抽一個（原本是**單一**題色）/ moon colours, one drawn per moon (was a single colour)
+  //
+  // 一個掛四顆月球的行星，會不會看起來像四顆一樣的點？會 —— 原本所有月球都是同一塊近白。
+  // 維持低飽和、接近月球本體的色系：月球本身很小（`MAP_STAR_MOON_SIZE`），太鮮豔只會變成
+  // 雜訊，還會搶走它所繞的那顆行星的注意力。
+  //
+  // A planet with four moons read as four identical dots, because they were all the same
+  // near-white. Kept desaturated and lunar: a moon is tiny (`MAP_STAR_MOON_SIZE`), so anything
+  // vivid reads as noise and steals attention from the planet it orbits.
+  MAP_STAR_MOON_COLORS: ['#e8e2d4', '#d8dce6', '#e6d8c8', '#d0d8d4', '#efe0d4', '#ccd4e0'],
   MAP_STAR_MOON_ORBIT_MS: 5200,   // 月球繞行星一圈的時間 / One moon orbit around its planet (ms)
   MAP_STAR_MOON_SPEED_STEP: 0.4, // 第二顆起逐顆加快，否則兩顆月球永遠對成一線 /
                                   // Each extra moon speeds up, or two moons stay in line
@@ -415,7 +474,7 @@ export const CONFIG = {
   MAP_STAR_LABEL_GAP_PX: 12,      // 星系名稱與外緣的間距（px）/ Gap from system edge to its name (px)
 
   // ── 節點白邊與黑影 / Node white border and shadow ───────────────────────────
-  // 星雲與深空底會吃掉節點邊界：顏色再亮，一個沒有邊的圓盤也會糊進背景裡。
+  // 星雲與深空底會吃掉節點邊界：題色再亮，一個沒有邊的圓盤也會糊進背景裡。
   // 白邊把圓盤和背景分開，黑影則讓它**浮**起來。
   //
   // A star cloud and a near-black backdrop eat node edges: however bright the fill, a
@@ -443,6 +502,26 @@ export const CONFIG = {
   MAP_NODE_SHADOW_LAYER_FALLOFF: 0.75, // 逐圈衰減 / Alpha falloff per layer
   MAP_NODE_SHADOW_LAYER_WIDTH: 0.62,   // 圈線寬（占外擴的比例）/ Stroke width (fraction of spread)
   MAP_NODE_SHADOW_LAYER_OFFSET: 0.34,  // 圈與圈的間距（占外擴的比例）/ Spacing (fraction of spread)
+
+  // 道路的白邊：和節點的白邊**同一個理由、同一個手法**。`MAP_ROAD_COLOR` 是一條深藍
+  // (#1e3a5f)，壓在近黑的星雲上幾乎看不見 —— 節點加了白邊之後看得見了，道路卻還是
+  // 一條幽靈線，整張圖會變成「看得見的地方、看不見的路」。
+  //
+  // Road casing: the same reason and the same trick as the node border. `MAP_ROAD_COLOR`
+  // is a deep blue (#1e3a5f) and on a near-black star cloud it is very hard to see — once
+  // the nodes gained a border the roads became the only thing left invisible, so the map
+  // read as "places you can see, roads you cannot".
+  //
+  // 手法完全一樣，也是必須的：覆蓋層在 sigma 的 canvas **之前**，所以在覆蓋層上描一條
+  // **比較粗的**白線，sigma 的道路正好壓在白線中間，兩側各露出一條白邊。這不需要第二張
+  // canvas（會蓋住地名），也不需要 `EdgeClampedProgram`（會改掉整個邊的渲染）。
+  //
+  // The trick is identical, and for the same reason: the overlay sits BEFORE sigma's canvas,
+  // so a **wider** white stroke on the overlay shows on both sides while sigma's road paints
+  // over the middle. That needs no second canvas (which would cover the place labels) and no
+  // `EdgeClampedProgram` (which would change edge rendering wholesale).
+  MAP_ROAD_BORDER_COLOR: 'rgba(255, 255, 255, 0.15)', // 道路白邊（比節點淡，避免搶走節點）/ road casing, fainter than the node's so it does not compete
+  MAP_ROAD_BORDER_WIDTH: 1,     // 白邊寬度（每側，螢幕 px）/ casing width per side (screen px)
 
   /** 頭像呼吸：胸口在 SVG 單位的起伏量 / Avatar breathing: chest rise, in SVG units */
   AVATAR_BREATH_RISE: 0.012,
@@ -472,7 +551,7 @@ export const CONFIG = {
   // below — and never removed. `SPACE_DPR_CAP` is still shared by both remaining
   // canvas layers, so it stays.
   SPACE_DPR_CAP: 2,                 // DPR 上限，4K 螢幕不要用原值 / DPR cap; do not use the native value on 4K
-  // 顏色一律放在 config，元件裡不得硬編碼任何顏色 /
+  // 題色一律放在 config，元件裡不得硬編碼任何題色 /
   // Every colour lives in config; no component may hard-code one.
 
   // ── 流場塵埃 / Flow-field dust ────────────────────────────────────────────
@@ -483,9 +562,9 @@ export const CONFIG = {
   // gather into ribbons, vortices and voids — random but structured. Neighbouring
   // positions have similar noise, so particles do not scatter randomly.
   //
-  // ── 流場塵埃的顏色 / Flow-field dust colours ───────────────────────────────
-  // **所有顏色都在這裡**，方便開發者直接調整：色相範圍、飽和度、亮度、不透明度上
-  // 限，以及每個色階的 RGB。元件裡沒有任何硬編碼的顏色。
+  // ── 流場塵埃的題色 / Flow-field dust colours ───────────────────────────────
+  // **所有題色都在這裡**，方便開發者直接調整：色相範圍、飽和度、亮度、不透明度上
+  // 限，以及每個色階的 RGB。元件裡沒有任何硬編碼的題色。
   //
   // **Every colour lives here**, so a developer can retune the whole layer without
   // touching a component: the hue range, saturation, lightness, the alpha ceiling,
@@ -523,7 +602,7 @@ export const CONFIG = {
   SPACE_FLOW_LIGHTNESS: 66,         // 亮度（%）/ lightness %
   SPACE_FLOW_MAX_ALPHA: 0.55,       // 不透明度上限 / alpha ceiling
   /**
-   * 每個色階的 RGB（不用 HSL，讓開發者能直接指定想要的顏色）。
+   * 每個色階的 RGB（不用 HSL，讓開發者能直接指定想要的題色）。
    * 逗號分隔的 `r,g,b`，依 `SPACE_FLOW_HUE_STEPS` 平分色階；不給就自動由
    * 色相範圍生成。
    *
@@ -581,7 +660,7 @@ export const CONFIG = {
   SPACE_FLOW_PARTICLE_COUNT: 520,   // 粒子數（硬上限 1000）/ count (hard cap 1000)
   // 色相「跟著場走」/ Hue follows the field.
   // 色相不再由粒子自己抽，而是取它**所在位置**的噪聲值。於是同一條絲帶上的粒子共享
-  // 色相——分組一改變，顏色分組也跟著改。這才是「顏色跟隨流動」的真正意思。
+  // 色相——分組一改變，題色分組也跟著改。這才是「題色跟隨流動」的真正意思。
   //
   // The hue is no longer the particle's own draw: it is read from the noise at the
   // particle's **position**. Every particle on one ribbon then shares a hue, so as
@@ -642,7 +721,7 @@ export const CONFIG = {
   SPACE_GALAXY_CORE_ALPHA: 0.44,
   /** 盤面中段的亮度 / mid-disc alpha */
   SPACE_GALAXY_MID_ALPHA: 0.18,
-  /** 核的顏色：暖奶油 / core colour: warm cream */
+  /** 核的題色：暖奶油 / core colour: warm cream */
   SPACE_GALAXY_COLOR_CORE: '#c9b79c',
   /** 盤面中段：灰紫 / mid-disc: dusty mauve */
   SPACE_GALAXY_COLOR_MID: '#8b8191',
@@ -653,7 +732,7 @@ export const CONFIG = {
   /** 星雲不透明度上限 / nebula alpha ceiling */
   SPACE_GALAXY_NEBULA_ALPHA: 0.22,
   /**
-   * 星雲顏色：偏灰的紫、褐、冷石板。刻意壓低飽和度去配合暖核，否則冷色角落會和核心
+   * 星雲題色：偏灰的紫、褐、冷石板。刻意壓低飽和度去配合暖核，否則冷色角落會和核心
    * 打架。
    *
    * Nebula colours: muted plum, umber and cool slate. Saturation is held down to
@@ -668,7 +747,7 @@ export const CONFIG = {
   SPACE_GALAXY_STAR_MAX_SIZE: 1.5,
   /** 星點不透明度上限 / star alpha ceiling */
   SPACE_GALAXY_STAR_ALPHA: 0.8,
-  /** 星點顏色：冷白、藍灰、暖奶油 / star colours: cool white, blue-grey, warm cream */
+  /** 星點題色：冷白、藍灰、暖奶油 / star colours: cool white, blue-grey, warm cream */
   SPACE_GALAXY_STAR_COLORS: ['#e8e4dc', '#cfd6e0', '#b9c4d6', '#e6d8c4', '#d8cfc0'] as string[],
   /**
    * 自轉一整圈的秒數，**<= 0 表示不轉**（`rotateAt` 直接回傳 0）。
@@ -748,7 +827,7 @@ export const CONFIG = {
    */
   SPACE_FOG_ALPHA: 0.5,
   /**
-   * 顏色從近乎白的暖色到很暗的褐：**有些地方偏白、有些地方幾乎不見**。暖色調是刻意的——
+   * 題色從近乎白的暖色到很暗的褐：**有些地方偏白、有些地方幾乎不見**。暖色調是刻意的——
    * 這一層是「星雲 / 星塵」，不是冷灰的霧，所以它要讀起來像被照亮的塵埃。
    *
    * Colours run from near-white warm to dark umber: some patches read white, others barely
@@ -911,7 +990,7 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // Rim light: mixed toward white. Applied **per side**, so keep it thin or it smears
 // ── 領地邊界 / Territory border ───────────────────────────────────────────
   // 邊界是一條**半透明的線**，不是把勢力色提亮。提亮只是在同一塊色裡加白，看起來像
-  // 漸層；一條獨立顏色的線才讀得出「這裡是邊界」。顏色與透明度都在這裡調。
+  // 漸層；一條獨立題色的線才讀得出「這裡是邊界」。題色與透明度都在這裡調。
   //
   // The border is a **semi-transparent line**, not a lightened faction colour.
   // Lightening adds white to the same hue and reads as a gradient; a line of its own
@@ -1015,8 +1094,8 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // that the whole region counts as "a place" and the faction readout could never appear.
   TERRITORY_PLACE_HOVER_PX: 14,
 
-  // ─── 地圖顏色 / Map colours ────────────────────────────────────────────────
-  // SigmaMap 裡所有硬編碼的顏色都搬到這裡。改這些值就能重新配色整張地圖，不必動
+  // ─── 地圖題色 / Map colours ────────────────────────────────────────────────
+  // SigmaMap 裡所有硬編碼的題色都搬到這裡。改這些值就能重新配色整張地圖，不必動
   // 元件。勢力色本身是**執行期資料**（資料庫的 hsl），不在此列。
   //
   // Every colour that was hard-coded in SigmaMap lives here. Retune the whole map by

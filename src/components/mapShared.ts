@@ -1,7 +1,7 @@
 // ============================================================================
 // Sigma 地圖的共用純邏輯 / Shared pure logic for the sigma map
 // ----------------------------------------------------------------------------
-// 顏色換算、資料型別，以及那組讓外部按鈕控制鏡頭的 `MapCameraControls`。全部與 React
+// 題色換算、資料型別，以及那組讓外部按鈕控制鏡頭的 `MapCameraControls`。全部與 React
 // 和 canvas 都無關，所以從 `SigmaMap.tsx` 分出來之後元件本身短了很多，而且這些東西
 // 可以各自單獨測。
 //
@@ -26,6 +26,7 @@
 // ============================================================================
 
 import { CONFIG } from '@/lib/gameConfig';
+import { createRng } from '@/lib/rng';
 
 /**
  * 將 HSL 字串轉換為 hex 格式 / Convert HSL string to hex format
@@ -73,7 +74,7 @@ export function hslToHex(hsl: string): string {
  * 把 `#rgb` / `#rrggbb` 轉成三個 0–255 的通道值。
  * Turn `#rgb` / `#rrggbb` into three 0–255 channels.
  *
- * 領地層要自己寫 ImageData，所以自己解色碼。圖節點的顏色一律是 hex（有主之地
+ * 領地層要自己寫 ImageData，所以自己解色碼。圖節點的題色一律是 hex（有主之地
  * 已經過 hslToHex，無主之地固定 'MAP_UNOWNED_NODE_COLOR'），因此不必支援其他色彩格式。
  * The territory layer writes its own ImageData, so it parses colours itself.
  * Graph node colours are always hex, so no other format needs supporting.
@@ -93,12 +94,12 @@ export function hexToRgb(hex: string): [number, number, number] {
 }
 
 /**
- * 把顏色朝白色調亮指定的混合比例。
+ * 把題色朝白色調亮指定的混合比例。
  * Mix a colour toward white by `amount`, keeping its hue.
  *
- * 勢力色是 `hsl(H, 70%, 50%)`（建立勢力時產生），而領地填色是同一個顏色疊在深色
+ * 勢力色是 `hsl(H, 70%, 50%)`（建立勢力時產生），而領地填色是同一個題色疊在深色
  * 背景上的半透明色塊。名字直接用原色會和底下的色塊一起變暗，讀起來像糊掉。往白色
- * 混是最直接的做法：色相不變，亮度上去，所以名字仍然是「這個勢力的顏色」。
+ * 混是最直接的做法：色相不變，亮度上去，所以名字仍然是「這個勢力的題色」。
  *
  * Faction colours are `hsl(H, 70%, 50%)` and the territory fill is that same colour
  * composited translucently over a dark backdrop, so the raw colour reads as muddy once
@@ -340,3 +341,178 @@ export interface FactionTooltip {
 }
 
 export type Tooltip = PlaceTooltip | FactionTooltip;
+
+// ============================================================================
+// 星系的外觀 / How a star system looks
+// ============================================================================
+
+/**
+ * 一顆太陽的題色。`core` 是 sigma 畫的圓盤，`edge` 是覆蓋層畫的柔光外圈。
+ *
+ * A star's colours. `core` is the disc Sigma paints; `edge` is the glow the overlay paints.
+ *
+ * **兩個值必須一起決定。** 它們一旦分開產生，就會出現「一個核心配著別顆恆星的光暈」——
+ * 而且圓盤由 sigma 畫、柔光由覆蓋層畫，兩邊本來就是不同的地方，沒有任何機制會擋住那件事。
+ *
+ * **They have to be decided together.** Split them and a sun ends up wearing another star's
+ * halo — and the disc and the glow are painted by different code in different places, so
+ * nothing would stop it.
+ */
+export interface StarClass {
+  core: string;
+  edge: string;
+}
+
+/**
+ * 這顆太陽的題色，只由**地點 id** 決定。所以同一個地方在每一台機器、每一次重繪都長得一樣，
+ * 而資料庫裡不必多存任何東西。
+ *
+ * This star's colours, decided by the **place id alone**. So a place looks the same on every
+ * machine and across every redraw, and the database has to store nothing extra.
+ *
+ * 回傳的物件是 `CONFIG` 裡的**唯讀**項目，不要就地修改。
+ *
+ * The returned object is a read-only entry from `CONFIG`; do not mutate it.
+ */
+export function starClassOf(placeId: string): StarClass {
+  // 用 `createRng` 而不是 `id.charCodeAt(0) % n`：後者只看得見第一個字元，而 id 的前綴
+  // 常常相同，那會讓整批地點拿到同一顆太陽。
+  //
+  // `createRng`, not `id.charCodeAt(0) % n`: the latter only sees the first character, and ids
+  // often share a prefix, which would hand a whole batch of places the same sun.
+  const classes = CONFIG.MAP_STAR_SUN_CLASSES;
+  const index = createRng(placeId).int(0, classes.length - 1);
+  return classes[index];
+}
+
+/** 把 `#rrggbb` 變成**完全透明**的同色（給 Canvas 漸層的外圈用）/ the same colour, fully transparent (for a gradient's outer stop) */
+export function transparent(hex: string): string {
+  return `${hex}00`;
+}
+
+// ============================================================================
+// 星系尺寸 / Star-system sizing
+// ============================================================================
+
+/**
+ * 星系的尺寸倍率：所有 `MAP_STAR_*_PX` 都是「剛進入星系層」時的大小，實際畫出來要乘上
+ * 這個倍率，所以星系**跟著鏡頭走**而不是在螢幕上釘死。
+ *
+ * The star system's size factor. Every `MAP_STAR_*_PX` is the size at the moment star view
+ * was entered, and what actually gets drawn is multiplied by this, so a system follows the
+ * camera instead of being pinned on screen.
+ *
+ * 以 `MAP_STAR_ZOOM_RATIO` 當基準，所以**剛跨過門檻那一幀剛好是 1** —— 與沒有這個
+ * 倍率之前一模一樣，因此沒有跨門檻時的跳變。指數 0.5 就是 sigma 自己縮放節點的
+ * `size / sqrt(ratio)`，所以星系對縮放的的反應與一般地點節點完全一致。
+ *
+ * Anchored on `MAP_STAR_ZOOM_RATIO`, so the frame that crosses the threshold is exactly 1 —
+ * identical to having no factor at all, which means there is no jump on the way in. An
+ * exponent of 0.5 is sigma's own `size / sqrt(ratio)`, so a system reacts to zoom exactly
+ * the way a place node does.
+ *
+ * 上下限是必要的：倍率只往上長，而鏡頭可以一路推到 `MAP_ZOOM_MIN_RATIO`，不封頂的話
+ * 最靠近時星系會大到彼此重疊。**下限 1** 同樣重要 —— 它讓「拉遠一點就回到剛進來的大小」
+ * 成立，而不是變成一串越拉越小、難以辨認的點。
+ *
+ * Both bounds are load-bearing. It only grows, and the camera can travel all the way to
+ * `MAP_ZOOM_MIN_RATIO`, so unbounded the systems would overlap at the closest zoom. A floor
+ * of **1** matters just as much: it keeps "pull back a little and you are back to how it
+ * looked on entry" true, rather than becoming a trail of ever-smaller hard-to-read dots.
+ */
+export function starScaleAt(ratio: number): number {
+  if (!Number.isFinite(ratio) || ratio <= 0) return CONFIG.MAP_STAR_ZOOM_SCALE_MIN;
+  const clamped = Math.max(ratio, CONFIG.MAP_ZOOM_MIN_RATIO);
+  const raw = Math.pow(
+    CONFIG.MAP_STAR_ZOOM_RATIO / clamped,
+    CONFIG.MAP_STAR_ZOOM_SCALE_EXPONENT
+  );
+  return Math.min(
+    Math.max(raw, CONFIG.MAP_STAR_ZOOM_SCALE_MIN),
+    CONFIG.MAP_STAR_ZOOM_SCALE_MAX
+  );
+}
+
+// ============================================================================
+// 地點提示 / The place tooltip
+// ============================================================================
+
+/**
+ * 取得出這個地點連到哪些地方。**只認有字串 `label` 的鄰居** —— 拉遠時 `nodeReducer`
+ * 會把 label 設成 `null`（那是縮放規則），而這裡要回傳的正是「看得出名字的那些」，
+ * 否則提示會列出十幾個 `null`。
+ *
+ * The places this place links to. Only neighbours carrying a **string** `label` count:
+ * zoomed out `nodeReducer` sets `label` to `null` (that is the zoom rule), and what this
+ * wants is precisely "the ones whose names are legible" — otherwise the tooltip lists a
+ * dozen nulls.
+ */
+export interface LabeledNeighborhood {
+  neighbors: (node: string) => string[];
+  getNodeAttributes: (node: string) => { label?: unknown };
+}
+
+export function linkedPlaceNames(
+  graph: LabeledNeighborhood,
+  nodeId: string
+): string[] {
+  return graph
+    .neighbors(nodeId)
+    .map((id) => {
+      const label = graph.getNodeAttributes(id).label;
+      return typeof label === 'string' ? label : null;
+    })
+    .filter((name): name is string => name !== null);
+}
+
+// ============================================================================
+// 地名的可點範圍 / Where a place's name counts as the place
+// ============================================================================
+
+/**
+ * 地名標籤在**螢幕像素**上的矩形。sigma 把地名畫在節點的**右側**（`x + size + 3`，
+ * baseline 垂直置中），所以這是節點中心與半徑、量出來的文字寬度與字級算出來的。
+ *
+ * A place's name label as a rectangle in **screen pixels**. Sigma draws the name to the
+ * *right* of the node (`x + size + 3`, vertically centred on its baseline), so the rect falls
+ * out of the node's centre and radius, the measured text width and the label size.
+ *
+ * 為什麼需要它：地名的可點範圍必須**包含標籤本身**，否則游標一移到名字上，那圈強制顯示
+ * 的名稱（自己與相連地點）就消失了 —— 明明游標還指著其中一個名字。這一點是純幾何，
+ * 沒有 DOM，所以放在這裡並測試。
+ *
+ * Why this exists at all: a place's hover target has to **include its own name**, or the
+ * moment the cursor reaches the name the forced labels (its own and its neighbours') vanish —
+ * while the cursor is still pointing at one of them. It is pure geometry with no DOM, so it
+ * lives here and is tested.
+ */
+export function placeLabelRect(input: {
+  /** 節點中心的螢幕 x / node centre, screen x */
+  cx: number;
+  /** 節點中心的螢幕 y / node centre, screen y */
+  cy: number;
+  /** 節點的螢幕半徑 / the node's on-screen radius */
+  radius: number;
+  /** 量出來的文字寬度 / measured text width */
+  textWidth: number;
+  /** 標籤字級 / the label font size */
+  labelSize: number;
+}): { x: number; y: number; w: number; h: number } {
+  // 垂直方向放寬一點：文字的實際墨水高度遠小於字級，而命中測試寧可鬆不可緊 ——
+  // 命中區太小會讓「指著名字」變成「指著空氣」。
+  //
+  // A little generous vertically: a glyph's ink height is well under its font size, and a
+  // hit target that is too tight turns "pointing at the name" into "pointing at nothing".
+  const h = input.labelSize * 1.2;
+  const x = input.cx + input.radius + 3;
+  return { x, y: input.cy - h / 2, w: input.textWidth, h };
+}
+
+/** 螢幕點是否落在矩形內 / whether a screen point is inside the rect */
+export function pointInRect(
+  px: number,
+  py: number,
+  r: { x: number; y: number; w: number; h: number }
+): boolean {
+  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+}
