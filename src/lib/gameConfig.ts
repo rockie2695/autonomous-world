@@ -130,10 +130,6 @@ export const CONFIG = {
   CHAR_BUY_TROOP_MIN: 10, // 每次購買最少士兵數 / Min troops per purchase
   CHAR_BUY_TROOP_MAX: 100, // 每次購買最多士兵數 / Max troops per purchase
 
-  // 建立新勢力時的野心重置 / Ambition reset when creating a new faction
-  CHAR_NEW_FACTION_AMBITION_RESET_MIN: 5,
-  CHAR_NEW_FACTION_AMBITION_RESET_MAX: 15,
-
   // ── 速度 / 逃脫 (v1.1) ──────────────────────────────────────────────────
   // 逃脫機率 = clamp(0.5 + speedDiff × 0.02, 0.1, 0.9)
   // Escape probability = clamp(0.5 + speedDiff × 0.02, 0.1, 0.9)
@@ -160,6 +156,25 @@ export const CONFIG = {
   AMBITION_ADMIN_REPLACED_DELTA: 1, // 被免去行政官職務時野心 +1 / +1 ambition when removed as administrator
   AMBITION_ADMIN_ASSIGNED_DELTA: 1, // 取得行政官職務時野心 -1（暫時）/ -1 ambition when granted administrator post (temporary)
   AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS: 10, // 減免持續回合數；到期若仍在職則 +1 回復 / Rounds before the -1 reverts
+  // 叛變後的冷卻：叛變本身**不再**重骰野心，改成往帳本寫一筆負的 delta，
+  // 忠誠檢查把它加總進叛變值，于是這段期間內此人較不容易再叛變。
+  //
+  // Defection cooling: defecting no longer re-rolls ambition. Instead a negative delta is
+  // written to the ledger, which loyaltyCheck sums into the defection value, so for the
+  // next few rounds that leader is markedly less likely to defect again.
+  //
+  // **每次叛變各自記一筆，所以會疊加**：短時間內叛變兩次就是 −4，冷卻是疊加的，
+  // 不是「最多 −2」——這是刻意的，因為連續叛變代表的是更強的傾向。
+  // One row per defection, so they **stack**: two defections in quick succession is -4.
+  // The cooling is additive rather than capped at -2 on purpose — defecting twice in a
+  // row is evidence of a stronger tendency, and clamping it would throw that away.
+  //
+  // 只寫帳本、不寫可見 Event：一個世界每回合會有上百人符合條件，逐筆寫進事件日誌
+  // 只會淹掉其他資訊。AmbitionEvent.reason 已經記錄原因。
+  // Ledger only, no visible Event: a hundred-odd leaders would match per round and the
+  // event log would drown. `AmbitionEvent.reason` already carries the reason.
+  AMBITION_DEFECTION_DELTA: -2, // 每次叛變寫入的 delta / Delta written per defection
+  AMBITION_DEFECTION_ROUNDS: 20, // 影響持續回合數 / Rounds the -2 keeps applying
 
   // ── 叛變 / Defection ─────────────────────────────────────────────────────
   // 野心是**固定的初始值**（和 ti／wu／tong 一樣），不再隨事件被改寫；會變的是
@@ -328,27 +343,106 @@ export const CONFIG = {
   // rings — rather than a bare dot. The threshold is a zoom RATIO, and sigma's ratio is
   // SMALLER when closer, so "zoomed in" is `camera.ratio <= MAP_STAR_ZOOM_RATIO`.
   MAP_STAR_ZOOM_RATIO: 0.2,        // 放大到这個 ratio 以入就顯示星系效果 / Star systems appear at or below this ratio
-  MAP_STAR_RING_GAP: 6,// 輪道圈與節點圖的間距 / Gap between the node edge and the orbital ring (px)
-  MAP_STAR_RING_WIDTH: 1.2,       // 輪道圈素寬 / Orbital ring stroke width (px)
-  MAP_STAR_RING_ALPHA: 0.5,       // 輪道圈透明度 / Orbital ring opacity
-  MAP_STAR_CORE_GLOW: 7,          // 星中心的柔光 / Core glow blur (px)
-  MAP_STAR_ORBIT_DOTS: 3,         // 每個星系還下的行星點數 / Orbiting motes per star system
-  MAP_STAR_ORBIT_RATIO: 0.55,     // 行星點的輪道半徑…當會經過大小 / Orbit radius as a fraction of the ring radius
-  MAP_STAR_ORBIT_PERIOD_MS: 6000, // 行星點輪道一圈的時間 / One full orbit (ms)
-  MAP_STAR_PULSE_MS: 2400,        // 星中心萈明度的脆期 / Core brightness half-period (ms)
-  MAP_STAR_MIN_RADIUS_PX: 1.5,    // 小於這個尺寸就略過，避免米多小圃被光錐消掉 / Smaller than this and it is skipped
-  // 行星對組：紅經地點的 id 准確定性提取，不存檔。完全是裝飾，
-  // 不參與收入、防徤，因為那需要寫入對應上的模擬寫法 /
-  // Planet and moons are derived from the place id, deterministically and with nothing
+
+  // 星系在螢幕上的**固定**大小，不隨兵力變化：放大到星系層時，每個地點都是
+  // 一個同樣大小的星系，而不是「兵多就大一點的圓點」。
+  //
+  // The star system's size is **fixed on screen** and does not follow the garrison:
+  // once zoomed in, every place is a system of the same size rather than a dot that
+  // happens to be bigger when it holds more troops.
+  //
+  // 這是刻意的取捨：兵力大小在星系層就**不再**看得到（要看得更遠，或看右側面板）。
+  // 代價是真的——所以星系的數量與分佈才是放大後該讀到的資訊。
+  // That is a real trade-off: the garrison is no longer readable at this zoom, and the
+  // number and spread of systems is what this level of zoom is for instead.
+  MAP_STAR_SYSTEM_RADIUS_PX: 46,  // 星系外緣半徑（螢幕像素）/ System outer radius (screen px)
+
+  // 太陽由 sigma 的節點圓盤畫，**不是**畫在覆蓋層上。理由是繪圖順序：覆蓋層的
+  // DOM 在 sigma 的 WebGL canvas **之前**，所以覆蓋層畫的東西會被道路壓在下面。
+  // 道路若穿過太陽中心會是一道黑線穿過亮點。讓 sigma 自己畫這個圓盤，
+  // 順序就自動變成「道路 → 太陽」，和一般節點的層級完全一致。
+  //
+  // The sun is drawn by Sigma's own node disc, NOT on the overlay. The overlay canvas
+  // sits BEFORE sigma's WebGL canvas in the DOM, so anything drawn there gets painted
+  // over by the roads — a dark line straight through a bright sun. Letting sigma draw
+  // the disc keeps the ordering "roads then sun", identical to a normal node.
+  MAP_STAR_SUN_SCREEN_PX: 11,     // 太陽半徑（螢幕像素）/ Sun radius (screen px)
+  MAP_STAR_SUN_COLOR_CORE: '#fff8dc', // 太陽核心（亮部）/ Sun core (bright centre)
+  MAP_STAR_SUN_COLOR_EDGE: '#ff9a2e', // 太陽外緣（暖橙）/ Sun edge (warm orange)
+  MAP_STAR_SUN_GLOW: 16,          // 太陽外柔光半徑（px）/ Sun outer glow radius (px)
+  MAP_STAR_SUN_GLOW_ALPHA: 0.5,   // 柔光不透明度 / Glow opacity
+  MAP_STAR_SUN_PULSE_MS: 2400,    // 太陽明暗半週期（毫秒）/ Sun brightness half-period (ms)
+  MAP_STAR_SUN_PULSE_AMP: 0.12,   // 呼吸時大小變化比例 / Size swing while breathing
+
+  // 行星對組：純粹從地點的 id 確定性抽出，不存任何東西。完全是裝飾，
+  // 不參與收入、防禦，因為那需要一套對應的模擬邏輯，而假的只會看起來像那樣。
+  //
+  // Planet sets are derived from the place id alone, deterministically and with nothing
   // stored: purely decorative, because giving them gameplay meaning would need a
   // simulation for it, and a mock would only look like one.
-  MAP_STAR_PLANET_CHANCE: 0.55,   // 有行星的比例 / chance a star system has a planet
-  MAP_STAR_PLANET_RING_RATIO: 1.5, // 行星圈半徑異樂有間的倍數 / planet ring radius as a multiple of the gap
-  MAP_STAR_PLANET_RING_WIDTH: 1,  // 行星圈素寬 / planet ring stroke width (px)
-  MAP_STAR_MOON_MAX: 3,           // 最多幾個月球 / most moons a system may have
-  MAP_STAR_MOON_RATIO: 0.34,      // 月球輪道半徑（相對圖節半徑）/ moon orbit radius, as a fraction of the node radius
-  MAP_STAR_MOON_SIZE: 1.6,        // 月球半徑 / moon radius (px)
-  MAP_STAR_MOON_ORBIT_MS: 9000,   // 月球輪道一圈的時間 / one moon orbit (ms)
+  MAP_STAR_PLANET_MIN: 1,         // 至少一顆行星（使用者要求）/ At least one planet (required)
+  MAP_STAR_PLANET_MAX: 4,         // 最多幾顆行星 / Most planets a system may have
+  MAP_STAR_PLANET_INNER_RATIO: 0.34, // 內圈半徑（星系的幾倍）/ Inner orbit, as a fraction of the system radius
+  MAP_STAR_PLANET_ORBIT_STEP: 0.17, // 每多一顆行星，軌道外推多少 / Orbit growth per extra planet
+  MAP_STAR_PLANET_TILT_DEG: 26,  // 軌道最大傾斜（度）/ Maximum orbit tilt (degrees)
+  MAP_STAR_PLANET_SQUASH: 0.42,   // 軌道橢圓壓扁比例（1 = 正圓）/ Ellipse squash (1 = circle)
+  MAP_STAR_PLANET_MIN_PX: 2.4,    // 行星最小半徑（px）/ Smallest planet radius (px)
+  MAP_STAR_PLANET_MAX_PX: 5,      // 行星最大半徑（px）/ Largest planet radius (px)
+  MAP_STAR_PLANET_ORBIT_MS: 14000, // 內圈一圈的時間；外圈依開普勒第三式更慢 /
+                                   // One inner orbit; outer ones slow by Kepler's third law
+  MAP_STAR_ORBIT_COLOR_ALPHA: 0.5, // 軌道線不透明度 / Orbit line opacity
+  MAP_STAR_ORBIT_WIDTH: 1,        // 軌道線寬（px）/ Orbit line width (px)
+  MAP_STAR_PLANET_COLORS: ['#9fd8ff', '#ffd9a0', '#c8b6ff', '#a8e6c4', '#ffb3c1', '#e8d7a0'],
+  // 行星色偏冷、飽和度低：底層已經是暖色太陽與彩色的道路，行星再搶眼會打架。
+  // Planet colours lean cool and desaturated: the sun is already warm and the roads are
+  // already coloured, so planets that shout would fight both.
+
+  // 月球繞的是**行星**，半徑必須在行星之外。舊版用節點半徑的 0.34 倍，
+  // 整圈月球都在圓盤裡面——那正是「月球和行星都跑到地點裡面去了」的原因。
+  //
+  // Moons orbit the **planet**, and their orbit radius has to be outside it. The old
+  // version used 0.34 × the node radius, so every moon sat *inside* the disc — which is
+  // exactly why the moons and planets looked like they were inside the place.
+  MAP_STAR_MOON_MAX: 3,           // 每顆行星最多幾個月球 / Most moons a planet may have
+  MAP_STAR_MOON_GAP_PX: 3.2,      // 月球軌道半徑 = 行星半徑 + 這個值 / Moon orbit radius = planet radius + this
+  MAP_STAR_MOON_STEP_PX: 2.6,     // 第二顆起每顆再外推 / Each extra moon steps out by this
+  MAP_STAR_MOON_SIZE: 1.3,        // 月球半徑（px）/ Moon radius (px)
+  MAP_STAR_MOON_COLOR: '#e8e2d4', // 月球顏色（近白，月岩）/ Moon colour (near-white, lunar)
+  MAP_STAR_MOON_ORBIT_MS: 5200,   // 月球繞行星一圈的時間 / One moon orbit around its planet (ms)
+  MAP_STAR_MOON_SPEED_STEP: 0.4, // 第二顆起逐顆加快，否則兩顆月球永遠對成一線 /
+                                  // Each extra moon speeds up, or two moons stay in line
+
+  MAP_STAR_LABEL_GAP_PX: 12,      // 星系名稱與外緣的間距（px）/ Gap from system edge to its name (px)
+
+  // ── 節點白邊與黑影 / Node white border and shadow ───────────────────────────
+  // 星雲與深空底會吃掉節點邊界：顏色再亮，一個沒有邊的圓盤也會糊進背景裡。
+  // 白邊把圓盤和背景分開，黑影則讓它**浮**起來。
+  //
+  // A star cloud and a near-black backdrop eat node edges: however bright the fill, a
+  // disc with no border smears into the background. The white border separates disc
+  // from background and the shadow makes it sit above it.
+  //
+  // 這兩層畫在既有的覆蓋層上（不是新開一張 canvas——那會蓋住地名標籤），
+  // 而且必須在**節點圓盤之外**：覆蓋層的 DOM 在 sigma 之前，只有圓盤外面的
+  // 那一圈才會露出來。
+  //
+  // Both layers go on the existing overlay (a new canvas would cover the place labels),
+  // and both must sit **outside** the node disc: the overlay is behind sigma, so only
+  // the ring beyond the disc's edge is ever visible.
+  MAP_NODE_BORDER_COLOR: 'rgba(255, 255, 255, 0.92)', // 白邊 / White border
+  MAP_NODE_BORDER_WIDTH: 1.3,     // 白邊線寬（px）/ Border stroke width (px)
+  MAP_NODE_SHADOW_COLOR: 'rgba(0, 0, 0, 0.7)', // 黑影 / Black shadow
+  MAP_NODE_SHADOW_SPREAD: 3.4,    // 黑影外擴（px）/ Shadow spread (px)
+  // 黑影用幾圈同心描邊做出柔和外緣，而不是每個節點一個 radial gradient ——
+  // 後者是每幀上千個漸層物件。逐圈乘上的衰減 /
+  // The shadow fakes a soft edge with concentric strokes rather than one radial
+  // gradient per node, which would be a thousand gradient objects every frame. Each
+  // layer multiplies the previous one's alpha.
+  MAP_NODE_SHADOW_LAYERS: 3,      // 描邊圈數 / Concentric strokes
+  MAP_NODE_SHADOW_ALPHA: 0.3,     // 最內圈的不透明度 / Innermost stroke alpha
+  MAP_NODE_SHADOW_LAYER_FALLOFF: 0.75, // 逐圈衰減 / Alpha falloff per layer
+  MAP_NODE_SHADOW_LAYER_WIDTH: 0.62,   // 圈線寬（占外擴的比例）/ Stroke width (fraction of spread)
+  MAP_NODE_SHADOW_LAYER_OFFSET: 0.34,  // 圈與圈的間距（占外擴的比例）/ Spacing (fraction of spread)
 
   /** 頭像呼吸：胸口在 SVG 單位的起伏量 / Avatar breathing: chest rise, in SVG units */
   AVATAR_BREATH_RISE: 0.012,

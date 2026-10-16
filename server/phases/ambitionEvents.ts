@@ -11,6 +11,9 @@
 // - 君王統率高 → 野心 -0.5 × (king.tong / 30) / King tong high → ambition -0.5 × (king.tong / 30)
 // - 行政官暫時減免到期 → 仍在職則 +AMBITION_ADMIN_ASSIGNED_DELTA 回復 /
 //   Expired temporary administrator reduction reverts (+AMBITION_ADMIN_ASSIGNED_DELTA)
+// - 叛變冷卻 → 每次叛變 -AMBITION_DEFECTION_DELTA，持續 AMBITION_DEFECTION_ROUNDS /
+//   Defection cooling: -AMBITION_DEFECTION_DELTA per defection, lasting
+//   AMBITION_DEFECTION_ROUNDS
 //
 // 使用方式 / Usage:
 //   await ambitionEvents(worldId, round, rng);
@@ -44,6 +47,41 @@ export async function ambitionEvents(
     },
   });
 
+  // 冷卻視窗內的叛變次數（依人計數）。查 `Event` 而不是 `Character`，因為「何時叛變」
+  // 本來就是事件表的一等資料，而野心是固定值、不存任何狀態 —— 多加一個欄位只會多一個
+  // 可能對不上的真相。
+  //
+  // Defection counts per character inside the cooling window, read from `Event` rather
+  // than from `Character`: "when did they defect" is already first-class in the event
+  // table, and ambition is a fixed stat that stores no state — a new column would only
+  // add one more version of the truth to keep in sync.
+  //
+  // 視窗是 `round - ROUNDS + 1 .. round`，也就是**包含**本回合。`charId` 放在 `data` JSON
+  // 裡而**不是**一個欄位（事件表比欄位老），所以這裡取出整個 data 再讀；早期事件只有
+  // `charName`，事件日誌另有讀取時回填，這裡則直接略過 —— 沒有 id 就算不出冷卻。
+  //
+  // The window is `round - ROUNDS + 1 .. round`, so it **includes** this round. `charId`
+  // lives inside the `data` JSON rather than in a column (the events table predates it),
+  // so the whole blob is selected and read here. Earliest rows only carry `charName`,
+  // which the event log backfills at read time; they are skipped here, because without an
+  // id there is no cooling to compute.
+  const defections = await prisma.event.findMany({
+    where: {
+      worldId,
+      type: 'DEFECTION',
+      round: { gte: round - CONFIG.AMBITION_DEFECTION_ROUNDS + 1 },
+    },
+    select: { data: true },
+  });
+
+  /** 每人最近一次叛變的次數（疊加冷卻）/ Defections per character (the cooling stacks) */
+  const defectionsInWindow = new Map<string, number>();
+  for (const defection of defections) {
+    const charId = (defection.data as { charId?: unknown } | null)?.charId;
+    if (typeof charId !== 'string' || !charId) continue;
+    defectionsInWindow.set(charId, (defectionsInWindow.get(charId) ?? 0) + 1);
+  }
+
   for (const char of characters) {
     let delta = 0;
     let reason = '';
@@ -56,6 +94,43 @@ export async function ambitionEvents(
     if (roundsSincePromotion >= CONFIG.AMBITION_NO_PROMOTION_ROUNDS) {
       delta += CONFIG.AMBITION_NO_PROMOTION_DELTA;
       reason += `No promotion for ${roundsSincePromotion} rounds; `;
+    }
+
+    // ── 叛變冷卻 / Defection cooling ────────────────────────────────────────
+    // 叛變本身**不再重骰野心**（那會讓「從不變動」的規則破功，而且幅度大到讓叛變
+    // 行為驟變）。改在這裡往帳本寫一筆負的 delta：忠誠檢查會把它加總進叛變值，
+    // 於是剛叛變的人接下來 20 回合比較不容易再叛變。
+    //
+    // Defecting no longer re-rolls ambition — that would break the "never changes"
+    // rule, and the swing was large enough to make defection behaviour flip. Instead a
+    // negative delta goes into the ledger here, which loyaltyCheck sums into the
+    // defection value, so someone who just defected is markedly less likely to defect
+    // again for the next 20 rounds.
+    //
+    // **每一筆叛變各自計算，所以會疊加**：短時間內叛變兩次是 −4。冷卻是疊加而不是
+    // 封頂 −2 —— 連續叛變本身就是更強傾向的證據，封頂等於把這個訊息丟掉。
+    //
+    // **One row per defection, so they stack**: two defections in quick succession is
+    // -4. The cooling is additive rather than capped at -2, because defecting twice in a
+    // row is itself the evidence and capping it would throw that away.
+    //
+    // 寫成**獨立一筆**而不是併進上面的 delta：那筆常常是小數（國王統率會產生
+    // 0.35 這種），混在一起之後「叛變冷卻是 −2」就看不出來了，而這正是它的全部意义。
+    //
+    // A **separate** row rather than folded into the delta above: that one is often a
+    // fraction (a strong king yields 0.35), and merged in, "the cooling is -2" stops
+    // being readable — which is the whole point of it.
+    const defectionCount = defectionsInWindow.get(char.id) ?? 0;
+    if (defectionCount > 0) {
+      await prisma.ambitionEvent.create({
+        data: {
+          worldId,
+          charId: char.id,
+          round,
+          delta: defectionCount * CONFIG.AMBITION_DEFECTION_DELTA,
+          reason: `Defected ${defectionCount}× within ${CONFIG.AMBITION_DEFECTION_ROUNDS} rounds; `,
+        },
+      });
     }
 
     // 檢查朋友是否最近叛逃 / Check if friend recently defected

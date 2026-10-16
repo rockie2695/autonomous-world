@@ -22,7 +22,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Graph from 'graphology';
 import Sigma from 'sigma';
-import { drawDiscNodeHover } from 'sigma/rendering';
+import { drawDiscNodeHover, drawDiscNodeLabel } from 'sigma/rendering';
 import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
 import { createRng } from '@/lib/rng';
@@ -100,6 +100,25 @@ export function SigmaMap({
    * zoomed in past the point where the territory layer should be inert?".
    */
   const cameraRatioRef = useRef(1);
+  /**
+   * 是否已放大到星系層（圓盤變成太陽）。`nodeReducer` 與自訂的標籤繪製都需要讀它，
+   * 而兩者都不能直接抓到 sigma 實例，所以鏡像成 ref。
+   *
+   * Whether we are zoomed into the star-system view (the disc becomes a sun). Both
+   * `nodeReducer` and the custom label drawing need to read it and neither can reach the
+   * sigma instance, so it is mirrored into a ref.
+   */
+  const starViewRef = useRef(false);
+  /**
+   * 星系名的抬升量（圖座標）。標籤程式畫在**圖座標**上，所以「星系外緣 + 間距」
+   * 這段螢幕像素要先換算成圖座標；換算用的比例和太陽大小是同一個，所以兩者
+   * 一定同步。
+   *
+   * The star system's name lift, in graph coordinates. The label program draws in graph
+   * coordinates, so "system radius + gap" screen pixels has to be converted first; the
+   * conversion uses the same factor as the sun's size, so the two can never disagree.
+   */
+  const starLabelLiftRef = useRef(0);
   useEffect(() => {
     reducedMotionRef.current = reducedMotion;
   }, [reducedMotion]);
@@ -190,10 +209,60 @@ export function SigmaMap({
         if (!isActive) return;
         drawDiscNodeHover(context, data, settings);
       },
+      // 星系層的地名畫在星系「正上方」，像 Stellaris 的星系名。
+      //
+      // The place name is drawn ABOVE the system at star zoom, like a Stellaris system name.
+      //
+      // sigma 內建的標籤程式固定把文字畫在節點右側（`x + size + 3`），沒有任何垂直
+      // 偏移選項，所以這一層自己畫；**非星系層完全委派回內建程式**，行為一字不改。
+      //
+      // Sigma's built-in label program always draws the text to the RIGHT of the node
+      // (`x + size + 3`) and offers no vertical offset, so this layer draws it itself.
+      // Outside star view the built-in program is delegated to, completely unchanged.
+      defaultDrawNodeLabel: (context, data, settings) => {
+        if (!starViewRef.current || !data.label) {
+          drawDiscNodeLabel(context, data, settings);
+          return;
+        }
+        const size = settings.labelSize;
+        context.font = `${settings.labelWeight} ${size}px ${settings.labelFont}`;
+        const attribute = settings.labelColor.attribute;
+        const fromAttribute = attribute
+          ? ((data as Record<string, unknown>)[attribute] as string | undefined)
+          : undefined;
+        context.fillStyle =
+          fromAttribute ?? settings.labelColor.color ?? '#000';
+        const width = context.measureText(data.label).width;
+        // 星系外緣再留一段間距，否則名字會壓在最外側那顆行星上 /
+        // Clear of the system's outer edge, or the name lands on the outermost planet
+        context.fillText(
+          data.label,
+          data.x - width / 2,
+          data.y - starLabelLiftRef.current
+        );
+      },
       nodeReducer: (node, data) => {
         const res = { ...data };
         // 節點越大，標籤越清晰 / Larger nodes get clearer labels
         res.labelSize = Math.max(14, Math.min(20, data.size / 2));
+
+        // ── 星系層：地點圓盤變成一顆太陽 / Star view: the place disc becomes a sun ──
+        // 星系在螢幕上是**固定大小**，所以節點大小必須隨鏡頭反向換算，否則拉遠時
+        // 太陽會跟著圓盤一起縮小——那就不是固定大小了。
+        //
+        // The system is a fixed size on screen, so the node size has to be converted
+        // against the camera; otherwise the sun shrinks with the disc as you pull back,
+        // which is the opposite of a fixed size.
+        if (starViewRef.current) {
+          const pxPerUnit = sigmaRef.current?.scaleSize(1) || 1;
+          res.size = CONFIG.MAP_STAR_SUN_SCREEN_PX / pxPerUnit;
+          starLabelLiftRef.current =
+            (CONFIG.MAP_STAR_SYSTEM_RADIUS_PX + CONFIG.MAP_STAR_LABEL_GAP_PX) /
+            pxPerUnit;
+          // 暖色，不帶陣營色：陣營色留給軌道 /
+          // Warm, and carrying no faction colour — that goes to the orbits
+          res.color = CONFIG.MAP_STAR_SUN_COLOR_CORE;
+        }
 
         // 正在指向的地方（hover／選中／其鄰居）永遠保留地名 /
         // The place you are pointing at always keeps its name
@@ -404,6 +473,31 @@ export function SigmaMap({
     };
     labelsVisibleRef.current = sigma.getCamera().ratio <= CONFIG.LABEL_ZOOM_RATIO;
     sigma.getCamera().on('updated', syncLabelVisibility);
+
+    // 星系層的門檻（0.2）與地名門檻（0.6）是**兩個不同的門檻**，所以跨過星系門檻
+    // 時上面那個判斷不會變、`refresh()` 也就不會被呼叫 —— 圓盤就永遠不會變成太陽。
+    // 這裡另外監聽一次，只在跨門檻時 refresh。
+    //
+    // The star threshold (0.2) and the label threshold (0.6) are **different
+    // thresholds**, so crossing the star one leaves the check above unchanged and never
+    // calls `refresh()` — the discs would never become suns. Listen for it separately and
+    // refresh only on the crossing.
+    const syncStarView = () => {
+      const star = sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
+      const flipped = star !== starViewRef.current;
+      starViewRef.current = star;
+      // 星系層**每幀**都要 refresh：太陽是固定的螢幕大小，所以節點大小必須每次
+      // 跟著鏡頭換算；只在跨門檻時 refresh 會讓太陽在繼續縮放時停在舊大小。
+      // 不在星系層時只有跨門檻那一次需要。
+      //
+      // Refreshing every frame at star zoom: the sun is a fixed size on screen, so the
+      // node size has to be recomputed against the camera each time. Refreshing only on
+      // the crossing would freeze the sun at the size it had when the threshold was
+      // passed. Outside star view the crossing alone is enough.
+      if (star || flipped) sigma.refresh();
+    };
+    starViewRef.current = sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
+    sigma.getCamera().on('updated', syncStarView);
 
     // ── 縮放滑桿 / Zoom slider ───────────────────────────────────────────
     // sigma 的 ratio 越小越近，滑桿要「越往右越近」所以整段反轉。
@@ -1452,9 +1546,100 @@ useEffect(() => {
       const rect = canvas.getBoundingClientRect();
       ctx.clearRect(0, 0, rect.width, rect.height);
 
-      // ── 星系：放大到一定比例後，地點不再只是一個點，而是「星中心 + 軌道環」 ──
-      // Star systems: past a zoom threshold a place stops being a dot and reads as a
-      // star system — a pulsing core inside an orbital ring with motes on it.
+      // ── 節點白邊 + 黑影 / Node white border + shadow ─────────────────────────
+      // 星雲與深空底會吃掉節點邊界：沒有邊的圓盤會糊進背景裡。白邊把它分開，黑影
+      // 讓它浮起來。兩者都畫在覆蓋層上 —— 覆蓋層的 DOM 在 sigma 的 WebGL canvas
+      // **之前**，所以只有落在圓盤**之外**的那一圈會露出來。
+      //
+      // A star cloud and a near-black backdrop eat node edges: a disc with no border
+      // smears into the background. The white border separates it and the shadow lifts
+      // it. Both are drawn on the overlay, which sits BEFORE sigma's WebGL canvas, so
+      // only the part landing **outside** the disc is ever visible.
+      //
+      // 星系層不做：太陽自帶柔光，再套一圈白邊會像貼紙。
+      //
+      // Not done at star zoom: the sun carries its own glow, and a white ring round it
+      // would read as a sticker.
+      const starView = sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
+
+      // 只畫視窗內的節點：2000 個節點時世界大半都在視窗外，畫它們只是浪費 /
+      // Only nodes inside the viewport: at 2000 nodes most of the world is off-screen.
+      const tl = sigma.viewportToGraph({ x: 0, y: 0 });
+      const br = sigma.viewportToGraph({ x: rect.width, y: rect.height });
+      const pad = CONFIG.MAP_NODE_SHADOW_SPREAD + CONFIG.MAP_NODE_BORDER_WIDTH;
+      const minX = Math.min(tl.x, br.x) - pad;
+      const maxX = Math.max(tl.x, br.x) + pad;
+      const minY = Math.min(tl.y, br.y) - pad;
+      const maxY = Math.max(tl.y, br.y) + pad;
+
+      if (!starView) {
+        for (const node of graph.nodes()) {
+          const attrs = graph.getNodeAttributes(node) as {
+            x: number;
+            y: number;
+            size: number;
+          };
+          if (attrs.x < minX || attrs.x > maxX) continue;
+          if (attrs.y < minY || attrs.y > maxY) continue;
+
+          const radius = sigma.scaleSize(attrs.size);
+          const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y });
+          const spread = CONFIG.MAP_NODE_SHADOW_SPREAD;
+
+          // 黑影：幾圈同心描邊、透明度逐圈遞減，於是外緣是柔和的。這比「每個節點
+          // 建立一個 radial gradient」便宜得多 —— 後者是每幀上千個漸層物件。
+          //
+          // The shadow: concentric strokes at falling alpha, so the outer edge is soft.
+          // Far cheaper than one radial gradient per node, which would be a thousand
+          // gradient objects every frame.
+          ctx.strokeStyle = CONFIG.MAP_NODE_SHADOW_COLOR;
+          for (let layer = 0; layer < CONFIG.MAP_NODE_SHADOW_LAYERS; layer++) {
+            ctx.globalAlpha =
+              CONFIG.MAP_NODE_SHADOW_ALPHA *
+              Math.pow(
+                CONFIG.MAP_NODE_SHADOW_LAYER_FALLOFF,
+                layer
+              );
+            ctx.lineWidth =
+              spread * CONFIG.MAP_NODE_SHADOW_LAYER_WIDTH;
+            ctx.beginPath();
+            ctx.arc(
+              vp.x,
+              vp.y,
+              radius + spread * CONFIG.MAP_NODE_SHADOW_LAYER_OFFSET * (layer + 1),
+              0,
+              Math.PI * 2
+            );
+            ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+
+          // 白邊壓在黑影之上，否則圓盤與背景的分界會糊掉 /
+          // The white border goes on top of the shadow, or the disc's edge stays mushy
+          ctx.beginPath();
+          ctx.arc(
+            vp.x,
+            vp.y,
+            radius + CONFIG.MAP_NODE_BORDER_WIDTH / 2,
+            0,
+            Math.PI * 2
+          );
+          ctx.strokeStyle = CONFIG.MAP_NODE_BORDER_COLOR;
+          ctx.lineWidth = CONFIG.MAP_NODE_BORDER_WIDTH;
+          ctx.stroke();
+        }
+      }
+
+      // ── 星系：放大到星系層，地點不再是「一個點」，而是一整套太陽系 ──
+      // Star systems: zoomed into a system, a place is no longer a dot but a whole solar
+      // system — a sun, planets around it, moons around those.
+      //
+      // 太陽由 sigma 的節點圓盤畫（見 nodeReducer），所以這裡只畫柔光、軌道、行星與
+      // 月球 —— 全都落在圓盤之外，所以覆蓋層在圓盤下面完全沒有影響。
+      //
+      // The sun is drawn by Sigma's own node disc (see nodeReducer), so this only draws
+      // the glow, the orbits, the planets and the moons — all of which land outside the
+      // disc, so being behind it costs nothing.
       //
       // 畫在聚光燈**之前**：星系是裝飾，聚光燈是資訊（本回合建立／被攻擊），
       // 資訊必須永遠蓋得住裝飾。
@@ -1462,119 +1647,148 @@ useEffect(() => {
       // information (created / attacked this round), and information has to stay legible
       // on top of decoration.
       //
-      // 它跑在既有的 rAF 迴圈裡，**沒有**新增第二個迴圈 \u2014 這一點是刻意的：地圖只有
+      // 它跑在既有的 rAF 迴圈裡，**沒有**新增第二個迴圈 — 這一點是刻意的：地圖只有
       // 一個動畫迴圈是效能與正確性的前提。
       // It rides the existing rAF loop and adds no second one: the map having exactly one
       // animation loop is what keeps it cheap and keeps the pause rules enforceable.
-      if (sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO) {
-        // \u53ea\u753b\u8996\u7a97\u5167\u7684\u7bc0\u9ede\uff1a2000 \u500b\u7bc0\u9ede\u6642\u5927\u90e8\u5206\u90fd\u5728\u8996\u7a97\u5916\uff0c
-        // \u753b\u5b83\u4eec\u53ea\u662f\u6d6a\u8cbb\u3002\u8a18\u88e1\u7528 graph \u5ea7\u6a19\u78ba\u5beb\u6a94\u7a2d\u843d\u5728\u8996\u7a97\u5916\u5206 / Only nodes
-        // inside the viewport \u2014 at 2000 nodes most of the world is off-screen at any moment.
-        const tl = sigma.viewportToGraph({ x: 0, y: 0 });
-        const br = sigma.viewportToGraph({ x: rect.width, y: rect.height });
-        const minX = Math.min(tl.x, br.x);
-        const maxX = Math.max(tl.x, br.x);
-        const minY = Math.min(tl.y, br.y);
-        const maxY = Math.max(tl.y, br.y);
-
-        const orbitPhase = (t / CONFIG.MAP_STAR_ORBIT_PERIOD_MS) * Math.PI * 2;
-        const corePulse = 0.5 + 0.5 * Math.sin((t / CONFIG.MAP_STAR_PULSE_MS) * Math.PI);
+      if (starView) {
+        const systemRadius = CONFIG.MAP_STAR_SYSTEM_RADIUS_PX;
+        const sunPulse =
+          0.5 + 0.5 * Math.sin((t / CONFIG.MAP_STAR_SUN_PULSE_MS) * Math.PI);
+        const moonPhase =
+          (t / CONFIG.MAP_STAR_MOON_ORBIT_MS) * Math.PI * 2;
 
         for (const node of graph.nodes()) {
           const attrs = graph.getNodeAttributes(node) as {
             x: number;
             y: number;
-            size: number;
             color?: string;
           };
           if (attrs.x < minX || attrs.x > maxX) continue;
           if (attrs.y < minY || attrs.y > maxY) continue;
 
-          const nodeRadius = sigma.scaleSize(attrs.size);
-          // \u5c0f\u5230\u8a72\u7576\u5c0d\u7576\u5730\u9ede\u5c31\u7565\u904e\uff0c\u9084\u6709\u7d50\u69cb\u69cb\u5713\u53ea\u6703\u96d6\u5e87\u4e0b\u3001\u5beb\u51fa\u4e00\u584a\u6a5f\u96fe /
-          // Below this the node is a speck and the structure just smears, so skip it.
-          if (nodeRadius < CONFIG.MAP_STAR_MIN_RADIUS_PX) continue;
-
-          const color = attrs.color ?? CONFIG.MAP_MOVE_DOT_FALLBACK;
           const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y });
-          const ringRadius = nodeRadius + CONFIG.MAP_STAR_RING_GAP;
+          // 軌道是陣營色 —— 放大到星系層之後，這是唯一還看得到陣營的地方 /
+          // Orbits carry the faction colour, the only place it survives at this zoom
+          const orbitColor = attrs.color ?? CONFIG.MAP_MOVE_DOT_FALLBACK;
 
-          // \u8f2a\u9053\u73af / The orbital ring
+          // 太陽柔光 / The sun's glow
+          const glowOuter =
+            CONFIG.MAP_STAR_SUN_SCREEN_PX *
+              (1 + CONFIG.MAP_STAR_SUN_PULSE_AMP * sunPulse) +
+            CONFIG.MAP_STAR_SUN_GLOW;
+          const glow = ctx.createRadialGradient(
+            vp.x,
+            vp.y,
+            CONFIG.MAP_STAR_SUN_SCREEN_PX * 0.75,
+            vp.x,
+            vp.y,
+            glowOuter
+          );
+          glow.addColorStop(0, CONFIG.MAP_STAR_SUN_COLOR_EDGE);
+          glow.addColorStop(1, 'rgba(255, 154, 46, 0)');
+          ctx.globalAlpha = CONFIG.MAP_STAR_SUN_GLOW_ALPHA;
+          ctx.fillStyle = glow;
           ctx.beginPath();
-          ctx.arc(vp.x, vp.y, ringRadius, 0, Math.PI * 2);
-          ctx.strokeStyle = color;
-          ctx.globalAlpha = CONFIG.MAP_STAR_RING_ALPHA;
-          ctx.lineWidth = CONFIG.MAP_STAR_RING_WIDTH;
-          ctx.stroke();
+          ctx.arc(vp.x, vp.y, glowOuter, 0, Math.PI * 2);
+          ctx.fill();
           ctx.globalAlpha = 1;
 
-          // \u884c\u661f\u9ede\uff1a\u6bcf\u500b\u661f\u7cfb\u4e0a\u51e0\u9ede\u5c0f\u712a\u78c1\u570b\u5728\u8f2a\u9053\u4e0a\u63cf\u570b\u5179 /
-          // Orbiting motes: a few specks circling the orbit on every star system
-          const orbitR = ringRadius * CONFIG.MAP_STAR_ORBIT_RATIO;
-          ctx.fillStyle = color;
-          for (let k = 0; k < CONFIG.MAP_STAR_ORBIT_DOTS; k++) {
-            const a =
-              orbitPhase + (k / CONFIG.MAP_STAR_ORBIT_DOTS) * Math.PI * 2;
+          // 行星與月球純粹從地點 id 抽出來，所以同一個地點每次都長得一樣，
+          // 換一台機器也一樣。純裝飾，不參與任何模擬。
+          //
+          // Planets and moons are derived from the node id alone, so a place always
+          // looks the same and every client agrees without storing anything. Purely
+          // decorative — they take no part in the simulation.
+          const rng = createRng(node);
+          const planetCount = rng.int(
+            CONFIG.MAP_STAR_PLANET_MIN,
+            CONFIG.MAP_STAR_PLANET_MAX
+          );
+
+          for (let i = 0; i < planetCount; i++) {
+            const orbit =
+              systemRadius *
+              (CONFIG.MAP_STAR_PLANET_INNER_RATIO +
+                i * CONFIG.MAP_STAR_PLANET_ORBIT_STEP);
+            const tilt =
+              (rng.float(
+                -CONFIG.MAP_STAR_PLANET_TILT_DEG,
+                CONFIG.MAP_STAR_PLANET_TILT_DEG
+              ) *
+                Math.PI) /
+              180;
+            const radius = rng.float(
+              CONFIG.MAP_STAR_PLANET_MIN_PX,
+              CONFIG.MAP_STAR_PLANET_MAX_PX
+            );
+            const color =
+              rng.pick([...CONFIG.MAP_STAR_PLANET_COLORS]) ??
+              CONFIG.MAP_STAR_PLANET_COLORS[0];
+            const moonCount = rng.int(0, CONFIG.MAP_STAR_MOON_MAX);
+
+            // 開普勒第三式：內圈轉得比外圈快，否則四顆行星像同一個時鐘 /
+            // Kepler's third law: inner orbits run faster, or the four planets share one
+            // clock
+            const inner = systemRadius * CONFIG.MAP_STAR_PLANET_INNER_RATIO;
+            const speed =
+              (Math.PI * 2) /
+              CONFIG.MAP_STAR_PLANET_ORBIT_MS /
+              Math.pow(orbit / inner, 1.5);
+            const angle = rng.float(0, Math.PI * 2) + t * speed;
+
+            // 軌道：壓扁的橢圓，每顆行星有自己的傾斜，否則四顆疊在同一條線上 /
+            // Orbit: a squashed ellipse with its own tilt, or all four stack on one line
             ctx.beginPath();
-            ctx.arc(
-              vp.x + orbitR * Math.cos(a),
-              vp.y + orbitR * Math.sin(a),
-              1.4,
+            ctx.ellipse(
+              vp.x,
+              vp.y,
+              orbit,
+              orbit * CONFIG.MAP_STAR_PLANET_SQUASH,
+              tilt,
               0,
               Math.PI * 2
             );
-            ctx.fill();
-          }
-
-          // \u661f\u4e2d\u5fc3\u7684\u67d4\u5149\u8207\u547c\u5438 / The core: a soft halo that breathes
-          ctx.beginPath();
-          ctx.arc(vp.x, vp.y, nodeRadius * (1 + 0.3 * corePulse), 0, Math.PI * 2);
-          ctx.fillStyle = color;
-          ctx.shadowColor = color;
-          // 行星與月球：純粹從節點 id 抽出來，所以同一個地點每次都長得一樣，換一台機器也一樣。
-          // Planet and moons are derived from the node id alone, so a place always looks the
-          // same and every client agrees without storing anything.
-          const detail = createRng(node);
-          const hasPlanet = detail.chance(CONFIG.MAP_STAR_PLANET_CHANCE);
-          const moonCount = detail.int(0, CONFIG.MAP_STAR_MOON_MAX);
-          const moonPhase = (t / CONFIG.MAP_STAR_MOON_ORBIT_MS) * Math.PI * 2;
-
-          if (hasPlanet) {
-            // 行星環畫成壓扁的橢圓：正圓看起來像第二個軌道環，橢圓才像有傾斜的圓盤
-            // The planet ring is a flattened ellipse: a circle would read as a second orbital
-            // ring, an ellipse reads as a tilted disc
-            const pr = ringRadius * CONFIG.MAP_STAR_PLANET_RING_RATIO;
-            ctx.save();
-            ctx.translate(vp.x, vp.y);
-            ctx.rotate(-0.32); // 固定傾斜角 / a fixed tilt
-            ctx.beginPath();
-            ctx.ellipse(0, 0, pr, pr * 0.32, 0, 0, Math.PI * 2);
-            ctx.strokeStyle = color;
-            ctx.globalAlpha = CONFIG.MAP_STAR_RING_ALPHA * 0.9;
-            ctx.lineWidth = CONFIG.MAP_STAR_PLANET_RING_WIDTH;
+            ctx.strokeStyle = orbitColor;
+            ctx.globalAlpha = CONFIG.MAP_STAR_ORBIT_COLOR_ALPHA;
+            ctx.lineWidth = CONFIG.MAP_STAR_ORBIT_WIDTH;
             ctx.stroke();
-            ctx.restore();
             ctx.globalAlpha = 1;
-          }
 
-          for (let m = 0; m < moonCount; m++) {
-            // 每顆月球的起始相位也從 rng 抽出來，三顆才不會疊在同一點 / Each moon's start
-            // phase comes from the rng too, or three moons would stack on one spot
-            const a = moonPhase + (m / CONFIG.MAP_STAR_MOON_MAX) * Math.PI * 2;
-            const mr = nodeRadius * CONFIG.MAP_STAR_MOON_RATIO;
+            // 行星就在那條橢圓上，套用同樣的傾斜 /
+            // The planet rides that same ellipse, with the same tilt applied
+            const ex = orbit * Math.cos(angle);
+            const ey = orbit * CONFIG.MAP_STAR_PLANET_SQUASH * Math.sin(angle);
+            const px = vp.x + ex * Math.cos(tilt) - ey * Math.sin(tilt);
+            const py = vp.y + ex * Math.sin(tilt) + ey * Math.cos(tilt);
+
             ctx.beginPath();
-            ctx.arc(vp.x + mr * Math.cos(a), vp.y + mr * Math.sin(a), CONFIG.MAP_STAR_MOON_SIZE, 0, Math.PI * 2);
+            ctx.arc(px, py, radius, 0, Math.PI * 2);
             ctx.fillStyle = color;
-            ctx.globalAlpha = 0.7;
             ctx.fill();
-            ctx.globalAlpha = 1;
-          }
 
-          ctx.shadowBlur = CONFIG.MAP_STAR_CORE_GLOW;
-          ctx.globalAlpha = 0.3 + 0.35 * corePulse;
-          ctx.fill();
-          ctx.shadowBlur = 0;
-          ctx.globalAlpha = 1;
+            // 月球繞的是**行星**，軌道半徑在行星之外 /
+            // Moons orbit the **planet**, at a radius outside it
+            for (let m = 0; m < moonCount; m++) {
+              const moonOrbit =
+                radius +
+                CONFIG.MAP_STAR_MOON_GAP_PX +
+                m * CONFIG.MAP_STAR_MOON_STEP_PX;
+              const a =
+                moonPhase * (1 + m * CONFIG.MAP_STAR_MOON_SPEED_STEP) +
+                (m / CONFIG.MAP_STAR_MOON_MAX) * Math.PI * 2;
+              ctx.beginPath();
+              ctx.arc(
+                px + moonOrbit * Math.cos(a),
+                py + moonOrbit * Math.sin(a),
+                CONFIG.MAP_STAR_MOON_SIZE,
+                0,
+                Math.PI * 2
+              );
+              ctx.fillStyle = CONFIG.MAP_STAR_MOON_COLOR;
+              ctx.fill();
+            }
+          }
         }
       }
 
