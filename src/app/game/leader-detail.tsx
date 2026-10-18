@@ -15,6 +15,7 @@ import { useEffect, useState, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { t } from '@/lib/i18n';
+import { relationsOf, type Relation, type RelationPair } from '@/lib/relations';
 import { Ic } from './icons';
 import type { WorldState } from './types';
 import { GM_BTN, GM_MODAL, GM_PANEL, GM_TITLE } from './styles';
@@ -124,6 +125,105 @@ export function DetailModal({
       </motion.div>
     </motion.div>,
     document.body
+  );
+}
+
+/**
+ * 將領的關係清單：朋友與不滿的人
+ * A leader's relations: friends and people they are unhappy with
+ *
+ * 兩種關係的資料形狀完全相同（`{ aId, bId, sinceRound }`），只有讀取方式不同，所以
+ * 共用一個清單元件；去重與「兩端都要掃」的邏輯放在 `relationsOf`（純函式、可測），
+ * 這裡只負責排版。
+ *
+ * Both relations have the same data shape (`{ aId, bId, sinceRound }`) and differ only in
+ * what they mean, so one list component serves both; the dedupe and the both-endpoints scan
+ * live in `relationsOf` (pure and tested) and this only renders.
+ *
+ * 名稱可點：**點了就開那個人的彈窗**。關係是雙向的，所以從這一側點過去是唯一看得到
+ * 「對方怎麼看我」的入口。
+ * Names are clickable, opening that leader's popup. Relations are bidirectional, so this
+ * is the only way in from one side to see how the other one sees it.
+ */
+export function LeaderRelations({
+  charId,
+  friendships,
+  discontents,
+  nameOf,
+  onOpenLeader,
+}: {
+  charId: string;
+  /** 全部友誼列 / every friendship row */
+  friendships: ReadonlyArray<RelationPair>;
+  /** 全部不滿列，每對兩列 / every discontent row, two per pair */
+  discontents: ReadonlyArray<RelationPair>;
+  /** id → 人名；查不到時回退為 '—' / id → name, falling back to '—' */
+  nameOf: (id: string) => string;
+  onOpenLeader: (id: string) => void;
+}) {
+  const friendList = relationsOf(charId, friendships);
+  const discontentList = relationsOf(charId, discontents);
+
+  const section = (
+    title: string,
+    rows: ReadonlyArray<Relation>,
+    empty: string,
+    emptyIcon: ReactNode
+  ) => (
+    <section className="space-y-1.5">
+      <h4 className="flex items-center gap-1.5 text-xs text-gray-400">
+        {title}
+        <span className="font-display text-gray-500">{rows.length}</span>
+      </h4>
+      {rows.length === 0 ? (
+        <p className="flex items-center gap-1.5 text-xs text-gray-500 italic">{empty}</p>
+      ) : (
+        <ul className="space-y-0.5">
+          {rows.map((relation) => (
+            <li key={relation.id}>
+              <button
+                type="button"
+                onClick={() => onOpenLeader(relation.id)}
+                className="flex w-full items-center gap-2 rounded px-2 py-1 text-left transition-colors duration-150 hover:bg-white/5"
+              >
+                <span className="w-4 shrink-0 text-gray-500">{emptyIcon}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-gray-200">
+                  {nameOf(relation.id)}
+                </span>
+                {/* 成立回合是關係的**年資**——一場三回合的友誼和一場六十回合的
+                    不該看起來一樣重 / When it formed is the relationship's *age*: a
+                    three-round friendship and a sixty-round one should not look alike */}
+                <span className="shrink-0 text-[11px] text-gray-500 tabular-nums">
+                  {t('character.sinceRound', { round: relation.sinceRound })}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+
+  return (
+    <div className="space-y-4">
+      {section(
+        t('character.friends'),
+        friendList,
+        t('character.noFriends'),
+        <Ic className="w-4 h-4">
+          <circle cx="9" cy="12" r="3" />
+          <circle cx="15" cy="12" r="3" />
+        </Ic>
+      )}
+      {section(
+        t('character.discontents'),
+        discontentList,
+        t('character.noDiscontents'),
+        <Ic className="w-4 h-4">
+          <path d="M6 8 12 14 18 8" />
+        </Ic>
+      )}
+    </div>
   );
 }
 

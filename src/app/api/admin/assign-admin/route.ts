@@ -106,7 +106,7 @@ export async function POST(request: Request) {
   const placeRef = { id: place.id, name: place.name };
 
   // 舊任者若被換下 → 免職（野心 +1、取消未到期減免）並記 ADMIN_REMOVED /
-  // A displaced outgoing admin is revoked (+1 ambition, pending reduction
+  // A displaced outgoing admin is revoked (+1 defectionBase, pending reduction
   // cancelled) and an ADMIN_REMOVED Event is logged
   if (place.administratorId && place.administratorId !== character.id) {
     const oldAdmin = await prisma.character.findUnique({

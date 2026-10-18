@@ -24,9 +24,9 @@ import { prisma, Prisma } from '@/lib/prisma';
 // The test is one question: does any later code path repair this? If not, it must be
 // atomic. Currently that is exactly two units:
 //
-//   - adminAssign.grantAdmin / revokeAdmin - the seat moves but the ambition delta never
+//   - adminAssign.grantAdmin / revokeAdmin - the seat moves but the defectionBase delta never
 //     lands, so no revert is ever scheduled, and nothing will ever credit it back. That
-//     character is then permanently quieter in ambition than the rules allow.
+//     character is then permanently quieter in defectionBase than the rules allow.
 //   - economy's per-place payout - splitIncome guarantees the three shares sum exactly to
 //     the income, so a crash between two increments moves the missing gold nowhere. It
 //     ceases to exist, and no later phase reconciles totals.

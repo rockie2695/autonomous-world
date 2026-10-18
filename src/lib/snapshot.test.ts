@@ -55,7 +55,7 @@ describe('Snapshot Compression', () => {
         jing: 20,
         speed: 18,
         loyalty: 'SELF',
-        ambition: 22,
+        defectionBase: 22,
         age: 35,
         placeId: 'place-1',
         troops: 500,
@@ -69,6 +69,26 @@ describe('Snapshot Compression', () => {
         id: 'road-1',
         aId: 'place-1',
         bId: 'place-2',
+      },
+    ],
+    friendships: [
+      {
+        aId: 'char-1',
+        bId: 'char-2',
+        sinceRound: 3,
+      },
+    ],
+    // 不滿是**互相**的，所以兩個方向各一列 / Discontent is **mutual**, so one row per direction
+    discontents: [
+      {
+        aId: 'char-1',
+        bId: 'char-2',
+        sinceRound: 4,
+      },
+      {
+        aId: 'char-2',
+        bId: 'char-1',
+        sinceRound: 4,
       },
     ],
   });
@@ -136,6 +156,8 @@ describe('Snapshot Compression', () => {
         factions: [],
         characters: [],
         roads: [],
+        friendships: [],
+        discontents: [],
       };
       
       const compressed = compressSnapshot(state);

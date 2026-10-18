@@ -6,17 +6,20 @@
 // defined in exactly one place.
 //
 // 規則 / Rules:
-// - 取得行政官職務 → 野心 -CONFIG.AMBITION_ADMIN_ASSIGNED_DELTA（暫時），
-//   並在 CONFIG.AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS 回合後自動回復；
-//   期間若仍在職，回復 +同一數值；若中途被免職或死亡則不回復
-//   （免職本身已給 +CONFIG.AMBITION_ADMIN_REPLACED_DELTA）
-//   Granted the post → temporary -AMBITION_ADMIN_ASSIGNED_DELTA ambition that
-//   auto-reverts after AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS if the character
-//   is still in office; no revert if removed or dead (removal already paid
-//   +AMBITION_ADMIN_REPLACED_DELTA).
-// - 被免職 → 野心 +CONFIG.AMBITION_ADMIN_REPLACED_DELTA，並取消尚未到期的減免
-//   Removed from the post → +AMBITION_ADMIN_REPLACED_DELTA ambition and any
-//   pending reduction is cancelled.
+// - 取得行政官職務 → 寫入一筆 -DEFECTION_ADMIN_ASSIGNED_DELTA 的 DefectionEvent
+//   Granted the post → writes a -DEFECTION_ADMIN_ASSIGNED_DELTA DefectionEvent
+//
+//   **這是永久的帳本項目，沒有自動回復。** 「暫時減免、到期 +1 回復」整組機制已經移除：
+//   欄位 `adminAmbitionRevertRound`（已刪）、`AMBITION_RECOVERED` 事件型態（從未被任何程式
+//   寫出）、以及消費它的三個 UI 分支，都已一併刪除。不要在沒有讀過這段的情況下把它加回去。
+//
+//   This is a **permanent** ledger entry with no revert. The whole deduct-then-revert
+//   machinery is gone: the `adminAmbitionRevertRound` column (dropped), the
+//   `AMBITION_RECOVERED` event type (never emitted by anything) and the three UI branches
+//   that consumed it were all deleted together. Do not reintroduce the revert without
+//   reading this first.
+// - 被免職 → 寫入一筆 +DEFECTION_ADMIN_REPLACED_DELTA 的 DefectionEvent
+//   Removed from the post → writes a +DEFECTION_ADMIN_REPLACED_DELTA DefectionEvent
 // - 任何行政官異動（指派 / 免職 / 清空）都會把 Place.adminChangedRound 更新為
 //   該回合；AI 路徑在 ADMIN_CHANGE_COOLDOWN_ROUNDS 回合內不得更換
 //   Every change (grant / revoke / clear) stamps Place.adminChangedRound;
@@ -74,7 +77,7 @@ export interface GrantAdminParams {
  * 指派行政官：清掉他在別處的職務 → 更新地點（含冷卻錨點）→
  * 野心暫時 -1（10 回合後自動回復）→ 記錄事件。
  * Grant the administrator post: clear his seat elsewhere → update the place
- * (stamping the cooldown anchor) → temporary -1 ambition (auto-reverting) →
+ * (stamping the cooldown anchor) → temporary -1 defectionBase (auto-reverting) →
  * log events.
  *
  * 若角色已有尚未到期的減免（表示職務未中斷，例如換地點連任），
@@ -90,12 +93,12 @@ export async function grantAdmin(params: GrantAdminParams): Promise<void> {
  * 實際寫入 / The body, run inside one transaction.
  *
  * 岗位搬過了而野心沒扣是最害的半寫入：它會永久沒有回歸的回毫。 /
- * A seat that moves without the ambition delta is the worst kind of half-write: there
+ * A seat that moves without the defectionBase delta is the worst kind of half-write: there
  * is then no scheduled revert, so the deduction is simply permanent.
  * 實際寫入 / The body, run inside one transaction.
  *
  * 岗位搬過了而野心沒扣，就永不會有回歸排安排。 /
- * A seat that moves without the ambition delta is the worst kind of half-write: no
+ * A seat that moves without the defectionBase delta is the worst kind of half-write: no
  * revert is ever scheduled, so the deduction is simply permanent.
  */
 async function grantAdminTx(
@@ -124,7 +127,7 @@ async function grantAdminTx(
   // 原本的「暫時扣 1、十回合後回 1」連同 adminAmbitionRevertRound 一併退休，
   // 而「升遷過沒有」仍會影響叛變值，所以 lastPromotedRound 必須照舊更新。
   //
-  // Ambition is a fixed initial stat and is no longer rewritten. All that is left here is
+  // The defection base is a fixed initial stat and is no longer rewritten. All that is left here is
   // recording the promotion round: the old temporary -1 and its scheduled revert, along with
   // adminAmbitionRevertRound, are retired together. "Has gone a while without promotion"
   // still feeds the defection value, so lastPromotedRound is still updated.
@@ -167,7 +170,7 @@ export interface RevokeAdminParams {
 /**
  * 免職行政官：野心 +1、取消未到期的減免、記錄事件。
  * 免職事件（若記錄）由呼叫端決定，因為「被誰取代」等資訊只有呼叫端有。
- * Revoke the administrator post: +1 ambition, cancel any pending reduction,
+ * Revoke the administrator post: +1 defectionBase, cancel any pending reduction,
  * log the event. Whether an ADMIN_REMOVED Event is written is the caller's
  * choice, since only the caller knows the succession context.
  */
@@ -179,7 +182,7 @@ export async function revokeAdmin(params: RevokeAdminParams): Promise<void> {
  * 實際寫入 / The body, run inside one transaction.
  *
  * 岗位搬過了而野心沒扣是最害的半寫入：它會永久沒有回歸的回毫。 /
- * A seat that moves without the ambition delta is the worst kind of half-write: there
+ * A seat that moves without the defectionBase delta is the worst kind of half-write: there
  * is then no scheduled revert, so the deduction is simply permanent.
  * 實際寫入 / The body, run inside one transaction.
  *
@@ -201,16 +204,16 @@ async function revokeAdminTx(
   // delta 加進叛變值。原本「順帶清掉未到期減免」的連帶動作也一起退休：現在根本不會
   // 再排定減免，所以沒有東西需要清。
   //
-  // Ambition is a fixed initial stat, so removal no longer rewrites it; this only writes a
+  // The defection base is a fixed initial stat, so removal no longer rewrites it; this only writes a
   // ledger row for `loyaltyCheck` to fold into next round's defection value. The old
   // side-effect of clearing a pending reduction retires with it: no reduction is ever
   // scheduled now, so there is nothing to clear.
-  await tx.ambitionEvent.create({
+  await tx.defectionEvent.create({
     data: {
       worldId,
       charId: char.id,
       round,
-      delta: CONFIG.AMBITION_ADMIN_REPLACED_DELTA,
+      delta: CONFIG.DEFECTION_ADMIN_REPLACED_DELTA,
       reason: newAdmin
         ? `Removed as administrator of ${place.name} by ${newAdmin.name}`
         : `Removed as administrator of ${place.name}`,

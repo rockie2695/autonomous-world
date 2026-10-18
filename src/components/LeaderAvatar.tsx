@@ -19,7 +19,7 @@
 //   統領 tong        → 肩章／素肩章／破肩章 / board, plain board, torn board
 //   經濟 jing        → 算盤／銅錢／空錢袋 / abacus, cash coin, empty pouch
 //   年長 age ≥ 60    → 髮色轉灰白 / hair greys out
-//   野心 ambition ≥ 20 → 眉壓低 / brows angle down
+//   野心 defectionBase ≥ 20 → 眉壓低 / brows angle down
 //   陣營 factionId   → 衣袍與底色 / robe and backdrop tint
 //
 // ── 三條讓九個線索讀得懂的規則 / three rules that make all nine cues readable ──
@@ -57,7 +57,7 @@ export interface AvatarCharacter {
   ti: number;
   /** 速度：身後動勢線的數量 / Speed: how many motion lines trail the head */
   speed: number;
-  ambition: number;
+  defectionBase: number;
   age: number;
   isKing: boolean;
 }
@@ -90,7 +90,7 @@ const MOUTH_SHAPES = ['flat', 'smile', 'firm'] as const;
 
 /** 資料門檻 / Data thresholds */
 const GREY_HAIR_AGE = 60;
-const SHARP_BROW_AMBITION = 20;
+const SHARP_BROW_DEFECTION_BASE = 20;
 /**
  * 三段式能力門檻：≥ `ABILITY_HIGH` 為 high、≥ `ABILITY_MID` 為 mid，其餘為 low。
  * 能力值域 5–30，所以 high 只有最頂端約兩成、mid 是最常見的一檔。舊規則只有
@@ -331,7 +331,7 @@ export interface AvatarTraits {
   facialHair: (typeof FACIAL_HAIR)[number];
   /** 君王頭上的王冠 / The king's crown */
   crown: boolean;
-  /** 眉壓低（野心高）/ Brows angled down (high ambition) */
+  /** 眉壓低（野心高）/ Brows angled down (high defectionBase) */
   sharpBrow: boolean;
   /** 武力三段 → 頭盔／額帶／疤痕 / Martial band -> helmet, headband, scar */
   wuTier: AbilityTier;
@@ -417,7 +417,7 @@ export function deriveAvatarTraits(character: AvatarCharacter): AvatarTraits {
     mouthShape,
     facialHair,
     crown: character.isKing,
-    sharpBrow: character.ambition >= SHARP_BROW_AMBITION,
+    sharpBrow: character.defectionBase >= SHARP_BROW_DEFECTION_BASE,
     // 三項能力各自分段且彼此獨立：富而不武、或勇而無謀，都是合理的 /
     // Each ability is banded independently — being rich without being a warrior,
     // or brave without being shrewd, are both perfectly legitimate
@@ -963,7 +963,7 @@ export function LeaderAvatar({
         </>
       )}
 
-      {/* 眉 / Brows — ambition angles them downward. 統一線粗 /
+      {/* 眉 / Brows — defectionBase angles them downward. 統一線粗 /
           One shared stroke weight */}
       <path
         d={

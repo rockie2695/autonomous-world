@@ -56,6 +56,8 @@
  * under the project's `node` vitest environment.
  */
 
+import { CONFIG } from './gameConfig';
+
 /** 一個地方 / One place */
 export interface TerritorySite {
   id: string;
@@ -126,8 +128,9 @@ export interface FactionRegion {
    * 整個矩形都經過驗證確認落在自己領地內，所以文字用它當作可用空間是安全的。
    *
    * Where the label **may reach**: the half-length and half-width (graph units) of a
-   * rectangle centred on the anchor and aligned to the principal axis. The whole rectangle
-   * is verified to lie inside this faction's own claim, so sizing text against it is safe.
+   * rectangle centred on the anchor, aligned to **the frame the name is drawn in**
+   * (see `labelRotated`). The whole rectangle is verified to lie inside this faction's own
+   * claim, so sizing text against it is safe.
    *
    * 這是內切圓之外的第二個答案。圓只保證「圓心附近最寬多少」，對一塊**細長**的領地
    * 來說它小得可憐——名字沿長軸可以跑很遠，卻因為圓太窄而被迫縮成一小撮。要用滿整塊
@@ -149,6 +152,34 @@ export interface FactionRegion {
    */
   halfAlong: number;
   halfAcross: number;
+  /**
+   * 名字會不會**跟著主軸轉**。這是本模組唯一的決定，renderer 必須照著畫，
+   * 不許自己從 `elongation` 再推一次。
+   *
+   * Whether the name is drawn **along the principal axis**. This is the single decision, and
+   * the renderer must follow it rather than re-deriving it from `elongation`.
+   *
+   * **量矩形的座標系必須等於畫字的座標系。** 這兩件事曾經各做各的：矩形永遠沿主軸量，
+   * 但文字只有 `elongation > 1.5` 才轉。於是一塊 elongation 1.42、主軸歪 57° 的領地，
+   * 名字是**水平**畫的，卻被塞進一個**歪 57°** 的矩形裡，四個角有三個落在自己地盤之外——
+   * 而矩形是保證整塊都在自己地盤內的，所以那三個角也就跑到別人的地上了。
+   *
+   * The frame the rectangle is measured in **must be** the frame the text is drawn in. These
+   * two were once decided independently: the rectangle was always measured along the principal
+   * axis, but the text was only rotated onto it above 1.5. So a claim with elongation 1.42 and
+   * a 57° axis got a **horizontal** name fitted into a rectangle tilted 57°, and three of its
+   * four corners landed off its own land — which, since the rectangle is verified to be
+   * entirely inside the claim, means three of four corners were on someone else's ground.
+   */
+  labelRotated: boolean;
+  /**
+   * 名字在**螢幕**上該轉多少度（已經取負、正規化到 ±90°，所以可以直接餵給 `rotate()`）。
+   * 未旋轉時是 0。
+   *
+   * How far the name is rotated **on screen**, in degrees — already negated for the flipped y
+   * axis and normalised to ±90°, so it can go straight into `rotate()`. Zero when not rotated.
+   */
+  labelAngleDeg: number;
 }
 
 /** 一條封閉邊界上的一個點（圖座標）/ one point on a closed outline, in graph coordinates */
@@ -689,6 +720,24 @@ export function factionAt(
 const LABEL_NAME_ASPECT = 4.4;
 
 /**
+ * 選址時評分的候選格數量，以及評分前的取樣上限。**兩者都是品質／成本的取捨**，所以放在
+ * config：數字越大名字越大，計算也越貴（實測單一領地 4ms → 14ms）。
+ *
+ * How many candidates the anchor search scores in full, and how many cells it samples first.
+ * **Both are a quality/cost trade-off**, so they live in config: bigger numbers make the name
+ * bigger and the work heavier (measured on one claim: 4ms -> 14ms).
+ *
+ * 先用便宜的代理評分對**取樣後**的格子排名，再只對前幾名跑真正的矩形搜尋。窮舉所有格子
+ * 太貴（每格要沿兩軸走到底），而全領地可能上千格，所以另外抽樣。
+ *
+ * Sample the cells, rank them with the cheap proxy, then run the real rectangle search for
+ * only the best few. Scoring every cell is far too costly (each one walks both axes to the
+ * boundary), and a claim can hold thousands of cells, hence the extra sampling.
+ */
+const LABEL_ANCHOR_SAMPLES = CONFIG.TERRITORY_LABEL_ANCHOR_SAMPLES;
+const LABEL_ANCHOR_CANDIDATES = CONFIG.TERRITORY_LABEL_ANCHOR_CANDIDATES;
+
+/**
  * 量出「以某格為中心、沿 `angle` 對齊、而且整塊都在同一勢力領地內」的矩形半長與半寬。
  * Measure the half-length and half-width of a rectangle centred on a cell, aligned to
  * `angle`, whose **entire area** belongs to the same faction.
@@ -711,7 +760,7 @@ const LABEL_NAME_ASPECT = 4.4;
  *
  * @returns 半長與半寬（圖座標）/ The half-extents, in graph units
  */
-function measureClaimRect(
+export function measureClaimRect(
   field: TerritoryField,
   factionIndex: number,
   px: number,
@@ -991,8 +1040,152 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
   }
 
   const cellAvg = (cellW + cellH) / 2;
-  return Array.from(totals.entries())
-    .map(([key, e]) => {
+
+  /**
+   * 這格是不是**某個指定勢力**的地。**必須帶勢力** —— 只問「有沒有主」會讓代理評分沿著
+   * 別人的領地一路走過去，每一個靠近邊界的格子看起來都特別寬敞，排名就整個失真。
+   *
+   * Whether this graph point belongs to a **specific** faction. The faction matters: asking only
+   * "does anyone own this" lets the proxy walk straight through a neighbour's claim, so every cell
+   * near a border looks roomy and the ranking becomes noise.
+   */
+  const ownsCell = (gx: number, gy: number, factionIndex: number): boolean => {
+    if (gx < field.minX || gy < field.minY || gx > field.maxX || gy > field.maxY) return false;
+    const cx = Math.floor(((gx - field.minX) / spanX) * W);
+    const cy = Math.floor(((gy - field.minY) / spanY) * H);
+    return field.owner[cy * W + cx] === factionIndex;
+  };
+
+  /** 每個勢力自己的格子，供選址使用 / each faction's own cells, for anchor picking */
+  const cellsByFaction = new Map<string, Array<{ px: number; py: number }>>();
+  for (let py = 0; py < H; py++) {
+    for (let px = 0; px < W; px++) {
+      const faction = field.owner[py * W + px] ?? -1;
+      if (faction < 0) continue;
+      const key = field.factions[faction];
+      if (key === undefined) continue;
+      const list = cellsByFaction.get(key);
+      if (list) list.push({ px, py });
+      else cellsByFaction.set(key, [{ px, py }]);
+    }
+  }
+
+  /**
+   * 候選錨點：從「最深的那格」改成「能讓字最大的那一格」。
+   *
+   * 最深的格子（最大內切圓的圓心）是**圓形**問題的正確答案，卻不是**矩形**問題的正確
+   * 答案。一塊領地可以某一點很「圓」（四周都有肉）卻很窄，而另一點較不圓、卻是一個明顯
+   * 更寬的矩形。實測最大內切圓的圓心平均只撐到最佳錨點的 1/1.48（最壞 1/3.21）——
+   * 也就是說名字被擺在一個讓它變小的地方，這正是「沒有把領地用滿」。
+   *
+   * 選址分兩階段，因為窮舉所有格子太貴：
+   * 1. **便宜的代理評分** —— 每個候選格沿兩條軸用粗步長走一次，看四周有多少肉；
+   * 2. **只對前幾名**跑真正的矩形搜尋。
+   *
+   * The anchor moves from "the deepest cell" to "the cell that makes the name largest".
+   *
+   * The deepest cell (the centre of the largest inscribed circle) is the right answer for a
+   * **circular** fit and the wrong answer for a **rectangular** one. A claim can have a point
+   * that is very round — flesh on every side — yet narrow, while a less round point holds a
+   * noticeably wider rectangle. Measured, the inscribed-circle anchor reaches only 1/1.48 of
+   * the best anchor on average and 1/3.21 at worst: the name was placed where it came out
+   * smaller, which is exactly "the label does not use the largest space".
+   *
+   * Picking the anchor is two-phase, because trying every cell is far too expensive:
+   * 1. a **cheap proxy score** — walk each candidate along both axes with a coarse step and
+   *    see how much flesh surrounds it;
+   * 2. run the real rectangle search for only the best few.
+   */
+  const chooseAnchor = (
+    factionIndex: number,
+    frameAngle: number,
+    cells: Array<{ px: number; py: number }>
+  ): { px: number; py: number; halfAlong: number; halfAcross: number } => {
+    const ax = Math.cos(frameAngle);
+    const ay = Math.sin(frameAngle);
+    const bx = -ay;
+    const by = ax;
+    const walk = (cx: number, cy: number, dx: number, dy: number): number => {
+      let d = 0;
+      while (ownsCell(cx + dx * (d + cellAvg * 0.5), cy + dy * (d + cellAvg * 0.5), factionIndex)) {
+        d += cellAvg * 0.5;
+      }
+      return d;
+    };
+    const scored = cells
+      .map((c) => {
+        const cx = graphX(c.px);
+        const cy = graphY(c.py);
+        const aMax = Math.min(walk(cx, cy, ax, ay), walk(cx, cy, -ax, -ay));
+        const bMax = Math.min(walk(cx, cy, bx, by), walk(cx, cy, -bx, -by));
+        return { ...c, score: Math.min(aMax / LABEL_NAME_ASPECT, bMax) };
+      })
+      .sort((p, q) => q.score - p.score);
+
+    let best = { px: cells[0]!.px, py: cells[0]!.py, halfAlong: 0, halfAcross: 0 };
+    let bestScore = -1;
+    for (const cand of scored.slice(0, LABEL_ANCHOR_CANDIDATES)) {
+      const rect = measureClaimRect(
+        field,
+        factionIndex,
+        cand.px,
+        cand.py,
+        frameAngle,
+        cellW,
+        cellH
+      );
+      // 字級正比於 min(halfAlong/ASPECT, halfAcross)，所以直接比這個 /
+      // The font is proportional to min(halfAlong/ASPECT, halfAcross), so compare that
+      const score = Math.min(rect.halfAlong / LABEL_NAME_ASPECT, rect.halfAcross);
+      if (score > bestScore) {
+        bestScore = score;
+        best = { px: cand.px, py: cand.py, halfAlong: rect.halfAlong, halfAcross: rect.halfAcross };
+      }
+    }
+    return best;
+  };
+
+  /**
+   * 兩個候選座標系裡挑一個，而不是由 elongation 直接決定。
+   *
+   * 原本的規則是「elongation > 1.5 就轉」，那是**形狀**的描述，不是**大小**的答案：
+   * 實測 27 個領地裡，水平比主軸好的有 17 個 —— 規則錯的次數比對的還多。讓兩個座標系
+   * 各跑一次選址再比字級，平均大 1.141 倍（最壞 1.57 倍）。
+   *
+   * Pick between two candidate frames instead of letting `elongation` decide.
+   *
+   * The old rule — "rotate above elongation 1.5" — describes the **shape**, and is not the
+   * answer to "how big". Measured over 27 claims, horizontal beat the principal axis in **17
+   * of them**: the rule was wrong more often than right. Running the anchor search in both
+   * frames and comparing font scores gains 1.141x on average, 1.57x at worst.
+   *
+   * **要有遲滯**，否則兩者接近時名字會在每個回合之間翻轉。傾斜的座標系必須明顯更好
+   * （`TERRITORY_LABEL_ROTATE_MARGIN`）才會被採用，否則一律水平。
+   *
+   * **It needs hysteresis**, or the name flips between the two orientations every round when
+   * they are close. The tilted frame has to be clearly better (`TERRITORY_LABEL_ROTATE_MARGIN`)
+   * to be taken; otherwise the name stays horizontal.
+   */
+  const pickFrame = (
+    factionIndex: number,
+    principalAngle: number,
+    mayRotate: boolean,
+    cells: Array<{ px: number; py: number }>
+  ): { anchor: { px: number; py: number; halfAlong: number; halfAcross: number }; rotated: boolean } => {
+    const flat = chooseAnchor(factionIndex, 0, cells);
+    const flatScore = Math.min(flat.halfAlong / LABEL_NAME_ASPECT, flat.halfAcross);
+    if (!mayRotate) return { anchor: flat, rotated: false };
+    const tilted = chooseAnchor(factionIndex, principalAngle, cells);
+    const tiltedScore = Math.min(tilted.halfAlong / LABEL_NAME_ASPECT, tilted.halfAcross);
+    return tiltedScore > flatScore * CONFIG.TERRITORY_LABEL_ROTATE_MARGIN
+      ? { anchor: tilted, rotated: true }
+      : { anchor: flat, rotated: false };
+  };
+
+  const bySize = Array.from(totals.entries()).sort((a, b) => b[1].cells - a[1].cells);
+
+  return bySize
+    .map(([key, e], rank) => {
       const cx = e.sumX / e.cells;
       const cy = e.sumY / e.cells;
       // 共變異數 → 主軸方向 / covariance to principal axis
@@ -1000,38 +1193,66 @@ export function factionRegions(field: TerritoryField): FactionRegion[] {
       const cyy = e.syy / e.cells - cy * cy;
       const cxy = e.sxy / e.cells - cx * cy;
       const angle = 0.5 * Math.atan2(2 * cxy, cxx - cyy);
-      // 主軸與次軸的比：太接近就是接近圓形，方向不穩定，不值得旋轉文字
-      // Axial ratio: too close means near-circular, where the direction is unstable and
-      // rotating the text is not worth it
+      // 主軸與次軸的比。太接近 1 就是接近圓形，此時主軸方向純粹是雜訊，
+      // 照著它轉字只會每回合亂晃 —— 門檻在下一行 /
+      // Axial ratio. Too close to 1 means near-circular, where the axis direction is pure
+      // noise and rotating to it would jitter round after round — so the threshold is
+      // applied on the next line
       const trace = cxx + cyy;
       const diff = Math.sqrt(Math.max(0, (cxx - cyy) * (cxx - cyy) + 4 * cxy * cxy));
       const l1 = (trace + diff) / 2;
       const l2 = (trace - diff) / 2;
       const elongation = l2 > 1e-9 ? Math.sqrt(l1 / l2) : 99;
-      // 標籤可以用到的矩形：沿主軸量、並且驗證整塊都在自己領地內 /
-      // The rectangle the label may use: measured along the principal axis, with the
-      // whole area verified to be inside this faction's own claim
-      const rect = measureClaimRect(
-        field,
-        field.factions.indexOf(key),
-        e.bestPx,
-        e.bestPy,
-        angle,
-        cellW,
-        cellH
-      );
+      // 這個座標系可不可以選 —— 接近圓形時主軸是雜訊，照著轉會每回合亂晃 /
+      // Whether the tilted frame is even eligible — on a near-circular claim the axis is noise
+      // and rotating to it would jitter
+      const mayRotate = elongation > CONFIG.TERRITORY_LABEL_ROTATE_ELONGATION;
+      // 選址：在自己的格子裡挑最能撐大名字的那一格，而不是最深的那一格。
+      // 取樣上限：整塊領地可能上千格，逐格評分太貴 /
+      // Pick the cell that best fills the name, not the deepest one. Sampling cap: a claim
+      // can hold thousands of cells and scoring every one is too costly
+      const own = cellsByFaction.get(key) ?? [{ px: e.bestPx, py: e.bestPy }];
+      const stride = Math.max(1, Math.ceil(own.length / LABEL_ANCHOR_SAMPLES));
+      const sampled = stride > 1 ? own.filter((_, i) => i % stride === 0) : own;
+      const factionIndex = field.factions.indexOf(key);
+      // 只有可能會被標名的領地值得跑昂貴的選址：其餘的排序永遠在前 N 名之後 /
+      // Only claims that can actually be labelled are worth the expensive search — the rest
+      // sort below the cap and are never drawn
+      const searchable =
+        rank < CONFIG.TERRITORY_MAX_LABELS && e.cells >= CONFIG.TERRITORY_MIN_LABEL_CELLS;
+      const { anchor, rotated: labelRotated } = searchable
+        ? pickFrame(factionIndex, angle, mayRotate, sampled)
+        : {
+            anchor: chooseAnchor(factionIndex, mayRotate ? angle : 0, sampled),
+            rotated: mayRotate,
+          };
+      // 圖的 y 軸在螢幕上是翻轉的，所以螢幕角度取負；再正規化到 ±90°，字永遠不會顛倒 /
+      // Screen y is flipped relative to graph y, so negate; then normalise to ±90° so the text
+      // is never upside-down. (A 180° flip maps the axis onto its own negative, and the
+      // rectangle is symmetric under that, so the fit still holds.)
+      let labelAngleDeg = 0;
+      if (labelRotated) {
+        labelAngleDeg = (-angle * 180) / Math.PI;
+        while (labelAngleDeg > 90) labelAngleDeg -= 180;
+        while (labelAngleDeg < -90) labelAngleDeg += 180;
+      }
       return {
         key,
         cellCount: e.cells,
         cx,
         cy,
-        labelX: graphX(e.bestPx),
-        labelY: graphY(e.bestPy),
-        labelRadius: e.best * cellAvg,
+        labelX: graphX(anchor.px),
+        labelY: graphY(anchor.py),
+        // 內切圓要跟著**被選中的那一格**，否則圓的後備值會描述另一個地點 /
+        // The inscribed circle must follow the **chosen** cell, or the circle fallback
+        // describes a different place
+        labelRadius: (dist[anchor.py * W + anchor.px] ?? 0) * cellAvg,
         angle,
         elongation,
-        halfAlong: rect.halfAlong,
-        halfAcross: rect.halfAcross,
+        halfAlong: anchor.halfAlong,
+        halfAcross: anchor.halfAcross,
+        labelRotated,
+        labelAngleDeg,
       };
     })
     .sort((a, b) => b.cellCount - a.cellCount);

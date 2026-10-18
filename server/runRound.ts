@@ -13,7 +13,7 @@
 //  4. economy()            收入分配，招募 / Income distribution, recruitment
 //  5. signals()            信號進展，過期 / Signal progression, expiry
 //  6. relationships()      友誼 / 不滿形成 / Friendship / discontent formation
-//  7. ambitionEvents()     野心變化 / Ambition changes
+//  7. defectionEvents()     野心變化 / Defection-value changes
 //  8. loyaltyCheck()       叛變檢查 / Defection check
 //  9. aiMove()             每個角色移動 1 格 / Each character moves 1 tile
 // 10. battle()             目的地戰鬥解析 / Battle resolution at destinations
@@ -43,7 +43,7 @@ import { childbirth } from './phases/childbirth';
 import { economy } from './phases/economy';
 import { signals } from './phases/signals';
 import { relationships } from './phases/relationships';
-import { ambitionEvents } from './phases/ambitionEvents';
+import { defectionEvents } from './phases/defectionEvents';
 import { loyaltyCheck } from './phases/loyaltyCheck';
 import { aiMove } from './phases/aiMove';
 import { battle } from './phases/battle';
@@ -139,8 +139,8 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   // ── 階段 6：關係 / Phase 6: Relationships ─────────────────────────────
   await relationships(worldId, currentRound, rng);
 
-  // ── 階段 7：野心事件 / Phase 7: Ambition Events ───────────────────────────
-  await ambitionEvents(worldId, currentRound, rng);
+  // ── 階段 7：野心事件 / Phase 7: Defection Events ───────────────────────────
+  await defectionEvents(worldId, currentRound, rng);
 
   // ── 階段 8：忠誠度檢查 / Phase 8: Loyalty Check ─────────────────────────
   defections = await loyaltyCheck(worldId, currentRound, rng);

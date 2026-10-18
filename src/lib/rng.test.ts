@@ -184,4 +184,63 @@ describe('RNG (Random Number Generator)', () => {
       expect(rng1.getState()).toBe(rng2.getState());
     });
   });
+
+  // `defectionBase` and `speed` are both integer columns. Both used to be fed `gaussian()`, which
+  // returns a float, so their integrality was the *database's* doing rather than the code's.
+  // This is the helper that makes it the code's job instead.
+  describe('gaussianInt', () => {
+    it('should only ever return integers', () => {
+      // The whole point: a float reaching an Int column is silently accepted, so nothing
+      // upstream would have complained.
+      const rng = createRng('gaussian-int');
+      for (let i = 0; i < 500; i++) {
+        const value = rng.gaussianInt(17, 5, 5, 30);
+        expect(Number.isInteger(value)).toBe(true);
+      }
+    });
+
+    it('should respect min and max exactly, never rounding past a bound', () => {
+      // Rounding happens after the clamp, so a clamped value lands *on* the bound. If rounding
+      // came first, an already-clamped 30 could become 30 but a 29.6 could round up to a value
+      // above the range in other configurations.
+      const rng = createRng('bounds');
+      for (let i = 0; i < 500; i++) {
+        const value = rng.gaussianInt(1000, 500, 5, 30);
+        expect(value).toBeGreaterThanOrEqual(5);
+        expect(value).toBeLessThanOrEqual(30);
+      }
+    });
+
+    it('should be exactly gaussian() rounded, so the shape is unchanged', () => {
+      // Same seed, same draw: the integer version must be the float version rounded, not a
+      // different sample. Otherwise changing defectionBase to an integer would silently re-roll
+      // every world generated from a given seed.
+      const a = createRng('shape');
+      const b = createRng('shape');
+      for (let i = 0; i < 200; i++) {
+        expect(a.gaussianInt(17, 5, 5, 30)).toBe(
+          Math.round(b.gaussian(17, 5, 5, 30))
+        );
+      }
+    });
+
+    it('should be deterministic for a seed', () => {
+      const first = Array.from({ length: 10 }, () =>
+        createRng('det').gaussianInt(17, 5, 5, 30)
+      );
+      const again = Array.from({ length: 10 }, () =>
+        createRng('det').gaussianInt(17, 5, 5, 30)
+      );
+      expect(again).toEqual(first);
+    });
+
+    it('should still centre near the mean', () => {
+      const rng = createRng('centre');
+      let total = 0;
+      const n = 4000;
+      for (let i = 0; i < n; i++) total += rng.gaussianInt(17, 5, 5, 30);
+      expect(total / n).toBeGreaterThan(16);
+      expect(total / n).toBeLessThan(18);
+    });
+  });
 });

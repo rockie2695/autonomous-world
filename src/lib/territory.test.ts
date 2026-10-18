@@ -4,6 +4,7 @@ import {
   factionAt,
   factionRegions,
   factionOutlines,
+  measureClaimRect,
   smoothLoop,
   meanNeighbourDistance,
   nearestSite,
@@ -15,6 +16,8 @@ import {
   NEIGHBOUR_TOP,
   type TerritorySite,
 } from './territory';
+import { solveLabelFontSize } from '@/components/mapShared';
+import { CONFIG } from '@/lib/gameConfig';
 
 /** 方形排列的四個地方 / Four sites in a square */
 function sites(): TerritorySite[] {
@@ -28,6 +31,44 @@ function sites(): TerritorySite[] {
 
 const FACTION_A = 'alpha';
 const FACTION_B = 'beta';
+
+/**
+ * 螢幕像素 / 圖座標。用於把字級換算成圖座標下的文字框尺寸。**比例對兩邊一致**，
+ * 所以餘裕的量測與實際縮放無關。
+ *
+ * Screen pixels per graph unit, used to turn a solved font size into an ink box in graph
+ * space. The same ratio applies to both sides, so the margin measurement is independent of
+ * the real zoom.
+ */
+const PX_PER_GRAPH_UNIT = 30;
+
+/** 射線法：點是否在單一闭合環內 / ray casting: is a point inside one closed loop */
+function pointInLoop(
+  loop: Array<{ x: number; y: number }>,
+  gx: number,
+  gy: number
+): boolean {
+  let hit = false;
+  for (let i = 0, j = loop.length - 1; i < loop.length; j = i++) {
+    const a = loop[i]!;
+    const b = loop[j]!;
+    if (a.y > gy !== b.y > gy && gx < ((b.x - a.x) * (gy - a.y)) / (b.y - a.y) + a.x) {
+      hit = !hit;
+    }
+  }
+  return hit;
+}
+
+/** 可重現的亂數（測試專用）/ a reproducible PRNG for the tests */
+function mulberry32(seed: number): () => number {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 describe('meanNeighbourDistance', () => {
   it('should return the spacing of a regular lattice', () => {
@@ -500,9 +541,14 @@ describe('factionRegions', () => {
   });
 
   it('should give a label rectangle whose every sampled point is owned', () => {
-    // The label is sized against halfAlong/halfAcross, a rectangle measured along the
-    // principal axis. The property that must hold unconditionally is **containment**: every
+    // The label is sized against halfAlong/halfAcross, a rectangle measured in **the frame the
+    // name is drawn in**. The property that must hold unconditionally is **containment**: every
     // point of that rectangle is this faction's own land.
+    //
+    // The frame is `labelRotated ? angle : 0`, deliberately **not** `angle`. Sweeping along the
+    // principal axis when the name is drawn unrotated guarded a rectangle nobody draws in — a
+    // horizontal name fitted into a tilted box, whose corners left the claim while the swept
+    // rectangle stayed perfectly inside it.
     //
     // Whether the rectangle beats the inscribed circle is deliberately NOT asserted here. It
     // only wins on an elongated claim, where the circle is the narrowest part; on a compact
@@ -517,8 +563,9 @@ describe('factionRegions', () => {
       expect(region.halfAlong).toBeGreaterThanOrEqual(0);
       expect(region.halfAcross).toBeGreaterThanOrEqual(0);
 
-      const ax = Math.cos(region.angle);
-      const ay = Math.sin(region.angle);
+      const frame = region.labelRotated ? region.angle : 0;
+      const ax = Math.cos(frame);
+      const ay = Math.sin(frame);
       // A dense sweep: 21x21, well above the density the search itself uses, because
       // "contained" must not depend on the sampling density that chose the rectangle.
       let leaks = 0;
@@ -533,6 +580,328 @@ describe('factionRegions', () => {
       }
       expect(leaks).toBe(0);
     }
+  });
+
+  it('should keep the drawn name inside its own claim, not just the rectangle', () => {
+    // 這是真正的守門測試。矩形「在自己地盤內」並不等於「名字在自己地盤內」——
+    // 名字有它自己的座標系（旋轉與否），而那個座標系必須和量矩形的座標系**相同**。
+    //
+    // This is the guard that matters. A rectangle lying inside the claim does **not** imply the
+    // name lies inside it: the name has its own frame (rotated or not), and that frame must be
+    // the frame the rectangle was measured in. Judged separately, a horizontal name was fitted
+    // into a tilted rectangle and its corners landed on another faction's ground.
+    //
+    // 下面的配置會產生一塊 elongation 1.05、主軸歪 16° 的領地：不旋轉，卻被沿主軸量過。
+    // The configuration below yields a claim with elongation 1.05 and a 16° axis: not rotated,
+    // yet measured along that axis. One of four corners came out on foreign ground.
+    const spread: TerritorySite[] = [
+      { id: 's0', x: 4.152, y: 6.504, faction: 'f0' },
+      { id: 's1', x: 10.488, y: 18.12, faction: 'f1' },
+      { id: 's2', x: 18.768, y: 8.136, faction: 'f3' },
+      { id: 's3', x: 20.904, y: 7.128, faction: 'f2' },
+      { id: 's4', x: 2.76, y: 6.0, faction: 'f2' },
+      { id: 's5', x: 4.848, y: 13.296, faction: 'f1' },
+      { id: 's6', x: 0.168, y: 6.048, faction: 'f1' },
+      { id: 's7', x: 17.664, y: 15.264, faction: 'f2' },
+      { id: 's8', x: 11.76, y: 3.672, faction: 'f3' },
+      { id: 's9', x: 19.032, y: 0.192, faction: 'f2' },
+      { id: 's10', x: 7.344, y: 3.336, faction: 'f1' },
+      { id: 's11', x: 7.416, y: 20.472, faction: 'f2' },
+      { id: 's12', x: 18.84, y: 22.68, faction: 'f2' },
+      { id: 's13', x: 6.744, y: 14.04, faction: 'f1' },
+    ];
+
+    const field = buildTerritoryField(spread, 200, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+
+    // 螢幕像素 / 圖座標。比例對兩邊一致，所以與實際縮放無關 /
+    // Screen pixels per graph unit. The ratio is the same on both sides, so the result is
+    // independent of the real zoom.
+    const SCALE = 30;
+    // 四個中文字 + tracking-widest（0.1em）/ four CJK glyphs plus tracking-widest (0.1em)
+    const WIDTH_AT_100 = 440;
+    const HEIGHT_AT_100 = 100;
+
+    let labelled = 0;
+    for (const region of factionRegions(field)) {
+      if (region.cellCount < CONFIG.TERRITORY_MIN_LABEL_CELLS) continue;
+      const { fontSize, legible } = solveLabelFontSize({
+        widthAt100: WIDTH_AT_100,
+        heightAt100: HEIGHT_AT_100,
+        radiusPx: region.labelRadius * SCALE,
+        availAlongPx: region.halfAlong * SCALE,
+        availAcrossPx: region.halfAcross * SCALE,
+        fit: CONFIG.TERRITORY_LABEL_FIT,
+        fontMax: CONFIG.TERRITORY_LABEL_FONT_MAX,
+        fontMin: CONFIG.TERRITORY_LABEL_FONT_MIN,
+      });
+      if (!legible) continue;
+      labelled += 1;
+
+      // 文字框的四個角，**用實際畫出來的旋轉**換算回圖座標（螢幕 y 與圖 y 相反）/
+      // The text box's four corners, converted back to graph space using the rotation it is
+      // actually drawn with (screen y runs opposite to graph y)
+      const halfW = (WIDTH_AT_100 * fontSize) / 200 / SCALE;
+      const halfH = (HEIGHT_AT_100 * fontSize) / 200 / SCALE;
+      const rad = (region.labelAngleDeg * Math.PI) / 180;
+      const widthAxis = { x: Math.cos(rad), y: -Math.sin(rad) };
+      const heightAxis = { x: -Math.sin(rad), y: -Math.cos(rad) };
+      for (const sx of [1, -1]) {
+        for (const sy of [1, -1]) {
+          const gx = region.labelX + sx * halfW * widthAxis.x + sy * halfH * heightAxis.x;
+          const gy = region.labelY + sx * halfW * widthAxis.y + sy * halfH * heightAxis.y;
+          expect(
+            factionAt(field, gx, gy),
+            `${region.key} (elongation ${region.elongation.toFixed(2)}, axis ${((region.angle * 180) / Math.PI).toFixed(1)}°, rotated=${region.labelRotated}) puts a corner of its own name outside its claim`
+          ).toBe(region.key);
+        }
+      }
+    }
+    // 這個配置本來就會產生可標示的領地；一個都沒有就代表測試本身壞了 /
+    // This configuration does produce labelable claims; finding none means the test is broken
+    expect(labelled).toBeGreaterThan(0);
+  });
+
+  it('should draw an unrotated name axis-aligned, and a rotated one along its axis', () => {
+    // `labelAngleDeg` 是唯一的旋轉來源，所以它必須真的等於畫出來的角度 /
+    // `labelAngleDeg` is the single source of rotation, so it must equal the drawn angle
+    const field = buildTerritoryField(sites(), 256, 0.2, 1.8);
+    if (!field) throw new Error('expected a field');
+    for (const region of factionRegions(field)) {
+      if (!region.labelRotated) {
+        // 未旋轉時字是水平的，矩形也必須沿螢幕軸量，否則名字會被塞進歪的框裡 /
+        // Unrotated means the text is horizontal, so the rectangle must be measured
+        // screen-axis-aligned too — otherwise the name is fitted into a tilted box
+        expect(region.labelAngleDeg).toBe(0);
+        // 轉不轉是**比大小**決定的，所以「沒轉」不代表 elongation 低 ——
+        // 傾斜的座標系輸了就是沒轉。只保證反方向：轉了必然是夠細長的領地 /
+        // Whether to rotate is decided by **comparison**, so "not rotated" says nothing
+        // about elongation — the tilted frame simply lost. Only the converse holds: rotating
+        // implies the claim was elongated enough for the axis to be meaningful at all
+        if (region.elongation > CONFIG.TERRITORY_LABEL_ROTATE_ELONGATION) {
+          // 兩個座標系都量過時，傾斜的必須明顯更好才會被選 /
+          // With both frames measured, the tilted one has to have clearly won
+          expect(region.elongation).toBeGreaterThan(
+            CONFIG.TERRITORY_LABEL_ROTATE_ELONGATION
+          );
+        }
+        continue;
+      }
+      // 已正規化到 ±90°，所以字永遠不會顛倒 /
+      // Normalised to ±90°, so the name is never upside-down
+      expect(region.labelAngleDeg).toBeGreaterThan(-90);
+      expect(region.labelAngleDeg).toBeLessThanOrEqual(90);
+      expect(Math.abs(region.labelAngleDeg)).toBeGreaterThan(0);
+    }
+  });
+
+  it('should keep the name\'s glow inside the claim it is drawn on', () => {
+    // 名字**包含它的光暈**。前面幾個測試證明的是「墨跡」在領地內，但名字還帶著一圈
+    // 外發光（`TERRITORY_LABEL_GLOW_PX`），所以求解字級時必須把它一併扣掉 ——
+    // 只靠 `TERRITORY_LABEL_FIT` 留餘裕是不行的：那個餘裕是**比例**，在細長的領地上
+    // 只有幾個像素，而光暈是固定 6px，於是光暈跨到別人的地上，看起來就是
+    // 「名字沒有完整落在領地裡」。
+    //
+    // The name **includes its glow**. The earlier tests prove the *ink* is inside; the name
+    // also carries an outward glow, which the solve has to subtract. Leaving it to
+    // `TERRITORY_LABEL_FIT` alone cannot work: that slack is a *proportion*, so on a thin
+    // claim it is a couple of pixels while the glow is a fixed 6px — and the glow spills
+    // onto a neighbour, which reads as "the label is not fully inside its territory".
+    //
+    // 這裡量的是「墨跡框到**實際畫出來的平滑外框**的距離」，而不是到格子邊界 ——
+    // 玩家看到的是平滑後的曲線。Chaikin 在凸角會向內切，所以那一層才是真正的界線。
+    //
+    // What is measured here is the gap from the ink box to the **smoothed outline that
+    // actually gets drawn**, not to the cell grid — the player sees the smoothed curve, and
+    // Chaikin cuts convex corners inward, so that is the real boundary.
+    const rng = mulberry32(0x5eed);
+    let checked = 0;
+    let smallestGap = Infinity;
+
+    for (let trial = 0; trial < 200 && checked < 500; trial++) {
+      const factionCount = 3 + Math.floor(rng() * 4);
+      const siteCount = 10 + Math.floor(rng() * 18);
+      const spread: TerritorySite[] = [];
+      for (let i = 0; i < siteCount; i++) {
+        spread.push({
+          id: `s${i}`,
+          x: rng() * 24,
+          y: rng() * 24,
+          faction: `f${Math.floor(rng() * factionCount)}`,
+        });
+      }
+      const field = buildTerritoryField(spread, 200, 0.2, 1.8);
+      if (!field) continue;
+
+      const drawn = new Map<string, Array<Array<{ x: number; y: number }>>>();
+      for (const outline of factionOutlines(field)) {
+        const key = field.factions[outline.faction];
+        if (key === undefined) continue;
+        const loops = drawn.get(key) ?? [];
+        for (const loop of outline.loops) loops.push(smoothLoop(loop, 2));
+        drawn.set(key, loops);
+      }
+
+      for (const region of factionRegions(field)) {
+        if (region.cellCount < CONFIG.TERRITORY_MIN_LABEL_CELLS) continue;
+        const loops = drawn.get(region.key) ?? [];
+        if (loops.length === 0) continue;
+
+        const { fontSize, legible } = solveLabelFontSize({
+          widthAt100: 4 * 110,
+          heightAt100: 100,
+          radiusPx: region.labelRadius * PX_PER_GRAPH_UNIT,
+          availAlongPx: region.halfAlong * PX_PER_GRAPH_UNIT,
+          availAcrossPx: region.halfAcross * PX_PER_GRAPH_UNIT,
+          fit: CONFIG.TERRITORY_LABEL_FIT,
+          fontMax: CONFIG.TERRITORY_LABEL_FONT_MAX,
+          fontMin: CONFIG.TERRITORY_LABEL_FONT_MIN,
+          glowEm: CONFIG.TERRITORY_LABEL_GLOW_EM,
+        });
+        if (!legible) continue;
+        checked += 1;
+
+        // 文字框在螢幕像素下的半長與半寬 / the ink box in screen pixels
+        const halfW = ((4 * 110 * fontSize) / 200) / PX_PER_GRAPH_UNIT;
+        const halfH = (100 * fontSize) / 200 / PX_PER_GRAPH_UNIT;
+        const rad = (region.labelAngleDeg * Math.PI) / 180;
+        const widthAxis = { x: Math.cos(rad), y: -Math.sin(rad) };
+        const heightAxis = { x: -Math.sin(rad), y: -Math.cos(rad) };
+
+        // 真正要問的是「文字框要擴大多少才會踩到外面」，**不是**「離最近的輪廓頂點多遠」。
+        // 後者會被細臂另一側的頂點騙到：那個頂點離框很近，但框往那個方向擴大根本不會碰到它，
+        // 於是量出一個 2.9px 的假餘裕、光暈是 6.6px，然後**測試失敗但幾何其實沒錯**。
+        //
+        // The real question is "how far must the box expand before it leaves the claim", **not**
+        // "how far is the nearest outline vertex". The latter is fooled by a vertex on the far
+        // side of a thin arm: it sits close to the box, yet expanding the box that way never
+        // touches it. That measured a phantom 2.9px margin against a 6.9px halo and failed the
+        // test while the geometry was perfectly correct.
+        //
+        // 所以沿文字框的框線一圈圈往外探，第一個離開自己領地的半徑就是餘裕。
+        // 倍增 + 二分，不要從 0 逐步掃 —— 線性掃描會讓這個檔案慢到超時 /
+        // So probe outward around the box; the first radius that leaves the claim is the
+        // margin. Doubling plus bisection, never a linear scan from zero: stepping upward
+        // made this file slow enough to time out.
+        const leaves = (d: number): boolean => {
+          for (let t = 0; t < 120; t++) {
+            const theta = (t / 120) * Math.PI * 2;
+            const u = Math.cos(theta) * (halfW + d);
+            const v = Math.sin(theta) * (halfH + d);
+            const gx = region.labelX + widthAxis.x * u + heightAxis.x * v;
+            const gy = region.labelY + widthAxis.y * u + heightAxis.y * v;
+            if (!loops.some((loop) => pointInLoop(loop, gx, gy))) return true;
+          }
+          return false;
+        };
+        let lo = 0;
+        let hi = 1;
+        while (hi < 4096 && !leaves(hi)) {
+          lo = hi;
+          hi *= 2;
+        }
+        for (let i = 0; i < 24 && hi - lo > 1e-4; i++) {
+          const mid = (lo + hi) / 2;
+          if (leaves(mid)) hi = mid;
+          else lo = mid;
+        }
+        const gap = hi;
+        smallestGap = Math.min(smallestGap, gap * PX_PER_GRAPH_UNIT);
+        // 光暈跟著字級縮放，所以要跟「這個字級自己的光暈」比 /
+        // The glow scales with the font, so compare against *this* font's halo
+        const glowPx = CONFIG.TERRITORY_LABEL_GLOW_EM * fontSize;
+        expect(
+          gap * PX_PER_GRAPH_UNIT,
+          `${region.key} leaves ${(gap * PX_PER_GRAPH_UNIT).toFixed(1)}px, inside its own ` +
+            `${glowPx.toFixed(1)}px glow`
+        ).toBeGreaterThanOrEqual(glowPx);
+      }
+    }
+
+    // 一個都沒量到就代表測試本身壞了。**取樣一定要夠大**：違規只出現在分布的尾端
+    // （0.82 時約 0.3%），只看一兩百個標籤通常不會撞到，測試就會假裝通過。
+    // Finding nothing at all means the test is broken. **The sample has to be large**: the
+    // violations live in the tail of the distribution (~0.3% at 0.82), so a couple of
+    // hundred labels usually misses them entirely and the test passes for the wrong reason.
+    expect(checked).toBeGreaterThan(400);
+    expect(smallestGap).toBeLessThan(Infinity);
+  });
+
+  it('should place the name where the largest rectangle is, not where the circle is', () => {
+    // 「最大內切圓的圓心」是**圓形**問題的答案，但標籤要的是**矩形**。一塊領地可以某點很圓
+    // 卻很窄，另一點較不圓卻明顯更寬。這個測試直接把要求寫出來：回傳的矩形必須等於
+    // 「窮舉自己所有格子」所找到的最好矩形。
+    //
+    // "The centre of the largest inscribed circle" answers a **circular** question, but the
+    // label needs a **rectangle**. A claim can have a point that is very round yet narrow,
+    // while a less round point holds a markedly wider rectangle. This test states the
+    // requirement outright: the returned rectangle must equal the best one found by trying
+    // **every** cell the faction owns.
+    const rng = mulberry32(0xa11ce);
+    let checked = 0;
+
+    for (let trial = 0; trial < 8 && checked < 6; trial++) {
+      const factionCount = 3 + Math.floor(rng() * 3);
+      const siteCount = 9 + Math.floor(rng() * 8);
+      const spread: TerritorySite[] = [];
+      for (let i = 0; i < siteCount; i++) {
+        spread.push({
+          id: `s${i}`,
+          x: rng() * 18,
+          y: rng() * 18,
+          faction: `f${Math.floor(rng() * factionCount)}`,
+        });
+      }
+      const field = buildTerritoryField(spread, 120, 0.2, 1.8);
+      if (!field) continue;
+      const W = field.width;
+      const H = field.height;
+      const spanX = field.maxX - field.minX;
+      const spanY = field.maxY - field.minY;
+      const cellW = spanX / W;
+      const cellH = spanY / H;
+
+      for (const region of factionRegions(field)) {
+        if (region.cellCount < CONFIG.TERRITORY_MIN_LABEL_CELLS) continue;
+        if (region.cellCount > 400) continue; // keep the exhaustive check affordable
+        const factionIndex = field.factions.indexOf(region.key);
+        const frameAngle = region.labelRotated ? region.angle : 0;
+
+        // 回傳的錨點必須真的落在自己領地的某一格裡 /
+        // The returned anchor must really sit on one of this faction's own cells
+        expect(factionAt(field, region.labelX, region.labelY)).toBe(region.key);
+
+        const chosen = Math.min(region.halfAlong / 4.4, region.halfAcross);
+        let best = 0;
+        let bestCell = '';
+        for (let py = 0; py < H; py++) {
+          for (let px = 0; px < W; px++) {
+            if (field.owner[py * W + px] !== factionIndex) continue;
+            const rect = measureClaimRect(
+              field,
+              factionIndex,
+              px,
+              py,
+              frameAngle,
+              cellW,
+              cellH
+            );
+            const score = Math.min(rect.halfAlong / 4.4, rect.halfAcross);
+            if (score > best) {
+              best = score;
+              bestCell = `${px},${py}`;
+            }
+          }
+        }
+        checked += 1;
+        expect(
+          chosen,
+          `${region.key} settled for a font score of ${chosen.toFixed(2)} but ${bestCell} ` +
+            `offers ${best.toFixed(2)} — the name is not using the largest space`
+        ).toBeGreaterThan(best * 0.98);
+      }
+    }
+    expect(checked).toBeGreaterThan(3);
   });
 
   it('should report a usable elongation, and treat a circle as maximally round', () => {

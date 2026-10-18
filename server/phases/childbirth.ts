@@ -106,18 +106,18 @@ export async function childbirth(
         tong: rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX),
         ti: rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX),
         jing: rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX),
-        speed: rng.gaussian(
+        speed: rng.gaussianInt(
           CONFIG.CHAR_SPEED_MEAN,
           CONFIG.CHAR_SPEED_SIGMA,
           CONFIG.CHAR_SPEED_MIN,
           CONFIG.CHAR_SPEED_MAX
         ),
         loyalty: 'SELF',
-        ambition: rng.gaussian(
-          CONFIG.CHAR_AMBITION_MEAN,
-          CONFIG.CHAR_AMBITION_SIGMA,
-          CONFIG.CHAR_AMBITION_MIN,
-          CONFIG.CHAR_AMBITION_MAX
+        defectionBase: rng.gaussianInt(
+          CONFIG.CHAR_DEFECTION_BASE_MEAN,
+          CONFIG.CHAR_DEFECTION_BASE_SIGMA,
+          CONFIG.CHAR_DEFECTION_BASE_MIN,
+          CONFIG.CHAR_DEFECTION_BASE_MAX
         ),
         // 子女一出生就是成年，且已到父親的所在地 /
         // Born already mature, and already at the father's place.

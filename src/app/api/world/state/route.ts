@@ -146,7 +146,7 @@ export async function GET(request: NextRequest) {
   }
   // 沒有可用的快照 — 查詢即時資料 / No snapshot available — query live data
   // 這是沒有快照的回合的後備方案 / This is a fallback for rounds without snapshots
-  const [places, factions, characters, roads] = await Promise.all([
+  const [places, factions, characters, roads, friendships, discontents] = await Promise.all([
     prisma.place.findMany({
       where: { worldId: world.id },
       select: {
@@ -187,7 +187,7 @@ export async function GET(request: NextRequest) {
         jing: true,
         speed: true,
         loyalty: true,
-        ambition: true,
+        defectionBase: true,
         age: true,
         troops: true,
         gold: true,
@@ -204,20 +204,41 @@ export async function GET(request: NextRequest) {
         bId: true,
       },
     }),
+    // 友誼與不滿以**扁平的一對**送出，與 `roads` 完全相同。將領彈窗要回答
+    // 「他有哪些朋友、對哪些人不滿」，這兩個問題都只是「哪一列的 aId 或 bId 是他」，
+    // 所以不需要 per-character 巢狀結構——那會把每個人的資料膨脹成每條關係一份。
+    //
+    // Friendships and discontents ship as **flat pairs**, exactly like `roads`. The leader
+    // popup has to answer "who are they friends with, who are they unhappy with", and both
+    // reduce to "which rows have this id as an endpoint" — so a per-character nested shape
+    // would duplicate every relationship into every character that owns one.
+    //
+    // 雙向的關係在這裡**兩個方向都送**（不滿是互相的，友誼本來就是），由客戶端反轉。
+    //
+    // Bidirectional relations arrive with **both** directions here (discontent is mutual and
+    // friendship always was); the client inverts them.
+    prisma.friendship.findMany({
+      where: { worldId: world.id },
+      select: { aId: true, bId: true, sinceRound: true },
+    }),
+    prisma.discontent.findMany({
+      where: { worldId: world.id },
+      select: { aId: true, bId: true, sinceRound: true },
+    }),
   ]);
 
   /**
-   * 本回合的 AmbitionEvent：叛變值的「事件部分」就是這些 delta 的總和。
+   * 本回合的 DefectionEvent：叛變值的「事件部分」就是這些 delta 的總和。
    *
    * 只取**本回合**，因為叛變值每回合重算，而歷史紀錄在這裡沒有作用：它們是不同回合
    * 的 delta，把跨回合的加總塞進一個「本回合的叛變值」只會讓那個數字沒有定義。
    *
-   * This round's AmbitionEvents: the "events" part of the defection value is their delta sum.
+   * This round's DefectionEvents: the "events" part of the defection value is their delta sum.
    *
    * Only **this round**, because the value is recomputed every round. History has no role
    * here: summing deltas across rounds would give the number no meaning.
    */
-  const roundAmbitionEvents = await prisma.ambitionEvent.findMany({
+  const roundDefectionEvents = await prisma.defectionEvent.findMany({
     where: { worldId: world.id, round },
     select: { charId: true, delta: true, reason: true },
     orderBy: { round: 'asc' },
@@ -233,8 +254,10 @@ export async function GET(request: NextRequest) {
     factions,
     characters,
     roads,
+    friendships,
+    discontents,
     spotlights,
     moves,
-    roundAmbitionEvents,
+    roundDefectionEvents,
   });
 }

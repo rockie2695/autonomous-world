@@ -145,7 +145,7 @@ autonomous-world/
 │       ├── economy.ts             # Phase 4: Income + recruitment
 │       ├── signals.ts             # Phase 5: Signal progression
 │       ├── relationships.ts       # Phase 6: Friendships/discontent
-│       ├── ambitionEvents.ts      # Phase 7: Ambition changes
+│       ├── defectionEvents.ts      # Phase 7: Ambition changes
 │       ├── loyaltyCheck.ts        # Phase 8: Defection check
 │       ├── aiMove.ts              # Phase 9: Character movement (signal + enemy targeting)
 │       ├── battle.ts              # Phase 10: Battle resolution (with escape movement)
@@ -181,8 +181,8 @@ autonomous-world/
   completely empty on arrival
 - Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
 - Characters spawned in a round never move in that round (they stay put until the next round)
-- On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removed admin's ambition **increases** by `AMBITION_ADMIN_REPLACED_DELTA` (1), logged as an `ADMIN_REMOVED` event + an `AmbitionEvent`
-- Every administrator assignment — spawn, auto-assign, battle capture, or manual API — applies a **temporary** ambition **decrease** of `AMBITION_ADMIN_ASSIGNED_DELTA` (1), which reverts +1 after `AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS` (10) if the character is still in office (logged as an `AMBITION_RECOVERED` event). If they are removed before then, the removal already paid `AMBITION_ADMIN_REPLACED_DELTA` and no revert happens
+- On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removed admin's ambition **increases** by `DEFECTION_ADMIN_REPLACED_DELTA` (1), logged as an `ADMIN_REMOVED` event + a `DefectionEvent`
+- Every administrator assignment — spawn, auto-assign, battle capture, or manual API — writes a `DefectionEvent` of `DEFECTION_ADMIN_ASSIGNED_DELTA` (−1) to the ledger. It is **permanent**: the old temporary reduction and its automatic +1 revert are gone (`adminAmbitionRevertRound` was dropped, and `AMBITION_RECOVERED` was never emitted by anything)
 - After any leader change, that place cannot change leader again for `ADMIN_CHANGE_COOLDOWN_ROUNDS` (10) rounds — but this blocks **AI paths only**: battle captures and manual assignment still work
 
 ### Factions
@@ -392,7 +392,12 @@ view of faction power rather than another rendering of one metric.
   and a low-`jing` one less. A lone leader (no king *or* no admin) already receives the whole
   income, so no multiplier applies — the total distributed can never exceed the place's income
 - Characters buy troops with personal gold: 2 gold per troop, in batches of 10-100. The **cap on one purchase is scaled by 統領 (tong)** with the same average-centred formula jing uses for income, so leadership decides how many soldiers one purchase can buy 
-- **統領 (tong) only does that.** It no longer reduces defection, and it no longer defends — that is **體魄 (ti)**
+- **統領 (tong) only does that.** It does not affect defection at all, and it does not defend — that is **體魄 (ti)**. Removing the defection link took two passes: the multiplier went first, then a delta that was still quietly feeding the defection value through the ledger. Leadership is not loyalty.
+- **Ambition (ambition)** is an integer 5-30, drawn from a normal distribution (mean 17, sigma 5) via
+  `Rng.gaussianInt`. Both the stat and the ledger deltas are `Int` columns; they were `Float`
+  until migration `20261017000000_ambition_and_delta_to_int`. Ambition itself is a **fixed initial
+  value** — nothing rewrites it, and what moves each round is the *defection value*, which sums the
+  ambition plus this round's ledger deltas. Leadership (`tong`) has no effect on defection at all
 
 ### Accounts
 
@@ -800,29 +805,29 @@ raise the **card itself** to `z-30` while expanded, so a later sibling cannot pa
 
 ### 野心不動了，變的是叛變值 / Ambition is fixed; the defection value moves
 
-**野心是固定初始值，事件不再改寫它。** `ambitionEvents` 階段與 `adminAssign` 原本
+**野心是固定初始值，事件不再改寫它。** `defectionEvents` 階段與 `adminAssign` 原本
 到處寫 `character.ambition`（「未升遷 +0.5」「取得職務 −1、十回合後回 +1」「被免職 +1」），
 現在全部退休：那個扣了再回的機制連同 `adminAmbitionRevertRound` 都沒有意義了。
-`ambitionEvents` 現在只寫**帳本**——每回合產生 `AmbitionEvent`，一行都不改 `Character`。
+`defectionEvents` 現在只寫**帳本**——每回合產生 `DefectionEvent`，一行都不改 `Character`。
 Ambition is a fixed initial stat and events no longer rewrite it. The whole
 deduct-then-revert machinery, `adminAmbitionRevertRound` included, is retired;
-`ambitionEvents` now only writes the ledger and touches no `Character` row.
+`defectionEvents` now only writes the ledger and touches no `Character` row.
 
 **帳本不是裝飾：忠誠檢查每回合把本回合的 delta 加總成「叛變值」。**
 
-    value  = ambition
+    value  = defectionBase
            + (忠誠標籤與君王不同 ? 2 : 0)
-           + 本回合此人的 AmbitionEvent **delta 總和**
+           + 本回合此人的 DefectionEvent **delta 總和**
 
     chance = (value − 17.5) / 17.5 × 0.05        // 17.5 = (5+30)/2
 
-只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `AmbitionEvent`，
+只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `DefectionEvent`，
 所以沒有 delta 可加。其餘全部來自資料庫的真實 delta。**曾經寫成「每筆 +1」是錯的**——
 每筆事件各有各的差值，`−2` 的一筆就該是 `−2`，而一筆 `+3` 就該是 `+3`。
 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生事件，沒有 delta 可讀。
 
 Only the loyalty tag is hardcoded: it is a *comparison* of `Loyalty` tags that never
-produces an `AmbitionEvent`, so there is no delta to add. Everything else is summed from
+produces a `DefectionEvent`, so there is no delta to add. Everything else is summed from
 real deltas. Writing it as "a flat +1 per event" was wrong — each event carries its own
 magnitude.
 
@@ -834,14 +839,14 @@ all leaders can never defect. That follows from the formula as written (0.05 is 
 not a floor); a floor would need `(value / 17.5) × 0.05`.
 
 **建立新勢力與叛變都「不」重骰野心。** 原本五處用 `CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`
-把野心拉回 5–15，設定值已刪除。取而代之是**帳本冷卻**：`ambitionEvents` 每回合為視窗內
-每一次叛變寫一筆 −2（`AMBITION_DEFECTION_DELTA`），持續 20 回合
-（`AMBITION_DEFECTION_ROUNDS`）。**每次叛變各自一筆，所以會疊加**：叛變兩次就是 −4。
+把野心拉回 5–15，設定值已刪除。取而代之是**帳本冷卻**：`defectionEvents` 每回合為視窗內
+每一次叛變寫一筆 −2（`DEFECTION_COOLING_DELTA`），持續 20 回合
+（`DEFECTION_COOLING_ROUNDS`）。**每次叛變各自一筆，所以會疊加**：叛變兩次就是 −4。
 只寫帳本、不寫可見 Event，因為符合條件的人每回合上百。
 Founding a faction and defecting both **no longer** re-roll ambition — all five re-roll sites and
 the config keys are gone. What replaced it is **cooling in the ledger**: one −2 row
-(`AMBITION_DEFECTION_DELTA`) per defection inside a 20-round window
-(`AMBITION_DEFECTION_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
+(`DEFECTION_COOLING_DELTA`) per defection inside a 20-round window
+(`DEFECTION_COOLING_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
 Event: a hundred-odd leaders match per round.
 
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output

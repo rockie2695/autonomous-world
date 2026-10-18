@@ -27,19 +27,31 @@ export function upgradeCost(level: number): number {
 }
 
 /**
- * 從 0 級升到 `level` 級**總共**要花多少金 / Total gold to climb from level 0 to `level`
+ * 從 `level - 1` 升到 `level` 這**一步**要多少金；0 級沒有前一步，回傳 null。
+ * Gold for the **single step** from `level - 1` up to `level`; null at level 0, which has
+ * no step before it.
  *
- * 提示需要的是「到這一級為止總共多少錢」，不是「從上一級到這一級多少錢」：
- * 逐級列出 `100 / 200 / 400 / 800` 會讓讀者自己心算，而心算正是提示要替他做的事。
+ * **為什麼是「一步」而不是累計？** 這正是讀者回報的那個錯誤：等級清單原本印
+ * `totalCostToReach(2)` = 300（100 + 200），而同一個目標在卡片上印 200，`build.ts`
+ * 也真的收 200。於是同一件事有兩個價錢，其中一個還不是會被收到的。
  *
- * The tooltip needs the running total to reach a level, not the single step from the one
- * below it. Listing 100 / 200 / 400 / 800 makes the reader add them up, which is precisely
- * the work a tooltip is supposed to do for them.
+ * **Why one step and not a running total?** This is the bug the reader reported. The level
+ * list used to print `totalCostToReach(2)` = 300 (100 + 200) while the card beside it
+ * printed 200 — and 200 is what `build.ts` actually charges. Two prices for one upgrade,
+ * one of which nobody is ever billed.
+ *
+ * 一張列出各級價格的表，印的必須是**會被收到的**那個數字；否則它就不是價格表。
+ * A price list has to print the number that gets charged, or it is not a price list.
+ *
+ * 這個 `- 1` 之前直接寫在 JSX 裡，所以「清單印的」與「收費的」是兩個各自寫死的表達式，
+ * 沒有任何東西把它們綁在一起——這正是分歧能存在的原因。收進來之後兩邊共用同一個函式。
+ * The `- 1` used to sit inline in the JSX, so "what the list prints" and "what gets
+ * charged" were two independently written expressions with nothing binding them — which is
+ * how they came to disagree.
  */
-export function totalCostToReach(level: number): number {
-  let sum = 0;
-  for (let i = 0; i < level; i++) sum += upgradeCost(i);
-  return sum;
+export function costToReachLevel(level: number): number | null {
+  if (level <= 0) return null;
+  return upgradeCost(level - 1);
 }
 
 /**
@@ -125,4 +137,36 @@ export function placeOutputAt(
       // Defence is a multiplier on the garrison, not an output, so there is no total to print
       return null;
   }
+}
+
+/**
+ * 這一級要**印給讀者**的數字：能印「這個地方每回合的總產出」就印那個，否則印累積效果。
+ *
+ * The number to **print** for a level: the place's total per-round output when there is one,
+ * otherwise the cumulative effect.
+ *
+ * **為什麼需要這一层？** 同一個元件裡有三個地方印同一個東西：展開的等級表、行內的
+ * 「目前 → 下一級」、以及等級圓點的 tooltip。等级表已經用 `placeOutputAt` 印總產出，
+ * 但行與圓點卻用 `buildingTotal` 印這一棟建築自己的貢獻 —— 於是**同一個等級有兩個數字**：
+ * 市場 1 級，表格說「15 金錢 / 每回合」，行卻說「+5 金錢」。兩個都是真的，兩個都不是
+ * 對方。讀者看到 1 級只值 5 金，就會以為 0 級是 0 金，而地方照樣有基礎收入。
+ *
+ * **Why this layer exists.** One component prints the same thing in three places: the
+ * expanded level table, the row's "current → next", and the level dots' tooltips. The table
+ * already printed the place's total via `placeOutputAt`, while the row and the dots printed
+ * this one building's own contribution via `buildingTotal` — so **one level had two numbers**:
+ * at market level 1 the table said "15 gold / round" and the row said "+5 gold". Both are true
+ * and neither matches the other, and a reader who takes "+5" at level 1 concludes level 0
+ * earns nothing, when the place still earns its base income.
+ *
+ * 三個呼叫點全部走這裡，所以三個地方不可能再各說各話 /
+ * All three call sites go through here, so they cannot drift apart again.
+ */
+export function placeEffectLabel(
+  kind: BuildingKind,
+  level: number
+): { value: number; unit: 'percent' | 'gold' | 'troops' } {
+  const total = placeOutputAt(kind, level);
+  if (total) return total;
+  return { value: buildingTotal(kind, level), unit: buildingPerLevel(kind).unit };
 }

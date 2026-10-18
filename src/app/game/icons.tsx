@@ -64,7 +64,6 @@ export function EventGlyph({ type }: { type: string }) {
     case 'CHARACTER_SPAWNED':
     case 'ADMIN_ASSIGNED':
     case 'ADMIN_REMOVED':
-    case 'AMBITION_RECOVERED':
       body = (
         <>
           <circle cx="12" cy="8.5" r="3.2" />
@@ -81,6 +80,18 @@ export function EventGlyph({ type }: { type: string }) {
         <>
           <circle cx="12" cy="10" r="5" />
           <circle cx="12" cy="19" r="2.6" />
+        </>
+      );
+      break;
+    case 'FRIENDSHIP':
+      // 兩個一樣大小的圓用一條線連起來。刻意**不畫成心形**：那會把「朋友」
+      // 讀成「戀人」，而這個事件要表達的是同儕與互相支持 /
+      // Two equal discs joined by a line. Deliberately **not a heart**: that would read
+      // "lovers", where the event means peers and mutual support
+      body = (
+        <>
+          <circle cx="8" cy="12" r="4" />
+          <circle cx="16" cy="12" r="4" />
         </>
       );
       break;

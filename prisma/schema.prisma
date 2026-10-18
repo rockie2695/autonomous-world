@@ -52,7 +52,7 @@ model World {
   signals          Signal[]
   roundSnapshots   RoundSnapshot[]
   events           Event[]
-  ambitionEvents   AmbitionEvent[]
+  defectionEvents   DefectionEvent[]
 }
 
 // ─── Faction ───────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ model Character {
   jing              Int                       // 經濟 Economy (5-30) / 經濟
   speed             Int                       // 速度 Speed (5-30, v1.1) / 速度
   loyalty           Loyalty                  // 忠誠 Loyalty tag (doesn't affect defection) / 忠誠標籤（不影響叛逃）
-  ambition          Float                    // 野心 Ambition (5-30, normal dist μ=17 σ=5) / 野心
+  defectionBase     Int                      // Defection drive: the FIXED base of this leader's defection value (5-30, normal dist μ=17 σ=5). Never rewritten. / 叛變傾向：叛變值的**固定基底**（5-30），永不改寫
   age               Int      @default(20)
   maxAge            Int                      // Random 50-80 at creation / 建立時隨機 50-80
   placeId           String                   // Current location / 當前位置
@@ -152,7 +152,6 @@ model Character {
     parentId          String?                    // 父親；null = 非所生 / Father; null = not a child
   signalCooldown    Int      @default(0)     // Rounds before can send signal again / 再次發送訊號的冷卻回合數
   lastPromotedRound Int?                     // Last round when made administrator / 上次晉升為管理者回合
-  adminAmbitionRevertRound Int?              // Round when temporary admin ambition -1 reverts / 行政官野心暫時 -1 的回復回合
 
   world          World          @relation(fields: [worldId], references: [id])
   faction        Faction?       @relation(fields: [factionId], references: [id])
@@ -163,14 +162,14 @@ model Character {
   discontentsA   Discontent[]   @relation("DiscontentA")
   discontentsB   Discontent[]   @relation("DiscontentB")
   signalsSent    Signal[]
-  ambitionEvents AmbitionEvent[]
+  defectionEvents DefectionEvent[]
   father            Character?  @relation("Family", fields: [parentId], references: [id])
   offspring         Character[] @relation("Family")
 }
 
 // Loyalty is a tag only — it does NOT directly affect defection probability.
 // 忠誠僅為標籤 — 不直接影響叛逃機率。
-// Defection is driven by ambition, relationships, and faction size.
+// Defection is driven by defectionBase, relationships, and faction size.
 // 叛逃由野心、關係和派系規模驅動。
 enum Loyalty {
   SELF      // 為己 Loyal to self / 忠於自己
@@ -271,15 +270,15 @@ model Event {
   @@index([worldId, round])
 }
 
-// ─── AmbitionEvent ─────────────────────────────────────────────────────────
-// Tracks changes to character ambition for debugging/balancing.
+// ─── DefectionEvent ─────────────────────────────────────────────────────────
+// Tracks changes to character defectionBase for debugging/balancing.
 // 追蹤角色野心變化用於除錯/平衡。
-model AmbitionEvent {
+model DefectionEvent {
   id     String @id @default(cuid())
   worldId String
   charId String
   round  Int
-  delta  Float                    // Change in ambition (+/-) / 野心變化（+/-）
+  delta  Int                        // Change in defectionBase (+/-) / 野心變化（+/-）
   reason String                    // Human-readable reason / 人類可讀原因
 
   world     World      @relation(fields: [worldId], references: [id])

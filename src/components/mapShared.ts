@@ -1,7 +1,7 @@
 // ============================================================================
 // Sigma 地圖的共用純邏輯 / Shared pure logic for the sigma map
 // ----------------------------------------------------------------------------
-// 題色換算、資料型別，以及那組讓外部按鈕控制鏡頭的 `MapCameraControls`。全部與 React
+// 顏色換算、資料型別，以及那組讓外部按鈕控制鏡頭的 `MapCameraControls`。全部與 React
 // 和 canvas 都無關，所以從 `SigmaMap.tsx` 分出來之後元件本身短了很多，而且這些東西
 // 可以各自單獨測。
 //
@@ -74,7 +74,7 @@ export function hslToHex(hsl: string): string {
  * 把 `#rgb` / `#rrggbb` 轉成三個 0–255 的通道值。
  * Turn `#rgb` / `#rrggbb` into three 0–255 channels.
  *
- * 領地層要自己寫 ImageData，所以自己解色碼。圖節點的題色一律是 hex（有主之地
+ * 領地層要自己寫 ImageData，所以自己解色碼。圖節點的顏色一律是 hex（有主之地
  * 已經過 hslToHex，無主之地固定 'MAP_UNOWNED_NODE_COLOR'），因此不必支援其他色彩格式。
  * The territory layer writes its own ImageData, so it parses colours itself.
  * Graph node colours are always hex, so no other format needs supporting.
@@ -94,12 +94,12 @@ export function hexToRgb(hex: string): [number, number, number] {
 }
 
 /**
- * 把題色朝白色調亮指定的混合比例。
+ * 把顏色朝白色調亮指定的混合比例。
  * Mix a colour toward white by `amount`, keeping its hue.
  *
- * 勢力色是 `hsl(H, 70%, 50%)`（建立勢力時產生），而領地填色是同一個題色疊在深色
+ * 勢力色是 `hsl(H, 70%, 50%)`（建立勢力時產生），而領地填色是同一個顏色疊在深色
  * 背景上的半透明色塊。名字直接用原色會和底下的色塊一起變暗，讀起來像糊掉。往白色
- * 混是最直接的做法：色相不變，亮度上去，所以名字仍然是「這個勢力的題色」。
+ * 混是最直接的做法：色相不變，亮度上去，所以名字仍然是「這個勢力的顏色」。
  *
  * Faction colours are `hsl(H, 70%, 50%)` and the territory fill is that same colour
  * composited translucently over a dark backdrop, so the raw colour reads as muddy once
@@ -150,6 +150,24 @@ export interface LabelFontFit {
   availAlongPx?: number;
   /** 垂直主軸的可用半寬（螢幕像素）/ Half-extent across the axis, in screen pixels */
   availAcrossPx?: number;
+  /**
+   * 名字外發光的半徑（**em 為單位**，所以跟著字級縮放）。**光暈是名字的一部分**，
+   * 所以必須算進字級的預算裡；否則求解只保證「墨跡」在領地內，光暈會自己溢出來。
+   *
+   * 用 em 而不是 px 是關鍵：光暈若寫死 6px，一塊薄領地扣掉兩側各 6px 之後就幾乎沒有
+   * 空間，字級會被壓到 8px 甚至整個消失（實測 4 個回合有 3 個不畫）。跟著字級縮放，
+   * 小名字就配小光暈。
+   *
+   * The outward glow radius on the name, **in em**, so it scales with the font size. **The
+   * glow is part of the name** and belongs in the font's budget; otherwise the solve only
+   * guarantees the *ink* is inside and the glow walks off the claim on its own.
+   *
+   * Em rather than px is the point: a fixed 6px subtracted from both sides of a thin claim
+   * leaves almost nothing, and the solve collapses to 8px or drops the name entirely
+   * (measured: 3 of 4 rounds lost their label). Scaling with the font gives a small name a
+   * small halo.
+   */
+  glowEm?: number;
 }
 
 /** 勢力名字字級的求解結果 / Solved faction-name font size */
@@ -184,15 +202,45 @@ export interface LabelFontSolution {
 export function solveLabelFontSize(m: LabelFontFit): LabelFontSolution {
   const diag = Math.hypot(m.widthAt100, m.heightAt100);
   const hasRect = m.availAlongPx !== undefined && m.availAcrossPx !== undefined;
+  // 光暈以 em 計，所以直接進字級的預算：fs·(每 px 字級的半寬 + glowEm) ≤ 可用空間·fit。
+  // 這樣「墨跡 + 光暈」整體不超過 avail·fit，離邊界至少還有 avail·(1−fit) 的餘裕 ——
+  // 而且餘裕會隨領地大小等比放大，小領地不會被光暈吃光。
+  //
+  // The glow is in em, so it goes straight into the font's budget:
+  // fs·(half-extent per px of font + glowEm) ≤ available·fit. The name *plus its halo* then
+  // never exceeds avail·fit, leaving at least avail·(1−fit) of clearance — and that clearance
+  // scales with the claim, so a thin one is not eaten alive by a fixed-radius halo.
+  const glowEm = m.glowEm ?? 0;
+  /**
+   * 兩條界，缺一不可：
+   *
+   * 1. `fs·(每 px 字級的半寬 + glowEm) ≤ avail·fit` —— 「墨跡 + 光暈」塞得進預留的空間；
+   * 2. `fs·glowEm ≤ avail·(1−fit)` —— 光暈自己塞得進**剩下的**餘裕。
+   *
+   * 少了第 2 條會怎樣：餘裕是 `avail·(1−fit)`，光暈卻是 `0.15 × font`，而
+   * `font ≈ avail·fit/(0.5+0.15)`，所以光暈 ≈ 0.189·avail > 0.18·avail —— **剛好比餘裕大**，
+   * 於是細長領地上的名字會有一點光暈跨出去。之前就是這樣被測試抓到的：只差 1.8px vs 6.9px。
+   *
+   * Two bounds, and both are needed:
+   *
+   * 1. `fs·(halfExtentPerPx + glowEm) ≤ avail·fit` — the ink **plus its halo** fits the budget;
+   * 2. `fs·glowEm ≤ avail·(1−fit)` — the halo fits the **leftover** margin.
+   *
+   * Drop the second and it fails by a hair: the leftover margin is `avail·(1−fit)` while the halo
+   * is `0.15 × font` and `font ≈ avail·fit/(0.5+0.15)`, so the halo works out to ≈0.189·avail
+   * against a 0.18·avail margin — **just larger**. A thin claim then pushes its halo outside,
+   * which is exactly how the test caught it: 1.8px of clearance against a 6.9px halo.
+   */
   const solved = hasRect
-    ? // 矩形：長與厚各自受限，取小。半長 = w100·fs/200，所以 fs ≤ 200·availAlong/w100 /
-      // Rectangle: length and thickness each have a cap. Half-length is w100·fs/200, so
-      // fs ≤ 200·availAlong/w100
-      Math.min(
-        (200 * m.availAlongPx! * m.fit) / m.widthAt100,
-        (200 * m.availAcrossPx! * m.fit) / m.heightAt100
+    ? Math.min(
+        // 1. 墨跡 + 光暈塞得進預留空間 / ink plus halo inside the fitted budget
+        (m.availAlongPx! * m.fit) / (m.widthAt100 / 200 + glowEm),
+        (m.availAcrossPx! * m.fit) / (m.heightAt100 / 200 + glowEm),
+        // 2. 光暈塞得進剩下的餘裕 / halo inside the leftover margin
+        glowEm > 0 ? (m.availAlongPx! * (1 - m.fit)) / glowEm : Infinity,
+        glowEm > 0 ? (m.availAcrossPx! * (1 - m.fit)) / glowEm : Infinity
       )
-    : // 圓：半對角線受限。hypot(w, h) ≤ 2r，所以 fs ≤ 200 · r · fit / hypot(w100, h100)
+    : // 圓：半對角線受限。hypot(w, h) ≤ 2r，所以 fs ≤ 200 · r · fit / hypot(w100, h100) /
       // Circle: the half-diagonal is the cap
       (200 * m.radiusPx * m.fit) / diag;
 
@@ -347,7 +395,7 @@ export type Tooltip = PlaceTooltip | FactionTooltip;
 // ============================================================================
 
 /**
- * 一顆太陽的題色。`core` 是 sigma 畫的圓盤，`edge` 是覆蓋層畫的柔光外圈。
+ * 一顆太陽的顏色。`core` 是 sigma 畫的圓盤，`edge` 是覆蓋層畫的柔光外圈。
  *
  * A star's colours. `core` is the disc Sigma paints; `edge` is the glow the overlay paints.
  *
@@ -364,7 +412,7 @@ export interface StarClass {
 }
 
 /**
- * 這顆太陽的題色，只由**地點 id** 決定。所以同一個地方在每一台機器、每一次重繪都長得一樣，
+ * 這顆太陽的顏色，只由**地點 id** 決定。所以同一個地方在每一台機器、每一次重繪都長得一樣，
  * 而資料庫裡不必多存任何東西。
  *
  * This star's colours, decided by the **place id alone**. So a place looks the same on every

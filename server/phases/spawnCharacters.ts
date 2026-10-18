@@ -9,7 +9,7 @@
 // - 每個地點有機率生成角色 / Each place has a chance to spawn a character
 // - 生成率隨世界成長而下降：100 地點時 5% → 2000 地點時 1% / Spawn rate decreases as world grows: 5% at 100 places → 1% at 2000 places
 // - 屬性：wu/tong/jing 均勻 5-30，速度常態 μ=17 σ=5（截斷 5-30）/ Stats: wu/tong/jing uniform 5-30, speed normal μ=17 σ=5 (clamped 5-30)
-// - 野心：常態分佈 μ=17 σ=5（截斷 5-30）/ Ambition: normal distribution μ=17 σ=5 (clamped 5-30)
+// - 野心：常態分佈 μ=17 σ=5（截斷 5-30）/ Defection base: normal distribution μ=17 σ=5 (clamped 5-30)
 // - 年齡：起始 20，maxAge 隨機 50-80 / Age: starts at 20, maxAge random 50-80
 // - 忠誠：隨機取自 SELF/PATH/ALTRUISM / Loyalty: random from SELF/PATH/ALTRUISM
 //
@@ -38,10 +38,10 @@ import {
  * - 出生地無行政官 → 直接指派 / Spawn place vacant → assign directly
  * - 現任行政官是國王 → 保留席位 / Current admin is the king → king keeps seat
  * - 否則比較總能力（wu+tong+jing），嚴格勝出才取代；
- *   被免職者野心 +CONFIG.AMBITION_ADMIN_REPLACED_DELTA，記錄事件 + AmbitionEvent
+ *   被免職者野心 +CONFIG.DEFECTION_ADMIN_REPLACED_DELTA，記錄事件 + DefectionEvent
  * - Otherwise compare total ability (wu+tong+jing); strictly greater wins.
- *   The removed admin gains CONFIG.AMBITION_ADMIN_REPLACED_DELTA ambition,
- *   logged as an Event + an AmbitionEvent.
+ *   The removed admin gains CONFIG.DEFECTION_ADMIN_REPLACED_DELTA defectionBase,
+ *   logged as an Event + an DefectionEvent.
  *
  * @param worldId - 要加入角色的世界 ID / The world to add characters to
  * @param round - 當前回合數 / Current round number
@@ -91,17 +91,17 @@ export async function spawnCharacters(
     const tong = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
     const ti = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
     const jing = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
-    const speed = rng.gaussian(
+    const speed = rng.gaussianInt(
       CONFIG.CHAR_SPEED_MEAN,
       CONFIG.CHAR_SPEED_SIGMA,
       CONFIG.CHAR_SPEED_MIN,
       CONFIG.CHAR_SPEED_MAX
     );
-    const ambition = rng.gaussian(
-      CONFIG.CHAR_AMBITION_MEAN,
-      CONFIG.CHAR_AMBITION_SIGMA,
-      CONFIG.CHAR_AMBITION_MIN,
-      CONFIG.CHAR_AMBITION_MAX
+    const defectionBase = rng.gaussianInt(
+      CONFIG.CHAR_DEFECTION_BASE_MEAN,
+      CONFIG.CHAR_DEFECTION_BASE_SIGMA,
+      CONFIG.CHAR_DEFECTION_BASE_MIN,
+      CONFIG.CHAR_DEFECTION_BASE_MAX
     );
     const maxAge = rng.int(CONFIG.CHAR_MAX_AGE_MIN, CONFIG.CHAR_MAX_AGE_MAX);
 
@@ -121,7 +121,7 @@ export async function spawnCharacters(
         jing,
         speed,
         loyalty,
-        ambition,
+        defectionBase,
         age: CONFIG.CHAR_START_AGE,
         maxAge,
         placeId: place.id,
@@ -154,7 +154,7 @@ export async function spawnCharacters(
     //    Spawn place vacant → assign directly (also covers "faction has no admin yet")
     // 2. 現任行政官是國王本人 → 保留席位 / Current admin is the king → king keeps seat
     // 3. 否則比較總能力（wu+tong+jing），新將領嚴格勝出才取代；
-    //    被免職者野心 +1（配置），記錄 ADMIN_REMOVED 事件 + AmbitionEvent
+    //    被免職者野心 +1（配置），記錄 ADMIN_REMOVED 事件 + DefectionEvent
     // 4. 否則不動 / Otherwise no change
     // 5. 地點若在行政官冷卻期（剛換過領導）→ 一律不動 /
     //    Place in the admin-change cooldown (leader just changed) → no change
@@ -220,7 +220,7 @@ async function assignSpawnPlaceAdmin(
       if (newTotal > oldTotal) {
         // 取代現任行政官：先免職（+1 野心、取消未到期減免），再任命新領導；
         // 只記 ADMIN_REMOVED，ADMIN_ASSIGNED 不重複記錄 /
-        // Replace the current administrator: revoke first (+1 ambition, cancels
+        // Replace the current administrator: revoke first (+1 defectionBase, cancels
         // any pending reduction), then grant; only ADMIN_REMOVED is logged
         const oldAdmin = { id: currentAdmin.id, name: currentAdmin.name };
         await revokeAdmin({

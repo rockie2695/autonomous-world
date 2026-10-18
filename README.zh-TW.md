@@ -110,7 +110,7 @@ autonomous-world/
 │       ├── territory.ts           # 領地形力場（純邏輯，不碰 DOM）
 │       ├── spaceGalaxy.ts          # 背景銀河：核、星雲、星點（純邏輯）
 │       ├── spaceFog.ts             # 銀河之上、地圖之下的暖色星塵，緩慢漂移（純邏輯）
-│       ├── spaceShared.ts          # 共用：sigma 的框化→視窗定位 + canvas 題色工具
+│       ├── spaceShared.ts          # 共用：sigma 的框化→視窗定位 + canvas 顏色工具
 │       ├── i18n/                  # 國際化（中/英）
 │       │   ├── index.ts           # 語言管理
 │       │   ├── zh.ts              # 繁體中文翻譯
@@ -122,7 +122,7 @@ autonomous-world/
 │           └── epithet.ts         # 共用的兩字稱號元件
 ├── src/components/
 │   ├── SigmaMap.tsx               # 互動式圖形地圖（Sigma.js + graphology）
-│   ├── mapShared.ts               # SigmaMap 的純邏輯：題色換算、型別、MapCameraControls
+│   ├── mapShared.ts               # SigmaMap 的純邏輯：顏色換算、型別、MapCameraControls
 │   ├── BattleReport.tsx           # 戰報彈窗（攻守算式）
 │   ├── SpaceGalaxy.tsx             # 烘焙後自轉的銀河，最底層（Canvas 2D）
 │   ├── SpaceFog.tsx                # 銀河之上、地圖之下的暖色星塵，緩慢漂移（Canvas 2D）
@@ -142,7 +142,7 @@ autonomous-world/
 │       ├── economy.ts             # 階段 4：收入 + 徵兵
 │       ├── signals.ts             # 階段 5：信號進展
 │       ├── relationships.ts       # 階段 6：友誼/不滿
-│       ├── ambitionEvents.ts      # 階段 7：野心變化
+│       ├── defectionEvents.ts      # 階段 7：野心變化
 │       ├── loyaltyCheck.ts        # 階段 8：叛變檢查
 │       ├── aiMove.ts              # 階段 9：角色移動（信號 + 敵方目標）
 │       ├── battle.ts              # 階段 10：戰鬥解決（含逃脫移動）
@@ -172,19 +172,23 @@ autonomous-world/
 
 ### 角色
 - 每個角色擁有：**武力 (wu)**、**統領 (tong)**、**經濟 (jing)**、**速度**
+- **野心 (ambition)** 是 5-30 的整數，用常態分佈（μ=17 σ=5）經 `Rng.gaussianInt` 抽出。這個屬性
+  與帳本的 delta 都是 `Int` 欄位，在 migration `20261017000000_ambition_and_delta_to_int` 之前
+  都是 `Float`。野心本身是**固定初始值** —— 沒有任何東西會改寫它；每回合真正會動的是「叛變值」，
+  也就是野心加上本回合帳本 delta 的總和。統領（tong）完全不影響叛變。
 - 屬性範圍 5-30，速度使用常態分佈 (μ=17, σ=5)
 - 角色每回合老化，最終因年老而死亡（50-80 歲）
 - 新生的將领一後郡庫至少庫 **1 名士兵**（`CHAR_START_TROOPS`），不會一發現就完全無兵
 - **體魌（小健）也有自己的頭像識別** — 前臂护具。頭、肩、胸占已經有了，前臂是剩下的部位，因此四項能力可以一眼分開；同样逐級殘陳（金碼护腕 → 素膀鑴 → 布繌臂），且每個級級都加深色辺框，不然麻、鋼那種低階色在深色衣袍上簄米看不見
 - 角色只會在勢力控制的地方生成（無主之地不會產生將領），且新生成的將領會立即加入該地所屬勢力
 - 同一回合生成的角色在該回合不移動（出生回合原地待命）
-- 生成時由該勢力國王指派新將領管理出生地：席位空缺（或現任已死亡）→ 直接指派；現任是國王本人 → 國王保留席位；否則比較總能力（武力+統領+智謀），**嚴格較高**者取得席位 —— 被免職者野心 **上升** `AMBITION_ADMIN_REPLACED_DELTA`（1），記錄 `ADMIN_REMOVED` 事件 + `AmbitionEvent`
-- 所有任命路徑（出生指派、自動指派、戰役奪取、管理員手動指派）都會讓新任者野心**暫時下降** `AMBITION_ADMIN_ASSIGNED_DELTA`（1），若 `AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS`（10）回合後仍在職則回復 +1（記錄 `AMBITION_RECOVERED` 事件）；若期間被免職，免職本身已給 `AMBITION_ADMIN_REPLACED_DELTA`，不再重複回復
+- 生成時由該勢力國王指派新將領管理出生地：席位空缺（或現任已死亡）→ 直接指派；現任是國王本人 → 國王保留席位；否則比較總能力（武力+統領+智謀），**嚴格較高**者取得席位 —— 被免職者野心 **上升** `DEFECTION_ADMIN_REPLACED_DELTA`（1），記錄 `ADMIN_REMOVED` 事件 + `DefectionEvent`
+- 所有任命路徑（出生指派、自動指派、戰役奪取、管理員手動指派）都會往帳本寫入一筆 `DEFECTION_ADMIN_ASSIGNED_DELTA`（−1）的 `DefectionEvent`。這是**永久**的：原本「暫時下降、到期 +1 回復」的機制已移除（欄位 `adminAmbitionRevertRound` 已刪，`AMBITION_RECOVERED` 從未被任何程式寫出）
 - 任一地點換過領導者後，`ADMIN_CHANGE_COOLDOWN_ROUNDS`（10）回合內 AI 不得再更換該地領導（僅限制 AI 路徑：戰役奪取與手動指派仍可進行）
 
 ### 勢力
 - 角色可歸屬於某個勢力（王國/國家）
-- 每個勢力有國王、題色、領地
+- 每個勢力有國王、顏色、領地
 - 當國王死亡，勢力進入「瓦解中」狀態並逐漸解散
 - 只有勢力控制的地方才能被指派行政官（自動指派略過無主之地；管理員 API 對無主之地回傳 400）
 - 地點彈窗顯示該地的行政官（管理者姓名，國王加 👑），無人管理時顯示「無行政官」
@@ -211,14 +215,14 @@ autonomous-world/
   會乘上 `clamp((MAP_STAR_ZOOM_RATIO / ratio) ^ MAP_STAR_ZOOM_SCALE_EXPONENT)`，指數 0.5 就是
   sigma 自己的 `size / sqrt(ratio)`，所以星系對縮放的反應與一般地點節點完全一致。以
   `MAP_STAR_ZOOM_RATIO` 當基準代表剛跨過門檻那一幀剛好是 1×，進來時不會有跳變。在整段
-  星系層（ratio 0.2 → 0.05）之間是 1× → 2×。行星數量、傾斜與題色仍然純粹由地點 id 決定，
+  星系層（ratio 0.2 → 0.05）之間是 1× → 2×。行星數量、傾斜與顏色仍然純粹由地點 id 決定，
   所以縮放不會讓行星重新抽出。
 - **放大到 MAP_STAR_ZOOM_RATIO（0.2）以下會顯示星系** — 放大地點不再只是一個點，而是一整套太陽系：
-- **每個星系的題色都不一樣。** 太陽由地點 id 抽一個光譜級（`MAP_STAR_SUN_CLASSES`，`core` / `edge`
-  成對），所以沒有兩個星系長得一樣。這個題色**在建圖時抽一次**並存在節點上：圓盤由 sigma 畫、
+- **每個星系的顏色都不一樣。** 太陽由地點 id 抽一個光譜級（`MAP_STAR_SUN_CLASSES`，`core` / `edge`
+  成對），所以沒有兩個星系長得一樣。這個顏色**在建圖時抽一次**並存在節點上：圓盤由 sigma 畫、
   柔光由覆蓋層畫，存一份才保得住兩邊同步，而不是靠兩次抽獎碰巧抽到同一組。同一個星系裡的行星
-  **不重複**題色（色盤先洗牌再依序取），每顆月球也各抽各的。資料庫什麼都不必存。刻意不選深紅與
-  深藍 —— **軌道**才是勢力的通道，而太陽是星系裡最大的一塊題色
+  **不重複**顏色（色盤先洗牌再依序取），每顆月球也各抽各的。資料庫什麼都不必存。刻意不選深紅與
+  深藍 —— **軌道**才是勢力的通道，而太陽是星系裡最大的一塊顏色
   暖色**太陽**（由 sigma 自己的節點圓盤畫，所以道路不會穿過它）、1～4 顆各有傾斜橢圓軌道的
   **行星**，以及**繞著行星、位於行星之外**的**月球**。軌道線帶勢力色；無主之地用
   `MAP_STAR_ORBIT_COLOR_UNOWNED`，因為無主節點刻意壓暗的灰在半透明下疊在黑底上等於看不見。
@@ -255,7 +259,7 @@ autonomous-world/
     像雲而不是灰霧的原因——每個色塊抽一個值，同時決定它的 alpha 與半徑，所以濃的地方又白又大，稀的地方幾乎
     看不見。色盤刻意偏**暖**（近乎白的奶油到暗褐），所以讀起來像**被照亮的星塵**，而不是冷灰的霧。
   - **塵埃**是最上層的背景（仍在地圖之下），負責全部的結構與移動：粒子沿著 3D Simplex noise 場移動，所以
-    會聚成絲帶、渦流與空洞而不是隨機亂飛；每顆粒子的題色取自**它所在位置**的噪聲，所以一條絲帶就是一種題色。
+    會聚成絲帶、渦流與空洞而不是隨機亂飛；每顆粒子的顏色取自**它所在位置**的噪聲，所以一條絲帶就是一種顏色。
   - 銀河與霧氣**由 sigma 自己定位**（走 `framedGraphToViewport`），所以它們真的躺在**世界座標**裡，
     跟著地圖一起滾動與縮放。這取代了一個真實的 bug：手寫的平移方向算反，背景於是與地圖**反向**漂移。
     只有塵埃有自己的視差比例（`SPACE_FLOW_PARALLAX: 0.35`）——它是唯一浮在地圖上方、而非躺在世界裡的一層。
@@ -718,29 +722,29 @@ raise the **card itself** to `z-30` while expanded, so a later sibling cannot pa
 
 ### 野心不動了，變的是叛變值 / Ambition is fixed; the defection value moves
 
-**野心是固定初始值，事件不再改寫它。** `ambitionEvents` 階段與 `adminAssign` 原本
+**野心是固定初始值，事件不再改寫它。** `defectionEvents` 階段與 `adminAssign` 原本
 到處寫 `character.ambition`（「未升遷 +0.5」「取得職務 −1、十回合後回 +1」「被免職 +1」），
 現在全部退休：那個扣了再回的機制連同 `adminAmbitionRevertRound` 都沒有意義了。
-`ambitionEvents` 現在只寫**帳本**——每回合產生 `AmbitionEvent`，一行都不改 `Character`。
+`defectionEvents` 現在只寫**帳本**——每回合產生 `DefectionEvent`，一行都不改 `Character`。
 Ambition is a fixed initial stat and events no longer rewrite it. The whole
 deduct-then-revert machinery, `adminAmbitionRevertRound` included, is retired;
-`ambitionEvents` now only writes the ledger and touches no `Character` row.
+`defectionEvents` now only writes the ledger and touches no `Character` row.
 
 **帳本不是裝飾：忠誠檢查每回合把本回合的 delta 加總成「叛變值」。**
 
-    value  = ambition
+    value  = defectionBase
            + (忠誠標籤與君王不同 ? 2 : 0)
-           + 本回合此人的 AmbitionEvent **delta 總和**
+           + 本回合此人的 DefectionEvent **delta 總和**
 
     chance = (value − 17.5) / 17.5 × 0.05        // 17.5 = (5+30)/2
 
-只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `AmbitionEvent`，
+只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `DefectionEvent`，
 所以沒有 delta 可加。其餘全部來自資料庫的真實 delta。**曾經寫成「每筆 +1」是錯的**——
 每筆事件各有各的差值，`−2` 的一筆就該是 `−2`，而一筆 `+3` 就該是 `+3`。
 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生事件，沒有 delta 可讀。
 
 Only the loyalty tag is hardcoded: it is a *comparison* of `Loyalty` tags that never
-produces an `AmbitionEvent`, so there is no delta to add. Everything else is summed from
+produces a `DefectionEvent`, so there is no delta to add. Everything else is summed from
 real deltas. Writing it as "a flat +1 per event" was wrong — each event carries its own
 magnitude.
 
@@ -752,14 +756,14 @@ all leaders can never defect. That follows from the formula as written (0.05 is 
 not a floor); a floor would need `(value / 17.5) × 0.05`.
 
 **建立新勢力與叛變都「不」重骰野心。** 原本五處用 `CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`
-把野心拉回 5–15，設定值已刪除。取而代之是**帳本冷卻**：`ambitionEvents` 每回合為視窗內
-每一次叛變寫一筆 −2（`AMBITION_DEFECTION_DELTA`），持續 20 回合
-（`AMBITION_DEFECTION_ROUNDS`）。**每次叛變各自一筆，所以會疊加**：叛變兩次就是 −4。
+把野心拉回 5–15，設定值已刪除。取而代之是**帳本冷卻**：`defectionEvents` 每回合為視窗內
+每一次叛變寫一筆 −2（`DEFECTION_COOLING_DELTA`），持續 20 回合
+（`DEFECTION_COOLING_ROUNDS`）。**每次叛變各自一筆，所以會疊加**：叛變兩次就是 −4。
 只寫帳本、不寫可見 Event，因為符合條件的人每回合上百。
 Founding a faction and defecting both **no longer** re-roll ambition — all five re-roll sites and
 the config keys are gone. What replaced it is **cooling in the ledger**: one −2 row
-(`AMBITION_DEFECTION_DELTA`) per defection inside a 20-round window
-(`AMBITION_DEFECTION_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
+(`DEFECTION_COOLING_DELTA`) per defection inside a 20-round window
+(`DEFECTION_COOLING_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
 Event: a hundred-odd leaders match per round.
 
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output

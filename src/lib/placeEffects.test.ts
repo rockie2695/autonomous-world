@@ -19,11 +19,56 @@ import {
   nextUpgradeGain,
   placeIncome,
   placeRecruits,
+  placeEffectLabel,
   upgradeCost,
 } from './placeEffects';
 import { CONFIG } from './gameConfig';
 
 describe('placeEffects', () => {
+  it('should print the place total output, not the building own contribution', () => {
+    // 讀者回報的錯誤：地點面板的行內摘要在市場 1 級印「+5 金錢」，但同一個元件展開的
+    // 等級表印「15 金錢 / 每回合」。兩個都是真的，兩個都不是對方 —— 而且讀者會以為
+    // 0 級等於零收入，其實地方照樣有基礎收入。
+    //
+    // The bug the reader reported: the place panel's row printed "+5 gold" at market level 1
+    // while the expanded level table in the same component printed "15 gold / round". Both
+    // are true, neither matches the other, and it makes level 0 look like zero income when
+    // the place still earns its base income.
+    expect(placeEffectLabel('market', 1)).toEqual({
+      value: CONFIG.PLACE_BASE_INCOME + CONFIG.PLACE_MARKET_INCOME_PER_LV,
+      unit: 'gold',
+    });
+    expect(placeEffectLabel('barracks', 1)).toEqual({
+      value: CONFIG.PLACE_BASE_RECRUIT + CONFIG.PLACE_BARRACKS_RECRUIT_PER_LV,
+      unit: 'troops',
+    });
+    // 15 而不是一个看似合理的 5：等级 1 的市场值 PLACE_BASE_INCOME + 一级的加成 /
+    // 15, not a plausible-looking 5: level 1 is the base income plus one level's bonus
+    expect(placeEffectLabel('market', 1).value).toBe(15);
+    expect(placeEffectLabel('barracks', 1).value).toBe(5);
+
+    // 0 级也要印真实的基础产出，不能印 0 /
+    // Level 0 prints the real base output too, never 0
+    expect(placeEffectLabel('market', 0).value).toBe(CONFIG.PLACE_BASE_INCOME);
+    expect(placeEffectLabel('barracks', 0).value).toBe(CONFIG.PLACE_BASE_RECRUIT);
+
+    // 与 placeIncome / placeRecruits 必须一致：这两个是模拟真正使用的数字 /
+    // Must agree with placeIncome / placeRecruits: those are the numbers the simulation uses
+    for (const lvl of [0, 1, 3, BUILDING_MAX_LEVEL]) {
+      expect(placeEffectLabel('market', lvl).value).toBe(placeIncome(lvl));
+      expect(placeEffectLabel('barracks', lvl).value).toBe(placeRecruits(lvl));
+    }
+  });
+
+  it('should keep the cumulative percentage for the fortress, which has no total', () => {
+    // 堡壘的防禦是乘在守軍上的倍率，不是產出，所以沒有「總共產出多少」可印 /
+    // Fortress defence is a multiplier on the garrison, not an output, so there is no total
+    expect(placeEffectLabel('fortress', 1)).toEqual({
+      value: buildingTotal('fortress', 1),
+      unit: 'percent',
+    });
+    expect(placeEffectLabel('fortress', 0)).toEqual({ value: 0, unit: 'percent' });
+  });
   describe('upgradeCost', () => {
     it('should be BASE x MULT^level, so each level costs twice the last', () => {
       for (let level = 0; level < BUILDING_MAX_LEVEL; level++) {

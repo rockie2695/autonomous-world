@@ -77,7 +77,7 @@ export const CONFIG = {
   // → 很少角色速度 <7 或 >27（μ±2σ 之外）
   //
   // 野心使用常態分佈 μ=17, σ=5（截斷至 5-30）。
-  // Ambition uses normal distribution μ=17, σ=5 (clamped to 5-30).
+  // The defection base uses a normal distribution μ=17, σ=5 (clamped to 5-30).
   CHAR_START_AGE: 20, // 所有角色起始年齡為 20 / All characters start at age 20
   CHAR_START_TROOPS: 1, // 新角色至少帶 1 名士兵，避免剛出現時完全無人 /
     // A new leader starts with at least 1 soldier, so they are never completely empty on arrival
@@ -109,10 +109,10 @@ export const CONFIG = {
   CHAR_SPEED_MEAN: 17, // 常態分佈平均值 / Normal distribution mean
   CHAR_SPEED_SIGMA: 5, // 常態分佈標準差 / Normal distribution std dev
 
-  CHAR_AMBITION_MIN: 5, // 最小野心值 / Min ambition value
-  CHAR_AMBITION_MAX: 30, // 最大野心值 / Max ambition value
-  CHAR_AMBITION_MEAN: 17, // 常態分佈平均值 (μ) / Normal distribution mean (μ)
-  CHAR_AMBITION_SIGMA: 5, // 常態分佈標準差 (σ) / Normal distribution std dev (σ)
+  CHAR_DEFECTION_BASE_MIN: 5, // 最小野心值 / Min defectionBase value
+  CHAR_DEFECTION_BASE_MAX: 30, // 最大野心值 / Max defectionBase value
+  CHAR_DEFECTION_BASE_MEAN: 17, // 常態分佈平均值 (μ) / Normal distribution mean (μ)
+  CHAR_DEFECTION_BASE_SIGMA: 5, // 常態分佈標準差 (σ) / Normal distribution std dev (σ)
 
   // 生成率隨世界成長而降低（後期遊戲新角色更少）
   // Spawn rate decreases as the world grows (fewer new characters late game)
@@ -141,25 +141,25 @@ export const CONFIG = {
   SPEED_ESCAPE_MAX: 0.9, // 最大逃脫機率 / Max escape probability
   SPEED_TIEBREAK_BY_RNG: true, // 速度相同時使用 RNG 決定順序 / When speeds equal, use RNG for order
 
-  // ── 野心事件 / Ambition Events ──────────────────────────────────────────
-  // 野心如何根據遊戲事件變化 / How ambition changes based on game events
-  AMBITION_DEFECT_BASE_MULT: 0.5, // 叛變的基礎野心乘數 / Base ambition multiplier for defection
-  AMBITION_DIFF_LOYALTY_MULT: 1.2, // 忠誠與國王不同時的乘數 / Multiplier when loyalty differs from king
-  AMBITION_FRIEND_DEFECT_MULT: 1.5, // 朋友最近叛變時的乘數 / Multiplier when friend recently defected
-  // (AMBITION_KING_TONG_REDUCE was removed: tong no longer suppresses defection.)
-  AMBITION_LARGE_FACTION_MULT: 0.8, // 大勢力降低野心成長 / Large factions reduce ambition growth
-  AMBITION_LARGE_FACTION_THRESHOLD: 500, // 「大」= 500+ 角色 / "Large" = 500+ characters
-  AMBITION_NO_PROMOTION_ROUNDS: 20, // 未晉升回合數 → 野心上升 / Rounds without promotion → ambition up
-  AMBITION_NO_PROMOTION_DELTA: 0.5, // 每 20 回合野心增加量 / Ambition increase per 20 rounds
-  AMBITION_FRIEND_DEFECT_DELTA: 2, // 朋友叛變時 +2 野心 / +2 ambition when friend defects
-  AMBITION_KING_TONG_DELTA: 0.5, // 國王強時 -0.5 × (king.tong/30) / -0.5 × (king.tong/30) when king strong
-  AMBITION_ADMIN_REPLACED_DELTA: 1, // 被免去行政官職務時野心 +1 / +1 ambition when removed as administrator
-  AMBITION_ADMIN_ASSIGNED_DELTA: 1, // 取得行政官職務時野心 -1（暫時）/ -1 ambition when granted administrator post (temporary)
-  AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS: 10, // 減免持續回合數；到期若仍在職則 +1 回復 / Rounds before the -1 reverts
+  // ── 野心事件 / Defection Events ──────────────────────────────────────────
+  // 野心如何根據遊戲事件變化 / How defectionBase changes based on game events
+  // (tong no longer suppresses defection, at all. Two keys are gone: the original
+  // `AMBITION_KING_TONG_REDUCE` multiplier, and then `AMBITION_KING_TONG_DELTA`, which kept
+  // living on in the ledger after the multiplier was retired and so still quietly fed the
+  // defection value every round. Leadership now only decides how many troops one purchase can
+  // buy — see `tongPurchaseMultiplier` in server/income.ts.)
+  //
+  // 兩個都拿掉了：原本的 `AMBITION_KING_TONG_REDUCE` 乘數，之後是 `AMBITION_KING_TONG_DELTA`
+  // —— 後者在前者退休之後仍然留在帳本裡，所以每回合都還在餵著叛變值。統領現在只決定「一次能買
+  // 多少兵」（見 server/income.ts 的 `tongPurchaseMultiplier`）。
+  DEFECTION_NO_PROMOTION_ROUNDS: 20, // 未晉升回合數 → 野心上升 / Rounds without promotion → defectionBase up
+  DEFECTION_NO_PROMOTION_DELTA: 1, // 每 20 回合野心增加量（整數）/ Defection-value increase per 20 rounds (integer)
+  DEFECTION_ADMIN_REPLACED_DELTA: 1, // 被免去行政官職務時野心 +1 / +1 defectionBase when removed as administrator
+  DEFECTION_ADMIN_ASSIGNED_DELTA: 1, // 取得行政官職務 → 帳本 -1（永久，沒有自動回復）/ granted administrator -> -1 on the ledger (permanent, no revert)
   // 叛變後的冷卻：叛變本身**不再**重骰野心，改成往帳本寫一筆負的 delta，
   // 忠誠檢查把它加總進叛變值，于是這段期間內此人較不容易再叛變。
   //
-  // Defection cooling: defecting no longer re-rolls ambition. Instead a negative delta is
+  // Defection cooling: defecting no longer re-rolls defectionBase. Instead a negative delta is
   // written to the ledger, which loyaltyCheck sums into the defection value, so for the
   // next few rounds that leader is markedly less likely to defect again.
   //
@@ -170,17 +170,38 @@ export const CONFIG = {
   // row is evidence of a stronger tendency, and clamping it would throw that away.
   //
   // 只寫帳本、不寫可見 Event：一個世界每回合會有上百人符合條件，逐筆寫進事件日誌
-  // 只會淹掉其他資訊。AmbitionEvent.reason 已經記錄原因。
+  // 只會淹掉其他資訊。DefectionEvent.reason 已經記錄原因。
   // Ledger only, no visible Event: a hundred-odd leaders would match per round and the
-  // event log would drown. `AmbitionEvent.reason` already carries the reason.
-  AMBITION_DEFECTION_DELTA: -2, // 每次叛變寫入的 delta / Delta written per defection
-  AMBITION_DEFECTION_ROUNDS: 20, // 影響持續回合數 / Rounds the -2 keeps applying
+  // event log would drown. `DefectionEvent.reason` already carries the reason.
+  DEFECTION_COOLING_DELTA: -2, // 每次叛變寫入的 delta / Delta written per defection
+  DEFECTION_COOLING_ROUNDS: 20, // 影響持續回合數 / Rounds the -2 keeps applying
+
+  // ── 朋友叛逃 / A friend defects ──────────────────────────────────────────
+  // 朋友叛逃會**提高**他的叛變值——與冷卻相反，正向的。身邊的人走了，
+  // 自己也更想走。
+  //
+  // A friend's defection **raises** yours — the opposite sign to the cooling, which is
+  // negative. People around you leaving makes you likelier to leave too.
+  //
+  // **每個朋友各自計算、所以會疊加**：兩位朋友叛逃是 +4。這與冷卻同一條規則
+  // （「每次事件各自帶 delta」），因為兩者都是同一份帳本的加項。
+  //
+  // **Stacks per friend**, so two friends defecting is +4 — the same rule as the cooling,
+  // because both are just addends on the same ledger.
+  //
+  // 但**同一位朋友叛逃兩次只算一次**：重複的背叛已經由冷卻記過一次帳，在兩條規則下
+  // 各記一次是重複計數。
+  //
+  // One friend defecting **twice still counts once**: the repeat is already billed by the
+  // cooling, and billing it a second time under a second rule is double-counting.
+  DEFECTION_FRIEND_DELTA: 2, // 每位叛逃的朋友寫入的 delta / Delta written per friend who defected
+  DEFECTION_FRIEND_ROUNDS: 10, // 影響持續回合數 / Rounds a friend's defection keeps counting
 
   // ── 叛變 / Defection ─────────────────────────────────────────────────────
   // 野心是**固定的初始值**（和 ti／wu／tong 一樣），不再隨事件被改寫；會變的是
   // 「叛變值」，而它**不存資料庫**、每回合重算。
   //
-  // Ambition is a fixed initial stat (like ti / wu / tong) and is no longer rewritten by
+  // The defection base is a fixed initial stat (like ti / wu / tong) and is no longer rewritten by
   // events. What moves is the **defection value**, which is recomputed every round and
   // deliberately **not stored**.
   //
@@ -189,11 +210,11 @@ export const CONFIG = {
   // well above it.
   DEFECTION_BASE_RATE: 0.05, // 叛變值等於平均值時的每回合機率 / Per-round chance at the mean defection value
   DEFECTION_VALUE_LOYALTY_PENALTY: 2, // 忠誠標籤與君王不同 → 叛變值 +2 / Loyalty tag differs from the king's -> +2
-  // 事件影響**不設常數**：每筆 AmbitionEvent 自帶 delta，直接從資料庫加總。
-  // 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生 AmbitionEvent，沒有 delta 可加。
-  // No constant for events: each AmbitionEvent carries its own delta, summed straight from
+  // 事件影響**不設常數**：每筆 DefectionEvent 自帶 delta，直接從資料庫加總。
+  // 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生 DefectionEvent，沒有 delta 可加。
+  // No constant for events: each DefectionEvent carries its own delta, summed straight from
   // the database. Only the loyalty tag is hardcoded, being a tag comparison that never
-  // produces an AmbitionEvent and so has no delta to read. if still in office
+  // produces an DefectionEvent and so has no delta to read. if still in office
 
   // ── 行政官冷卻 / Administrator Cooldown ────────────────────────────────────
   ADMIN_CHANGE_COOLDOWN_ROUNDS: 10, // 換領導後 N 回合內 AI 不得再更換 / AI paths blocked for N rounds after a leader change
@@ -202,8 +223,33 @@ export const CONFIG = {
   // 關係每回合在附近角色間隨機形成
   // Relationships form randomly between nearby characters each round
   FRIEND_FORM_CHANCE: 0.05, // 每對合適配對 5% 機率 / 5% chance per eligible pair
+  // 不滿與友誼一樣是**互相的**：一次擲骰，寫入兩個方向的資料列。
+  //
+  // Discontent is mutual, exactly like friendship: one roll, both directions written.
   DISCONTENT_FORM_CHANCE: 0.05, // 每對合適配對 5% 機率 / 5% chance per eligible pair
-  DISCONTENT_DEFECT_MULT: 1.3, // 不滿使叛變機率增加 30% / Discontent increases defection by 30%
+
+  // ── 同地點的關係影響戰鬥力 / Co-located relations affect combat ────────────
+  // 朋友在**同一個地點**時，提高該將領的武力（攻擊）與體魄（防禦）；不滿的人同地點時，
+  // 則降低。兩者都只影響**計算**——不改寫 `Character` 的任何欄位，所以「離開就回復」
+  // 是自動的：penalty 每次都從目前的位置重新推導。
+  //
+  // A friend at the **same place** raises that leader's martial (attack) and physique
+  // (defence); someone they are unhappy with at the same place lowers them. Both are
+  // calculation-only — no `Character` column is rewritten — so "reverts when they separate"
+  // is automatic: the penalty is re-derived from current positions every time.
+  //
+  // 數值是**帶符號**的，所以「方向」本身也在設定裡。
+  //
+  // The values are **signed**, so the direction lives in the config too.
+  FRIEND_SAME_PLACE_DELTA: 1, // 朋友同地 → 武力/體魄 +1 / a friend alongside -> +1 martial & physique
+  DISCONTENT_SAME_PLACE_DELTA: -1, // 不滿同地 → 武力/體魄 -1 / someone resented alongside -> -1
+
+  // 每種關係**各自**最多計幾位。沒有上限的話，十位同地點的朋友就是 +10 武力，而整個
+  // 能力區間只有 5–30，那一下就淹沒了整條刻度。
+  //
+  // How many relations of each kind count. Without a cap, ten friends standing together would
+  // be +10 martial while the whole ability band is 5–30 — one swing swamping the scale.
+  RELATION_SAME_PLACE_MAX: 3, // 每種關係的計數上限 / cap per relation kind
 
   // ── 經濟 / Economy ───────────────────────────────────────────────────────
   // 收入分配：君王 30%、行政官 40%、其他 30%（平分）
@@ -290,7 +336,7 @@ export const CONFIG = {
   // ForceAtlas2 佈局重新計算間隔
   // ForceAtlas2 layout recalculation interval
   LAYOUT_RECALC_INTERVAL: 100, // 每 100 回合重新計算 / Recalc every 100 rounds
-  COLOR_NEIGHBOR_RANGE: 2, // 檢查 2 跳內的題色衝突 / Check 2 hops for color conflicts
+  COLOR_NEIGHBOR_RANGE: 2, // 檢查 2 跳內的顏色衝突 / Check 2 hops for color conflicts
 
   // ── 增量佈局 / Incremental Layout ────────────────────────────────────────
   // 新節點放在鄰居重心附近 + 隨機偏移
@@ -390,7 +436,7 @@ export const CONFIG = {
   // The sun is **no longer one colour**. Each star draws one of these spectral classes from
   // its place id, so no two systems look alike.
   //
-  // 太陽的題色**不再是同一個**。每一顆太陽從這組「光譜級」裡挑一個，由地點 id 決定，
+  // 太陽的顏色**不再是同一個**。每一顆太陽從這組「光譜級」裡挑一個，由地點 id 決定，
   // 所以每個星系看起來都不一樣。
   //
   // `core` is the disc itself (Sigma draws it) and `edge` is the outer glow. They travel as
@@ -400,7 +446,7 @@ export const CONFIG = {
   // 看起來像「一個核心配著別顆恆星的光暈」。
   //
   // 刻意不選**深紅**與**深藍**：軌道才是勢力的通道（見 `MAP_STAR_ORBIT_*`），而太陽是
-  // 整個星系裡最大的一塊題色。若太陽可以是任何題色，勢力的深色軌道就會被誤讀成「一顆恆星」。
+  // 整個星系裡最大的一塊顏色。若太陽可以是任何顏色，勢力的深色軌道就會被誤讀成「一顆恆星」。
   //
   // Deliberately no deep red and no deep blue: the **orbits** are the faction channel (see
   // MAP_STAR_ORBIT_*), and the sun is the largest block of colour in the system. If suns could
@@ -436,7 +482,7 @@ export const CONFIG = {
                                    // One inner orbit; outer ones slow by Kepler's third law
   MAP_STAR_ORBIT_COLOR_ALPHA: 0.75, // 軌道線不透明度 / Orbit line opacity
   MAP_STAR_ORBIT_WIDTH: 1.2,      // 軌道線寬（px）/ Orbit line width (px)
-  // 無主之地的軌道題色。**不能**沿用節點本身的無主色：那是刻意壓暗的灰，在近黑的
+  // 無主之地的軌道顏色。**不能**沿用節點本身的無主色：那是刻意壓暗的灰，在近黑的
   // 背景上畫 50% 透明度等於沒畫，整個星系會只剩一個太陽。給它一個站得住的冷色 /
   // Orbit colour for unowned land. It must NOT reuse the node's own unowned colour: that is
   // a deliberately dimmed grey, and at 50% alpha on a near-black background it is
@@ -457,7 +503,7 @@ export const CONFIG = {
   MAP_STAR_MOON_GAP_PX: 3.2,      // 月球軌道半徑 = 行星半徑 + 這個值 / Moon orbit radius = planet radius + this
   MAP_STAR_MOON_STEP_PX: 2.6,     // 第二顆起每顆再外推 / Each extra moon steps out by this
   MAP_STAR_MOON_SIZE: 1.9,        // 月球半徑（px）/ Moon radius (px)
-  // 月球的題色，每顆各抽一個（原本是**單一**題色）/ moon colours, one drawn per moon (was a single colour)
+  // 月球的顏色，每顆各抽一個（原本是**單一**顏色）/ moon colours, one drawn per moon (was a single colour)
   //
   // 一個掛四顆月球的行星，會不會看起來像四顆一樣的點？會 —— 原本所有月球都是同一塊近白。
   // 維持低飽和、接近月球本體的色系：月球本身很小（`MAP_STAR_MOON_SIZE`），太鮮豔只會變成
@@ -474,7 +520,7 @@ export const CONFIG = {
   MAP_STAR_LABEL_GAP_PX: 12,      // 星系名稱與外緣的間距（px）/ Gap from system edge to its name (px)
 
   // ── 節點白邊與黑影 / Node white border and shadow ───────────────────────────
-  // 星雲與深空底會吃掉節點邊界：題色再亮，一個沒有邊的圓盤也會糊進背景裡。
+  // 星雲與深空底會吃掉節點邊界：顏色再亮，一個沒有邊的圓盤也會糊進背景裡。
   // 白邊把圓盤和背景分開，黑影則讓它**浮**起來。
   //
   // A star cloud and a near-black backdrop eat node edges: however bright the fill, a
@@ -551,7 +597,7 @@ export const CONFIG = {
   // below — and never removed. `SPACE_DPR_CAP` is still shared by both remaining
   // canvas layers, so it stays.
   SPACE_DPR_CAP: 2,                 // DPR 上限，4K 螢幕不要用原值 / DPR cap; do not use the native value on 4K
-  // 題色一律放在 config，元件裡不得硬編碼任何題色 /
+  // 顏色一律放在 config，元件裡不得硬編碼任何顏色 /
   // Every colour lives in config; no component may hard-code one.
 
   // ── 流場塵埃 / Flow-field dust ────────────────────────────────────────────
@@ -562,9 +608,9 @@ export const CONFIG = {
   // gather into ribbons, vortices and voids — random but structured. Neighbouring
   // positions have similar noise, so particles do not scatter randomly.
   //
-  // ── 流場塵埃的題色 / Flow-field dust colours ───────────────────────────────
-  // **所有題色都在這裡**，方便開發者直接調整：色相範圍、飽和度、亮度、不透明度上
-  // 限，以及每個色階的 RGB。元件裡沒有任何硬編碼的題色。
+  // ── 流場塵埃的顏色 / Flow-field dust colours ───────────────────────────────
+  // **所有顏色都在這裡**，方便開發者直接調整：色相範圍、飽和度、亮度、不透明度上
+  // 限，以及每個色階的 RGB。元件裡沒有任何硬編碼的顏色。
   //
   // **Every colour lives here**, so a developer can retune the whole layer without
   // touching a component: the hue range, saturation, lightness, the alpha ceiling,
@@ -602,7 +648,7 @@ export const CONFIG = {
   SPACE_FLOW_LIGHTNESS: 66,         // 亮度（%）/ lightness %
   SPACE_FLOW_MAX_ALPHA: 0.55,       // 不透明度上限 / alpha ceiling
   /**
-   * 每個色階的 RGB（不用 HSL，讓開發者能直接指定想要的題色）。
+   * 每個色階的 RGB（不用 HSL，讓開發者能直接指定想要的顏色）。
    * 逗號分隔的 `r,g,b`，依 `SPACE_FLOW_HUE_STEPS` 平分色階；不給就自動由
    * 色相範圍生成。
    *
@@ -660,7 +706,7 @@ export const CONFIG = {
   SPACE_FLOW_PARTICLE_COUNT: 520,   // 粒子數（硬上限 1000）/ count (hard cap 1000)
   // 色相「跟著場走」/ Hue follows the field.
   // 色相不再由粒子自己抽，而是取它**所在位置**的噪聲值。於是同一條絲帶上的粒子共享
-  // 色相——分組一改變，題色分組也跟著改。這才是「題色跟隨流動」的真正意思。
+  // 色相——分組一改變，顏色分組也跟著改。這才是「顏色跟隨流動」的真正意思。
   //
   // The hue is no longer the particle's own draw: it is read from the noise at the
   // particle's **position**. Every particle on one ribbon then shares a hue, so as
@@ -721,7 +767,7 @@ export const CONFIG = {
   SPACE_GALAXY_CORE_ALPHA: 0.44,
   /** 盤面中段的亮度 / mid-disc alpha */
   SPACE_GALAXY_MID_ALPHA: 0.18,
-  /** 核的題色：暖奶油 / core colour: warm cream */
+  /** 核的顏色：暖奶油 / core colour: warm cream */
   SPACE_GALAXY_COLOR_CORE: '#c9b79c',
   /** 盤面中段：灰紫 / mid-disc: dusty mauve */
   SPACE_GALAXY_COLOR_MID: '#8b8191',
@@ -732,7 +778,7 @@ export const CONFIG = {
   /** 星雲不透明度上限 / nebula alpha ceiling */
   SPACE_GALAXY_NEBULA_ALPHA: 0.22,
   /**
-   * 星雲題色：偏灰的紫、褐、冷石板。刻意壓低飽和度去配合暖核，否則冷色角落會和核心
+   * 星雲顏色：偏灰的紫、褐、冷石板。刻意壓低飽和度去配合暖核，否則冷色角落會和核心
    * 打架。
    *
    * Nebula colours: muted plum, umber and cool slate. Saturation is held down to
@@ -747,7 +793,7 @@ export const CONFIG = {
   SPACE_GALAXY_STAR_MAX_SIZE: 1.5,
   /** 星點不透明度上限 / star alpha ceiling */
   SPACE_GALAXY_STAR_ALPHA: 0.8,
-  /** 星點題色：冷白、藍灰、暖奶油 / star colours: cool white, blue-grey, warm cream */
+  /** 星點顏色：冷白、藍灰、暖奶油 / star colours: cool white, blue-grey, warm cream */
   SPACE_GALAXY_STAR_COLORS: ['#e8e4dc', '#cfd6e0', '#b9c4d6', '#e6d8c4', '#d8cfc0'] as string[],
   /**
    * 自轉一整圈的秒數，**<= 0 表示不轉**（`rotateAt` 直接回傳 0）。
@@ -827,7 +873,7 @@ export const CONFIG = {
    */
   SPACE_FOG_ALPHA: 0.5,
   /**
-   * 題色從近乎白的暖色到很暗的褐：**有些地方偏白、有些地方幾乎不見**。暖色調是刻意的——
+   * 顏色從近乎白的暖色到很暗的褐：**有些地方偏白、有些地方幾乎不見**。暖色調是刻意的——
    * 這一層是「星雲 / 星塵」，不是冷灰的霧，所以它要讀起來像被照亮的塵埃。
    *
    * Colours run from near-white warm to dark umber: some patches read white, others barely
@@ -990,7 +1036,7 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // Rim light: mixed toward white. Applied **per side**, so keep it thin or it smears
 // ── 領地邊界 / Territory border ───────────────────────────────────────────
   // 邊界是一條**半透明的線**，不是把勢力色提亮。提亮只是在同一塊色裡加白，看起來像
-  // 漸層；一條獨立題色的線才讀得出「這裡是邊界」。題色與透明度都在這裡調。
+  // 漸層；一條獨立顏色的線才讀得出「這裡是邊界」。顏色與透明度都在這裡調。
   //
   // The border is a **semi-transparent line**, not a lightened faction colour.
   // Lightening adds white to the same hue and reads as a gradient; a line of its own
@@ -1008,14 +1054,44 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // without a floor a small claim's name vanishes, without a ceiling a big claim's name
   // swamps the map.
   /**
-   * 文字最多可以佔到內切圓直徑的幾成。用「實測 100px 的字寬」反推最大字級，所以
-   * 名稱會**撐滿**領地而不是固定大小；留一點餘裕（<1）免得貼著邊界。
+   * 文字最多可以佔到可用矩形的幾成（扣掉光暈之後）。用「實測 100px 的字寬」反推最大字級，
+   * 所以名稱會**撐滿**領地而不是固定大小；留一點餘裕（<1）免得貼著邊界。
    *
-   * How much of the inscribed diameter the text may fill. The largest font size is
-   * derived from the measured width at 100px, so the name **fills** the claim rather
-   * than sitting at a fixed size; a little slack (<1) keeps it off the boundary.
+   * **光暈不要靠這個比例處理，要用 `TERRITORY_LABEL_GLOW_PX` 扣掉。** 只調低比例是按比例
+   * 懲罰每一個標籤，而光暈是固定成本；扣掉之後餘裕變成 `avail·(1−fit) + glow·fit`，
+   * 矩形厚度只要 ≥ glow 就**必然**離邊界 ≥ glow。實測 1709 個區塊：扣光暈後最小餘裕
+   * 13.0px、平均字級 31.5px；只降比例到 0.72 則是 7.1px 與 30.8px —— 名字更小、餘裕更少。
+   *
+   * How much of the usable rectangle the text may fill, after the glow is taken off. The
+   * largest font size is derived from the measured width at 100px, so the name **fills** the
+   * claim rather than sitting at a fixed size; a little slack (<1) keeps it off the boundary.
+   *
+   * **The glow is handled by subtracting `TERRITORY_LABEL_GLOW_PX`, not by this ratio.**
+   * Lowering the ratio penalises every label proportionally, while the glow is a fixed cost.
+   * Subtracting it makes the margin `avail·(1−fit) + glow·fit`, which is **at least the glow
+   * radius** for any rectangle at least `glow` thick. Measured over 1709 regions: subtracting
+   * gives a 13.0px smallest margin at a 31.5px mean font, where dropping the ratio to 0.72
+   * gives 7.1px at 30.8px — smaller names *and* less margin.
    */
   TERRITORY_LABEL_FIT: 0.82,
+  /**
+   * 勢力名外發光的半徑（**em**，所以跟著字級縮放）。**這是「名字有多大」的一部分**，
+   * 所以求解字級時必須把它算進預算裡，而不是讓光暈自己溢出領地。
+   *
+   * **用 em 不用 px**：寫死 6px 的話，一塊薄領地扣掉兩側各 6px 就沒剩什麼，字級會被壓到
+   * 8px、甚至整個名字消失（實測 4 個回合有 3 個不畫）。跟著字級縮放，小名字配小光暈，
+   * 餘裕 `avail·(1−fit)` 也會等比放大。
+   *
+   * The outward glow radius on a faction name, **in em**, so it scales with the font size. It
+   * is **part of how big the name actually is**, so the font solve has to count it — otherwise
+   * the glow spills off the claim on its own.
+   *
+   * **Em, not px**: a fixed 6px subtracted from both sides of a thin claim leaves almost
+   * nothing, collapsing the solve to 8px or dropping the name altogether (measured: 3 of 4
+   * rounds lost their label). Scaling with the font gives a small name a small halo, and the
+   * `avail·(1−fit)` clearance grows in proportion to the claim.
+   */
+  TERRITORY_LABEL_GLOW_EM: 0.15,
   /**
    * 可讀下限。**低於這個字級就不畫**，而不是把它放大到看得見 ——
    * 放大會讓文字溢出領地，正是要避免的事。
@@ -1069,6 +1145,32 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // 最多標幾個勢力，畫面才不會變成地名牆 /
   // Cap the labelled factions so the map does not become a wall of names
   TERRITORY_MAX_LABELS: 12,
+  // 領地要細長到什麼程度，勢力名才跟著主軸轉。**這個門檻同時決定矩形沿哪個座標系量**，
+  // 所以它必須和繪製共用同一個值 —— 兩邊各自判斷就會讓名字被塞進一個它並不朝向的
+  // 矩形裡，四個角於是跑到自己地盤外。
+  // How elongated a claim must be before its name follows the principal axis. **The same
+  // value decides which frame the label rectangle is measured in**, so the geometry and the
+  // renderer must share it: judged separately, a horizontal name gets fitted into a tilted
+  // rectangle and its corners leave the faction's own land.
+  TERRITORY_LABEL_ROTATE_ELONGATION: 1.5,
+  // 傾斜的座標系要**明顯**比較好才採用。沒有遲滯的話，兩者接近時名字會每回合在水平與
+  // 傾斜之間翻轉 —— 那是視覺噪音。1.08 = 必須大約多 8% 才值得轉。
+  // How much bigger the tilted frame has to be before it is taken. Without hysteresis a name
+  // flips between horizontal and tilted every round when the two are close, which is visual
+  // noise. 1.08 means it has to be roughly 8% larger to be worth rotating.
+  TERRITORY_LABEL_ROTATE_MARGIN: 1.08,
+  // 選址的取樣上限與入圍名單。名字放在「能把字撐到最大」的那一格，不是「最深」的那一格 ——
+  // 最大內切圓是**圓形**問題的答案，而這裡要的是**矩形**：實測平均能多撐到 1.48 倍
+  // （最壞 3.21 倍）。窮舉所有格子每格都要沿兩軸走到底，太貴，所以先抽樣、再評分排名、
+  // 最後只對前幾名跑真正的矩形搜尋。數字越大越接近窮舉，計算也越貴。
+  // Anchor search: how many cells to sample, and how many of the best to measure in full. The
+  // name goes on the cell that makes it *largest*, not the deepest one — the largest inscribed
+  // circle answers a **circular** question and this one is **rectangular**: measured 1.48x on
+  // average, 3.21x at worst. Scoring every cell walks both axes to the boundary, so sample,
+  // rank cheaply, then measure only the finalists in full. Bigger means closer to exhaustive,
+  // and more expensive.
+  TERRITORY_LABEL_ANCHOR_SAMPLES: 320,
+  TERRITORY_LABEL_ANCHOR_CANDIDATES: 10,
   // 領地視圖下每「格」滾輪的縮放倍率。sigma 的 ratio 越小越近，所以往上滾
   // （deltaY < 0）要讓 ratio 變小，也就是這個倍率要 < 1。
   // Wheel zoom rate per notch while the territory layer owns the wheel. Sigma's
@@ -1094,8 +1196,8 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // that the whole region counts as "a place" and the faction readout could never appear.
   TERRITORY_PLACE_HOVER_PX: 14,
 
-  // ─── 地圖題色 / Map colours ────────────────────────────────────────────────
-  // SigmaMap 裡所有硬編碼的題色都搬到這裡。改這些值就能重新配色整張地圖，不必動
+  // ─── 地圖顏色 / Map colours ────────────────────────────────────────────────
+  // SigmaMap 裡所有硬編碼的顏色都搬到這裡。改這些值就能重新配色整張地圖，不必動
   // 元件。勢力色本身是**執行期資料**（資料庫的 hsl），不在此列。
   //
   // Every colour that was hard-coded in SigmaMap lives here. Retune the whole map by

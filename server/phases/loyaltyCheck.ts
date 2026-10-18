@@ -6,15 +6,38 @@
 // Checks if characters will defect from their faction.
 //
 // 規則（來自規格）/ Rules (from spec):
-// - base = ambition × 0.5
-// - 若 loyalty != king.loyalty: base × 1.2 / if loyalty != king.loyalty: base × 1.2
-// - 若朋友最近叛逃: base × 1.5 / if friend defected recently: base × 1.5
-// - (君王的 tong 過去會降低叛變機率，該規則已移除：統領現在只影響購兵量) /
-    // (A king's tong used to suppress defection. Removed: leadership now only affects
-    // how many troops a leader can buy.)
-// - 若 faction.places > 500: base × 0.8 / if faction.places > 500: base × 0.8
-// - 若有不滿: base × 1.3 / if has Discontent: base × 1.3
-// - 若 rand(100) < base: 叛逃！ / if rand(100) < base: defect!
+//
+// **全部是加項，沒有乘數。** 舊版的乘算鏈（`defectionBase × 0.5`、忠誠 `× 1.2`、
+// 朋友叛逃 `× 1.5`、大勢力 `× 0.8`、不滿 `× 1.3`）已經移除：乘數會疊乘，沒有任何單一
+// 因子能被單獨讀出來，而且「朋友叛逃 × 1.5」乘的是**機率**而不是**風險**。
+//
+// **Everything is an addend; there are no multipliers.** The old multiplicative chain
+// (`defectionBase × 0.5`, loyalty `× 1.2`, friend-defection `× 1.5`, large faction `× 0.8`,
+// discontent `× 1.3`) is retired: multipliers compound, so no single factor could be read off
+// on its own, and "friend defected × 1.5" doubled the *probability* rather than the *risk*.
+//
+//     value  = defectionBase
+//            + (忠誠標籤與君王不同 ? DEFECTION_VALUE_LOYALTY_PENALTY(2) : 0)
+//            + 本回合此人的 DefectionEvent **delta 總和**
+//
+//     chance = (value − DEFECTION_MIDPOINT(17.5)) / 17.5 × DEFECTION_BASE_RATE(0.05)
+//
+// 忠誠標籤是**唯一**寫死的加項：它是標籤比較，不會產生 `DefectionEvent`，所以沒有
+// delta 可加。其餘全部來自資料庫裡的真實 delta。
+//
+// The loyalty tag is the **only** hardcoded addend: it is a tag comparison that never
+// produces a `DefectionEvent`, so there is no delta to read. Everything else comes from real
+// deltas in the database.
+//
+// 低於中點時機率為 **0**（不是負數）：「低於平均就不叛變」正是這條規則想說的話。
+// Below the midpoint the chance is exactly **0**, not negative: "below average, no
+// defection" is exactly what the rule is saying.
+//
+// - 若擲中：叛逃！ / on a hit: defect!
+//   - 若為總督：以該地點建立新勢力 / if admin: create new faction with that place
+//   - 否則：加入鄰近勢力或建立新的 / else: join nearby faction or create new one
+//   - 叛變會寫入 `DEFECTION` 事件與一筆帳本，後者正是上面的 delta 來源 / a defection
+//     writes a `DEFECTION` event and a ledger row, and that ledger row is the delta above
 //   - 若為總督：以該地點建立新勢力 / if admin: create new faction with that place
 //   - 否則：加入鄰近勢力或建立新的 / else: join nearby faction or create new one
 //
@@ -67,12 +90,12 @@ export async function loyaltyCheck(
     },
   });
 
-  // AmbitionEvents for THIS round, batched once and their deltas summed per character.
+  // DefectionEvents for THIS round, batched once and their deltas summed per character.
   //
   // One query for the whole round rather than one per character: this loop already runs
   // per living leader, and at a few hundred characters that difference is the whole cost of
   // the phase. The deltas are summed, not counted -- each event carries its own magnitude.
-  const eventsThisRound = await prisma.ambitionEvent.findMany({
+  const eventsThisRound = await prisma.defectionEvent.findMany({
     where: { worldId, round },
     select: { charId: true, delta: true },
   });
@@ -88,7 +111,7 @@ export async function loyaltyCheck(
 
         // Defection is a computed value, not a stored one. See src/lib/defection.ts.
         //
-        // The old chain multiplied: ambition x 0.5, then loyalty x1.2, friend-defection
+        // The old chain multiplied: defectionBase x 0.5, then loyalty x1.2, friend-defection
         // x1.5, large faction x0.8, discontent x1.3. Multipliers compound, so no single
         // factor could be read off on its own, and "friend defected x1.5" doubled the
         // *probability* rather than the *risk*. Everything now adds to the value instead.
@@ -105,7 +128,7 @@ export async function loyaltyCheck(
         }
 
         const value = defectionValue({
-          ambition: char.ambition,
+          defectionBase: char.defectionBase,
           loyaltyMismatch,
           eventDeltaSum: deltaPerChar.get(char.id) ?? 0,
         });
@@ -160,9 +183,9 @@ export async function loyaltyCheck(
             isKing: true,
             name: kingName,
             // 野心是**固定的初始值**，叛變與建國都不重骰它。叛變之後的冷卻是
-            // ambitionEvents 往帳本寫一筆負的 delta，而不是改寫這個值。
+            // defectionEvents 往帳本寫一筆負的 delta，而不是改寫這個值。
             //
-            // Ambition is a **fixed initial stat** and is re-rolled by neither
+            // The defection base is a **fixed initial stat** and is re-rolled by neither
             // defecting nor founding a faction. The cooling after a defection is a
             // negative delta in the ledger, not a rewrite of this value.
           },
@@ -246,7 +269,7 @@ export async function loyaltyCheck(
               data: {
                 factionId: nearbyFactionId,
                 // 加入別人的勢力同樣不動野心 /
-                // Joining someone else's faction does not touch ambition either
+                // Joining someone else's faction does not touch defectionBase either
               },
             });
 
@@ -307,9 +330,9 @@ export async function loyaltyCheck(
               isKing: true,
               name: kingName,
               // 野心是**固定的初始值**，叛變與建國都不重骰它。叛變之後的冷卻是
-              // ambitionEvents 往帳本寫一筆負的 delta，而不是改寫這個值。
+              // defectionEvents 往帳本寫一筆負的 delta，而不是改寫這個值。
               //
-              // Ambition is a **fixed initial stat** and is re-rolled by neither
+              // The defection base is a **fixed initial stat** and is re-rolled by neither
               // defecting nor founding a faction. The cooling after a defection is a
               // negative delta in the ledger, not a rewrite of this value.
             },

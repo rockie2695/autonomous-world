@@ -39,10 +39,10 @@ async function main() {
 
   // 按照外鍵約束順序刪除（先删子表，再删父表）
   // Delete in foreign key order (children first, then parents)
-  // 順序：Event → AmbitionEvent → Friendship → Discontent → Signal →
+  // 順序：Event → DefectionEvent → Friendship → Discontent → Signal →
   //      RoundSnapshot → Road → Character → Faction → Place → World
   await prisma.$executeRaw`DELETE FROM "Event"`;
-  await prisma.$executeRaw`DELETE FROM "AmbitionEvent"`;
+  await prisma.$executeRaw`DELETE FROM "DefectionEvent"`;
   await prisma.$executeRaw`DELETE FROM "Friendship"`;
   await prisma.$executeRaw`DELETE FROM "Discontent"`;
   await prisma.$executeRaw`DELETE FROM "Signal"`;
@@ -282,17 +282,17 @@ async function main() {
   const tong = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
   const ti = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
   const jing = rng.int(CONFIG.CHAR_ABILITY_MIN, CONFIG.CHAR_ABILITY_MAX);
-  const speed = rng.gaussian(
+  const speed = rng.gaussianInt(
     CONFIG.CHAR_SPEED_MEAN,
     CONFIG.CHAR_SPEED_SIGMA,
     CONFIG.CHAR_SPEED_MIN,
     CONFIG.CHAR_SPEED_MAX
   );
-  const ambition = rng.gaussian(
-    CONFIG.CHAR_AMBITION_MEAN,
-    CONFIG.CHAR_AMBITION_SIGMA,
-    CONFIG.CHAR_AMBITION_MIN,
-    CONFIG.CHAR_AMBITION_MAX
+  const defectionBase = rng.gaussianInt(
+    CONFIG.CHAR_DEFECTION_BASE_MEAN,
+    CONFIG.CHAR_DEFECTION_BASE_SIGMA,
+    CONFIG.CHAR_DEFECTION_BASE_MIN,
+    CONFIG.CHAR_DEFECTION_BASE_MAX
   );
   const maxAge = rng.int(CONFIG.CHAR_MAX_AGE_MIN, CONFIG.CHAR_MAX_AGE_MAX);
   const loyalty = rng.pick(['SELF', 'PATH', 'ALTRUISM'] as const) ?? 'SELF';
@@ -307,7 +307,7 @@ async function main() {
       jing,
       speed,
       loyalty,
-      ambition,
+      defectionBase,
       age: CONFIG.CHAR_START_AGE,
       maxAge,
       placeId: places[0].id,

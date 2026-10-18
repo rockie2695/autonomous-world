@@ -144,6 +144,7 @@ src/
     ├── snapshot.ts        # Snapshot compression (gzip)
     ├── defection.ts       # Defection value + chance, PURE — the stat is never stored
     ├── placeEffects.ts    # Building effects + place output, one definition four consumers
+    ├── relations.ts       # Friend / discontent inversion (pure logic, dedupes)
     ├── password.ts        # argon2id hashing (SERVER ONLY — never import from a client)
     ├── passwordPolicy.ts  # Password length rule; imports NOTHING (see Authentication)
     ├── publicWorld.ts     # Unauthenticated world read for the home page
@@ -333,21 +334,31 @@ A place is "faction-controlled" when `place.factionId != null`. Unowned (無主�
   1. Spawn place vacant (or its admin is dead) → assign the new leader directly
   2. Current admin is the living **king** → king keeps his seat, no comparison
   3. Otherwise compare **total ability `wu + tong + jing`** (new leader vs current admin); only a **strictly greater** total replaces the admin
-  4. On replacement: old admin's ambition **increases** by `CONFIG.AMBITION_ADMIN_REPLACED_DELTA` (1, clamped to `CHAR_AMBITION_MAX`), logged as an `ADMIN_REMOVED` Event **and** an `AmbitionEvent`
+  4. On replacement: old admin's ambition **increases** by `CONFIG.DEFECTION_ADMIN_REPLACED_DELTA` (1, clamped to `CHAR_DEFECTION_BASE_MAX`), logged as an `ADMIN_REMOVED` Event **and** a `DefectionEvent`
 - `Place.administratorId` is globally unique (`@unique`) — a character administers at most one place
 
 ### Administrator Assignment, Ambition & Cooldown
 
 All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` / `revokeAdmin` / `isAdminChangeCoolingDown`) so the rules live in one place. **Never write `Place.administratorId` directly** — go through the helpers.
 
-- **Grant** (`grantAdmin`, every path): sets `administratorId` + `Place.adminChangedRound = round`, `lastPromotedRound = round`, and applies a **temporary** `-CONFIG.AMBITION_ADMIN_ASSIGNED_DELTA` (1, clamped to `CHAR_AMBITION_MIN`) with an `AmbitionEvent`. The reduction auto-reverts **+1** at `round + CONFIG.AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS` (10) in phase 7 (logged as an `AMBITION_RECOVERED` Event)
-  - If the character already has a pending reduction (continuous service, e.g. a seat transfer) the expiry is **extended only** — never deducted twice
-  - If the clamped delta is 0 (already at the floor) nothing is deducted and **no revert is scheduled** (otherwise the revert would credit +1 for free)
-- **Revoke** (`revokeAdmin`): `+CONFIG.AMBITION_ADMIN_REPLACED_DELTA` (clamped to `CHAR_AMBITION_MAX`) + `AmbitionEvent`, and **clears** `adminAmbitionRevertRound` — removal already paid the +1, so a later revert would double-count (hence "skip revert if removed")
+- **Grant** (`grantAdmin`, every path): sets `administratorId` + `Place.adminChangedRound = round`, `lastPromotedRound = round`, and writes a `-CONFIG.DEFECTION_ADMIN_ASSIGNED_DELTA` (1) `DefectionEvent` — that is, it moves the **defection value**, not the fixed base
+- **Revoke** (`revokeAdmin`): a `+CONFIG.DEFECTION_ADMIN_REPLACED_DELTA` (1) `DefectionEvent`
+- **The temporary-reduction machinery is GONE, and this section used to be wrong about it.** It
+  claimed the −1 auto-reverted after `DEFECTION_ADMIN_ASSIGNED_DURATION_ROUNDS` (10) via an
+  `AMBITION_RECOVERED` Event. None of that runs: `adminAmbitionRevertRound` had been referenced
+  only from comments for some time and the column is now dropped, `AMBITION_RECOVERED` was never
+  emitted by anything, and the only `eventData` any caller passes is `{ oldTotal, newTotal }`.
+  Those three dead paths — the column, the event type and its EventLog/icons/SignalFeed branches —
+  were deleted together. `DEFECTION_ADMIN_ASSIGNED_DELTA` itself is still used: as a **permanent**
+  ledger entry, with no revert. Do not reintroduce the revert without reading this first.
 - **Paths**: `spawnCharacters.ts` (phase 2, cooldown-gated) · `assignAdmins.ts` (phase 12, cooldown-gated) · `battle.ts` capture sites (phase 10, **not** gated — captures still apply) · `POST /api/admin/assign-admin` (manual, **not** gated)
 - **Cooldown** (`CONFIG.ADMIN_CHANGE_COOLDOWN_ROUNDS` = 10): any administrator change (assign, revoke, or the seat-clearing in `grantAdmin`) stamps `Place.adminChangedRound`. While `round - adminChangedRound < 10` the **AI paths only** (phase 2 assignment, phase 12 `assignAdmins`) skip that place. `assignAdmins` filters in its `where` clause (`adminChangedRound: null` OR `<= round - 10`); `spawnCharacters` uses `isAdminChangeCoolingDown()`
-- **The manual API revokes the outgoing admin** before granting (ambition +1 + `ADMIN_REMOVED` Event) and clears the incoming character's seat elsewhere for the unique constraint
-- Every ambition delta is written to both the `AmbitionEvent` ledger and the visible Event `data.ambitionDelta` (rendered by `formatEvent` in `game/page.tsx` via `events.ambitionDelta`)
+- **The manual API revokes the outgoing admin** before granting (defection value +1 + `ADMIN_REMOVED` Event) and clears the incoming character's seat elsewhere for the unique constraint
+- **The ledger is the only destination.** Deltas go to the `DefectionEvent` table and nowhere else:
+  there is no `Event.data.ambitionDelta` any more, and no visible ambition suffix in the log. That
+  suffix existed only because the `ADMIN_ASSIGNED` / `ADMIN_REMOVED` rows used to carry it; the
+  `ambitionDelta` i18n key and its two false "ambition changed" clauses went with it, because
+  ambition has not changed for a leader in a long time and the log was still claiming it had.
 
 ### Map Spotlight & Move Animation
 
@@ -691,11 +702,29 @@ read territory and topography at the same time.
   gives a curve at screen resolution. A faction can have several loops (a hole, or two disconnected
   holdings), hence an array of arrays. Points stay inside the original hull, so a curve never
   overshoots. Skips cells whose faction key is missing, matching `factionRegions`.
-- **The label sits at the centre of a verified inscribed *rectangle*, aligned to the claim's
-  principal axis.** `factionRegions()` returns `halfAlong` / `halfAcross` for it, and
+- **The label sits at the centre of a verified inscribed *rectangle*, aligned to the frame the name is
+  drawn in.** `factionRegions()` returns `halfAlong` / `halfAcross` for it, and
   `solveLabelFontSize()` in `mapShared.ts` solves for the largest font whose text box fits inside that
   rectangle. An estimate from the character count is always wrong, because CJK glyphs are ~1em and
   Latin ~0.55em, so both dimensions come from the text's real measured size at 100px.
+  - **The measuring frame and the drawing frame must be the *same* frame, and `factionRegions()`
+    decides it once.** This was the "faction name is not inside its own territory" bug. The
+    rectangle was *always* measured along the principal axis, but the renderer only rotated the text
+    onto that axis above `elongation > 1.5`. A claim at elongation 1.42 with a 57° axis therefore
+    got a **horizontal** name fitted into a rectangle tilted 57° — and because the rectangle is
+    verified to lie wholly on the faction's land, the corners that left the rectangle left the land
+    too: **3 of 4** on the worst synthetic case. Now `labelRotated` and `labelAngleDeg` come out of
+    `factionRegions()` and the renderer only reads them; the rectangle is measured along
+    `labelRotated ? angle : 0`. **Never re-derive the rotation in the component from `elongation`** —
+    that independence is the whole bug. The threshold lives in `gameConfig.ts` as
+    `TERRITORY_LABEL_ROTATE_ELONGATION` precisely because geometry and drawing must share it.
+    - The cost is deliberate: a near-circular claim measured axis-aligned gets a *smaller* rectangle,
+      so some names shrink or drop out as unreadable. A name that fits beats a bigger name that
+      lies, and zooming in grows the size back.
+    - `territory.test.ts` guards the **drawn text box's four corners**, not the rectangle. Sweeping
+      the rectangle along `angle` guarded a box nobody draws in, which is how this survived; the
+      test now sweeps `labelRotated ? angle : 0`, and the regression case is a fixed 14-site
+      configuration that yields an elongation-1.05, 16°-axis claim.
   - **The circle alone is too conservative, and that was the "label doesn't fill the territory"
     bug.** `labelRadius` (a two-pass chamfer distance transform) reports only "how wide this is at
     the roomiest point", which for an elongated claim is a sliver. A name could run a long way along
@@ -720,14 +749,89 @@ read territory and topography at the same time.
     not clamp into the region's **bounding box** either: an L-shaped claim's box contains its own
     notch, which is not its land. Neither the box nor the covariance is a subset of the claim; the
     verified rectangle is.
-  - **Too small to read means not drawn, never scaled up.** Scaling up to reach `TERRITORY_LABEL_FONT_MIN`
+  - **The faction-name span needs `origin-top-left`, and this is the real "not inside the faction
+  area" bug.** Its chain is `translate(anchor) rotate(deg) translate(-50%, -50%)`, and
+  `transform-origin` defaults to `50% 50%` — so the **whole chain, including the centring
+  shift, is rotated about the element's own centre**. The displacement is
+  `(R(deg) − I)·(−hw, −hh)`, which is **exactly 0 at deg = 0** and as large as the name itself
+  once rotated. Measured on the live world: a 62×14, four-glyph, −78° name shifted
+  **(17.7, 35.9)px** and sat entirely off its claim. `origin-top-left` puts the origin at the
+  corner, so `translate(-50%,-50%)` then the rotation happens about the anchor.
+  - **Nothing in `territory.ts` was wrong**, and no geometry test could have found this: the
+    rectangle was verified, the frame matched the drawing, and the *unrotated* names were
+    pixel-perfect. Only the rotated ones moved. `territoryLabelPlacement.test.ts` guards the
+    declaration, because the project runs vitest under `node` with no DOM — a displaced name
+    looks like a geometry bug, not a CSS one.
+  - **Verify label placement against the right canvas.** The territory layer is *not*
+    `document.querySelectorAll('canvas')[0]` — the space backdrop layers come first and they
+    are non-zero almost everywhere, so sampling index 0 reports every label as comfortably
+    inside while it is actually off its claim. Select it structurally instead: the canvas that
+    is a child of the label container's parent and does **not** carry `pointer-events-none`.
+- **Too small to read means not drawn, never scaled up.** Scaling up to reach `TERRITORY_LABEL_FONT_MIN`
     is the one operation that would push the text outside its claim. Zooming in grows the size, so a
     hidden name returns on its own.
-- The label is anchored at `labelX`/`labelY` (that deepest cell), **not** the centroid: a centroid
-  lands in the concave notch of an L-shaped claim, which is not its own land. `angle` /
-  `elongation` come from the cell positions' covariance; rotation only applies past elongation 1.5,
-  because a near-circular region has an unstable axis. The screen angle negates the graph angle
-  (screen y is flipped) and normalises to ±90° so text is never upside-down.
+  - **The name includes its glow, and `solveLabelFontSize` counts it in the font's budget.**
+    Every label carries `text-shadow: 0 0 TERRITORY_LABEL_GLOW_EM`. Leaving that to
+    `TERRITORY_LABEL_FIT` cannot work: that slack is a **proportion**, so on a thin claim it is
+    a couple of pixels while a glow is a fixed size — the glow then spills onto a neighbour and
+    reads as exactly "the label is not fully inside the faction area". The solve is
+    `fs·(halfExtentPerPx + glowEm) ≤ avail·fit`, so **name-plus-halo** never exceeds `avail·fit`
+    and the clearance beyond the halo is at least `avail·(1−fit)` — positive everywhere, and it
+    scales with the claim. `TERRITORY_LABEL_FIT` stays at **0.82**.
+    - **The glow is in `em`, not px, and that is load-bearing.** A fixed 6px subtracted from both
+      sides of a thin claim leaves almost nothing: the solve collapsed to 8px and **3 of 4 rounds
+      lost their label entirely**. Scaling with the font gives a small name a small halo.
+      Measured over 1709 regions: 99.9% still legible, 31.7px mean font, and clearance beyond
+      the halo of 6.75px minimum / 21.2px median, with **no** halo crossing a boundary.
+    - `territory.test.ts` measures the gap from the ink box to the **smoothed outline that gets
+      drawn**, not to the cell grid — Chaikin cuts convex corners inward, so the drawn curve is the
+      real boundary. It compares against **that label's own** halo (`GLOW_EM × fontSize`), not a
+      fixed radius. Its sample has to exceed ~400 labels: the violations are in the tail, and a
+      small sample passes for the wrong reason.
+- **The anchor is the cell that makes the name largest, not the deepest cell.** The deepest cell
+  (the centre of the largest inscribed circle) answers a **circular** question; the label needs a
+  **rectangle**. A claim can have a point that is very round — flesh on every side — yet narrow,
+  while a less round point holds a markedly wider rectangle. Measured over 102 regions, the
+  inscribed-circle anchor reached only **1/1.48** of the best anchor on average and **1/3.21** at
+  worst; the live world's claim gained `103×26 → 155×38`. Leaving the anchor on the deepest cell
+  is what "the label does not use the largest space" looks like. `angle` / `elongation` still come
+  from the covariance, and rotation still applies only past elongation 1.5, because a near-circular
+  region has an unstable axis; the screen angle negates the graph angle (screen y is flipped) and
+  normalises to ±90° so text is never upside-down.
+  - Two phases, because scoring every cell is far too costly (each walk runs both axes to the
+    boundary) and a claim can hold thousands of cells: a **cheap proxy** ranks the sampled cells,
+    then the real rectangle search runs for the finalists
+    (`TERRITORY_LABEL_ANCHOR_SAMPLES` / `..._CANDIDATES`). 320/10 reaches the exhaustive optimum
+    in 3–11ms; exhaustive itself costs 31–40ms.
+  - **The proxy's `ownsCell` must take the faction index.** Asking only "does anyone own this"
+    lets the walk run straight through a neighbour's claim, so every cell near a border looks
+    roomy and the ranking becomes noise — measured as picking a cell worth 0.14 when 0.43 was
+    available. A plausible-looking ranking earns no credit.
+  - **The frame is chosen by comparison, not by `elongation`.** The old rule — "rotate above
+    elongation 1.5" — describes the **shape** and is not the answer to "how big". Measured over 27
+    claims, **horizontal beat the principal axis in 17 of them**: the rule was wrong more often
+    than right. Both frames now run the anchor search and the larger font wins, for a mean gain of
+    **1.103×**. Sweeping the angle in 10° steps over a whole claim is worth only ~1.03× more, so
+    two candidates is nearly all of it.
+    - **It needs hysteresis** (`TERRITORY_LABEL_ROTATE_MARGIN`, 1.08): without it a name flips
+      between horizontal and tilted every round when the two are close, which is visual noise.
+      The tilted frame has to be clearly better to be taken.
+    - The tilted frame stays **ineligible** below `TERRITORY_LABEL_ROTATE_ELONGATION`, because on
+      a near-circular claim the principal axis is noise and rotating to it would jitter.
+    - Only claims that can actually be labelled pay for the two searches
+      (`TERRITORY_MAX_LABELS`), so the cost is bounded regardless of how many factions exist.
+  - `labelRadius` must be the chamfer distance **at the chosen cell**, or the circle fallback
+    describes a different place than the name.
+  - `territory.test.ts` measures the margin by probing **outward from the ink box** until it
+      leaves the claim — doubling plus bisection, never a linear scan. It must **not** measure
+      "distance to the nearest outline vertex": a vertex on the far side of a thin arm sits close
+      to the box yet expanding the box that way never touches it, which reported a phantom 2.9px
+      margin against a 6.9px halo and failed the test while the geometry was correct.
+  - `territory.test.ts` states the requirement outright: the returned rectangle must match the
+    best one found by trying **every** cell the faction owns, so narrowing or short-circuiting the
+    search fails the test.
+- **The anchor is never the centroid.** A centroid lands in the concave notch of an L-shaped
+  claim, which is not its own land.
 - **The name is brightened, not the raw faction colour.** The territory fill is that same faction
   colour composited translucently over a dark backdrop, so the raw colour goes muddy on top of it.
   `brightenColor()` (also `mapShared.ts`) mixes toward white by `TERRITORY_LABEL_LIGHTEN`, which
@@ -1022,11 +1126,37 @@ instead of scattering.
   purchase**, with the *same* formula jing uses for income — `CHAR_BUY_TROOP_MAX × (1 + (tong −
   INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`. `tongPurchaseMultiplier` is asserted to return the
   same value as `jingIncomeMultiplier` for the same input, so the two cannot drift apart.
-  - **`tong` no longer reduces defection.** The `AMBITION_KING_TONG_REDUCE` multiply in
-    `loyaltyCheck.ts` is gone; leadership is not loyalty.
+  - **`tong` does not touch defection at all — this took two passes.** The original
+    `AMBITION_KING_TONG_REDUCE` multiply in `loyaltyCheck.ts` was removed first, but that was
+    **not the end of it**: `AMBITION_KING_TONG_DELTA` kept living in `defectionEvents.ts`, reading
+    the king's `tong` and writing a negative ledger delta, which `loyaltyCheck` then summed into
+    the defection value. Retiring the multiplier left a second path running, and the rule above
+    was documented as if it were gone. Both keys and the whole block are now deleted, and the
+    character's `select` in that phase no longer reads `factionId` or `ambition` — they existed
+    only for this. Leadership is not loyalty.
   - **`tong` no longer defends.** That is 體魄 / `ti` now (`BATTLE_DEF_TI_MULT`). Both use
     `× (1 + x/30)`, but they answer different questions: `wu` is "how hard they hit", `ti` is "how
     well they hold", and `tong` is "how many troops can they buy at once".
+- **`defectionBase` and `DefectionEvent.delta` are integers**, migration
+  `20261017000000_ambition_and_delta_to_int`. Both were `Float`.
+  - **`Rng.gaussianInt(mean, sigma, min, max)` is what draws them**, not `Math.round` at each call
+    site. A float written into an `Int` column is *accepted*, so the mistake could never surface
+    as an error — it just left columns whose type no longer matched what the code was sending.
+    `gaussianInt` is exactly `Math.round(gaussian(...))`, so the distribution shape is unchanged
+    and a given seed produces the same world it always did.
+  - **`speed` was already an `Int` column but was drawn with `gaussian()`** — an integer only
+    because the database coerced it. It used `gaussianInt` too, in the same pass.
+  - **The `::numeric` cast in the migration is not optional.** Postgres has no single-argument
+    `round(double precision)`, so a plain `ROUND("defectionBase")` raises *function round(double
+    precision) does not exist*. Round in numeric, then cast.
+  - **`DEFECTION_NO_PROMOTION_DELTA` went 0.5 → 1**, which is a balance change, not a formality:
+    against a −2 defection cooling the no-promotion drip was 1:4 and is now **1:2**. Do not
+    "fix" a pacing surprise without reading that first.
+  - Six config keys were deleted as dead: `AMBITION_DEFECT_BASE_MULT`, `AMBITION_DIFF_LOYALTY_MULT`,
+    `AMBITION_FRIEND_DEFECT_MULT`, `AMBITION_FRIEND_DEFECT_DELTA`, `AMBITION_LARGE_FACTION_MULT`,
+    `AMBITION_LARGE_FACTION_THRESHOLD`. All were referenced only by their own definition —
+    leftovers from the pre-ledger design, and the friend-defect check they served is still a
+    `TODO` in `defectionEvents.ts`.
 - **`ti` is 體魄 / Physique**, 5–30 uniform, the defence term in **leader-vs-leader** battle only.
   Migration `20261012000000_add_character_ti` adds the column and backfills **17**, not 0: a flat 0
   would make every pre-existing leader helpless in defence and lose nearly every fight they were
@@ -1054,6 +1184,150 @@ rules separately will drift from them; that is the whole reason the module exist
   itself rather than printing "40%". With no administrator nobody is paid, so a printed ratio would
   read as though he still got paid. This needed `kingId` on the faction payload, because the king's
   cut comes off the top first.
+
+### The building row quotes the price that is actually charged
+
+The level list and the summary card used to quote **two different prices for the same target**:
+the list printed the running total (`totalCostToReach(2)` = 300 = 100 + 200) while the card
+printed the single step (`upgradeCost(1)` = 200) — and `build.ts` charges 200. Two prices for one
+upgrade, one of which nobody was ever billed.
+
+- **The printed effect is the place's total output, not the building's own contribution.**
+  This was the *other* half of the same class of bug, and it was the one a reader reported: the
+  row printed `+5 金錢 → +10 金錢` at market level 1 while the expanded level table in the
+  **same component** printed `15 金錢 / 每回合`. Both were true and neither matched the other —
+  and taking `+5` at level 1 concludes level 0 earns nothing, when the place still earns
+  `PLACE_BASE_INCOME`. Market level 1 is **15**, barracks level 1 is **5**.
+  - `placeEffectLabel(kind, level)` is the **single** answer: `placeOutputAt` when there is a
+    total, otherwise the cumulative effect. Fortress keeps its percentage because defence is a
+    multiplier on the garrison, not an output.
+  - **Three call sites print this** — the row summary, the level dots' tooltips, and the
+    expanded table. All three go through `placeEffectLabel`. They did not always: the table was
+    already printing totals while the row and the dots printed `buildingTotal`, so a level had
+    two numbers depending on where you looked.
+  - `placeEffectLabel` is asserted against `placeIncome` / `placeRecruits` — the numbers the
+    simulation actually uses — so the popup cannot quote a figure the round does not produce.
+
+- **The price is the single step**: `costToReachLevel(level)` = `upgradeCost(level - 1)`, which is
+  exactly what `build.ts` charges. The old `totalCostToReach` is gone; a price list that does not
+  list prices is the bug.
+- **The card shows the next level too**: `+20% → +40%`. The next value is
+  `buildingTotal(kind, level + 1)` — the **cumulative** effect, not the per-level one, so a
+  level-1 fortress reads +20% → +40% and not +20% → +20%. `nextUpgradeGain()` already existed
+  for this and was called by nothing; it is now the null-gate (at max level there is no next).
+- **The price is labelled `place.upgradeCost`**, not `character.gold`. The market's effect is
+  *also* gold ("+5 金錢"), so a price labelled 金錢 next to an effect labelled 金錢 reads as two
+  quantities of the same thing.
+- The `level - 1` used to sit inline in the JSX, so "what the list prints" and "what gets
+  charged" were two independently written expressions with nothing binding them. That is how they
+  came to disagree; `costToReachLevel` is the single binding.
+
+### Friends, discontent, and the relations tab
+
+Friendship and discontent are both **mutual**, and both are shipped as flat `{aId, bId,
+sinceRound}` pairs — the same shape as `roads` — so the client can invert them.
+
+- **Discontent writes two rows per pair** (`a→b` and `b→a`), from **one roll**.
+  `DISCONTENT_FORM_CHANCE` therefore means "the chance this pair becomes *mutually* discontent".
+  Rolling twice would make it `1-(1-c)²` = 9.75%, which quietly changes a config value.
+- **The RNG roll position is load-bearing.** The roll happens *before* the existence check,
+  unconditionally, exactly as before. The order in which the RNG is drawn is the simulation's
+  determinism contract: move or drop one roll and every later draw shifts, so the same seed
+  grows a different world. Only the query behind the roll changed (a `Set` lookup instead of a
+  per-pair `findUnique`, because writing two rows per pair would have tripled that cost).
+- **A friend's defection raises the defection value**: `+DEFECTION_FRIEND_DELTA` (2) per friend
+  who defected inside `DEFECTION_FRIEND_ROUNDS` (10), written to the `DefectionEvent` ledger.
+  Positive, the opposite sign to the cooling.
+- **A friend who defected twice counts once.** The repeat is already billed by the cooling;
+  billing it a second time under a second rule is double-counting.
+- **The friendship must have existed at the moment of the betrayal** (`sinceRound <= the
+  defection's round`). Otherwise someone who defected first and became a friend later is still
+  billed for it — which is "made friends afterwards", not "left behind by a friend".
+- **It lands one round late, on purpose.** `defectionEvents` (phase 7) runs *before*
+  `loyaltyCheck` (phase 8), which is what actually decides who defects, so this round's
+  defections do not exist yet. A betrayal in round N bills friends from N+1 through N+10.
+- `relationsOf()` (`src/lib/relations.ts`, pure and tested) does the inversion. **It dedupes**,
+  and that is not optional: mutual discontent stores two rows per pair, so a naive scan lists the
+  same person twice.
+- The **relations tab** on the leader popup (`LeaderRelations` in `leader-detail.tsx`) lists
+  friends and the people they are unhappy with, each name clickable into that leader's popup.
+  `DetailModal` itself has no tab support, and must not grow any: it is also the faction-ranking
+  shell, where a "friends" tab makes no sense.
+- The data reaches the client through `/api/world/state` — **both** the live path and the
+  snapshot path. `snapshot.ts` embeds the two arrays, and `decompressSnapshot` defaults them to
+  `[]` for the blobs written before the fields existed.
+- A `FRIENDSHIP` event is written when a friendship forms. It is the only way the player can see
+  friendship at all, and friendship now has a consequence, so it matters. It needed
+  `EVENT_CATEGORY` and a glyph in `icons.tsx`, or it falls through to the default dot.
+
+### Co-located relations change combat ability — and nothing else
+
+A friend standing at the **same place** raises that leader's `wu` (attack) and `ti` (defence);
+someone they are unhappy with at the same place lowers them. `FRIEND_SAME_PLACE_DELTA` is `+1`
+and `DISCONTENT_SAME_PLACE_DELTA` is `-1`, so the **sign lives in the config**.
+
+- **Nothing is stored.** The modifier is re-derived from current positions on every
+  calculation, so "reverts when they are not at the same place" is automatic — there is no
+  state to expire, so it cannot forget to expire or get stuck.
+- **One pass over the relation rows.** For a row `(a, b)`: if the two are at the same place, it
+  counts for **both**; if they are apart, it counts for neither. That formulation *is* the
+  definition of "the other one is at my place", and it costs O(relations) once instead of a
+  scan per combatant.
+- **`placeOf` holds living characters only.** Relations outlive their owners and a dead
+  character's `placeId` stays in the database, so without this a dead friend would keep
+  affecting the place they used to stand in.
+- **`RELATION_SAME_PLACE_MAX` (3) caps each relation kind separately.** Uncapped, ten friends
+  standing together would be `+10 wu` while the whole ability band is 5–30 — one swing swamping
+  the entire scale.
+- **The floor is 1 and there is no ceiling.** Attack power is `troops × (1 + wu/30)`, so a wu
+  below zero would make attack power *negative* — that is not "very weak", it is wrong. But a
+  leader at 30 with four friends gets 34, and that bonus is the point of the rule.
+- **Only three arithmetic sites change**, all in `server/phases/battle.ts`: the two `atk` sites
+  use the effective `wu`, and the leader-vs-leader `def` site uses the effective `ti`. The
+  garrison defence has no commander, so it is untouched. `tong` is not involved at all — it
+  stopped being a defence stat when `ti` took over, and it now only sizes a troop purchase.
+- **The battle report quotes the *effective* `wu`.** It prints
+  `atk = troops × (1 + attackerWu/30) × roll`, so a report quoting the base value would not add
+  up to the `attackPower` printed beside it.
+- **The leader popup shows the effective value** (`21 (20+1)`) and the **leader table shows the
+  raw one**. The popup is the combat readout, and the rule is that a panel may not quote a
+  number the simulation did not use; the table is a sortable roster, and a location-dependent
+  number would make its sort order shift as people walk around.
+- The client recomputes it with the **same** pure function (`buildRelationCombatDeltas` in
+  `src/lib/relationCombat.ts`), the same way `defectionValue()` is shared. Re-deriving the rule
+  by hand in the component is what would produce a "the panel says 24 but it behaved like 20"
+  divergence that nothing would ever catch.
+
+### The leader popup's data tab is three groups, and modified values explain themselves
+
+The data tab is split into **基礎 / basics** (age, place, gold, troops), **戰力 / power** (the
+five abilities) and **忠誠 / loyalty** (loyalty tag, ambition, defection value, defection
+chance).
+
+- **The grouping is a reading, not a layout preference.** Mixed into one table, the reader has
+  to work out for themselves which numbers decide whether he wins a fight and which are merely
+  facts about him. In three groups the power group contains *only* the numbers that affect a
+  fight.
+- **A value that a rule moved carries a tooltip.** The parenthetical (`21 (20+1)`) is the
+  *result*; the tooltip is the *reason*. Only `wu` and `ti` can be moved today, and only when
+  relations are co-located, so only they get one — a tooltip on every row would be noise.
+- **The display face goes on the value, not on the `<dd>`.** The place row's value is a button,
+  and a button inherits its parent's font: putting `font-display` on the `<dd>` would silently
+  switch the place name to the display face, which is a typographic change nobody asked for.
+- **A group heading is 14px, and the blocks are divided by a hairline.** Both halves are
+  load-bearing. `GM_TITLE` is already 14px, and `text-xs!` was forcing the heading back down to
+  **exactly** the 12px of the row labels — so the group titles were typographically identical to
+  the data they introduce and did not read as headings at all. A `border-t border-white/10` on
+  every block but the first is what makes the three groups separable without heavy chrome.
+  **The spacing total stays at 12px on purpose**: the container's `space-y-1` (4px) plus the
+  rule's `pt-2` (8px) is precisely what `space-y-3` used to be. The headings carry **no**
+  bottom margin — there is a rule above them and every row below has its own `border-b` and
+  `py-1`, so the extra 4px only pushed the panel 1px past its box and produced a scrollbar on a
+  popup that otherwise fitted exactly. Do not "helpfully" add a margin here.
+- The 本回合影響 block is a **peer `<section>`**, not a separate panel. It is the evidence for
+  the 忠誠 group, so it takes the same rule and sits in the same stack.
+- `DetailModal` itself still has no tab support, and must not grow any — it is also the
+  faction-ranking shell. The 資料 / 關係 tabs live in the leader popup's body.
 
 ### The defection row names all three parties
 
@@ -1226,7 +1500,7 @@ absolutely positioned panel would scroll away with the rows.
 ### Radar Caveats
 
 - Each axis normalises against **its own** maximum (`CHAR_ABILITY_MAX`, `CHAR_SPEED_MAX`,
-  `CHAR_AMBITION_MAX`, `CHAR_MAX_AGE_MAX` — age tops out far above the ability stats), so
+  `CHAR_DEFECTION_BASE_MAX`, `CHAR_MAX_AGE_MAX` — age tops out far above the ability stats), so
   edge lengths are **not comparable across axes**. Read the shape, not the absolute numbers.
 - Axis labels reuse the existing `character.*` i18n keys; do not add radar-specific ones.
 
@@ -1399,6 +1673,30 @@ pnpm test:coverage
 # Seed initial game data
 npx tsx prisma/seed.ts
 ```
+
+### Bilingual Text Integrity (`src/lib/textIntegrity.test.ts`)
+
+This project's comments and docs are bilingual, and they are the only source that gets written
+through a shell. The failure mode that matters is **a character replaced by another equally valid
+character of the same script** — and *nothing* catches that automatically, because the byte stream
+stays perfectly well-formed.
+
+The real case: `顏色` ("colour", 顏 = U+984F) was written as `題色` (題 = U+984C, "question"). <!-- text-integrity:allow-example -->
+`題色` is not a Chinese word, while the English on the same line stayed correct <!-- text-integrity:allow-example -->
+(`/ Check 2 hops for color conflicts`). **The tell is "nonsense Chinese, correct English."**
+Scanning for `U+FFFD` catches none of it, because both characters are valid code points — which is
+exactly why a mojibake scan reporting "clean" is not evidence of anything.
+
+- **The test pins the known-bad sequences; it is deliberately not a general validator.** No general
+  validator catches this class of bug. What catches it is pinning a specific sequence someone
+  already got wrong. Add to `KNOWN_BAD` when you find a new one.
+- **The bad strings are written as code point escapes** (`'\u984c\u8272'`), never as literals. A
+  guard must not be able to fail alongside the thing it guards.
+- **The guard excludes itself.** Its own comment has to *name* the corrupted form as an example,
+  so it necessarily contains it. Without the exclusion it finds itself, fails every run, and gets
+  switched off — a guard that always fails is worse than no guard.
+- **Proven to fail:** drop a file containing the bad sequence into `src/` and the test names the
+  exact `file:line`. Verified, not assumed.
 
 ### Initial Game State
 
@@ -1681,8 +1979,6 @@ ti signal lives.
 
 *This guide is for AI agents working on the Autonomous World project. For human developers, see README.md.*
 
-<!-- BEGIN:nextjs-agent-rules -->
-
 ### 事件日誌、雷達提示與地點兵力 / Event log, the radar tooltip and a place's soldiers
 
 **事件日誌要「捲到底」捲好幾次，不是只捲一次。** `useLayoutEffect` 裡設一次
@@ -1719,7 +2015,6 @@ the size had no visible explanation. `leaderTroops` now rides on the node attrib
 **所有關閉路徑都走同一個 `closePanel()`。** 面板只是把地點詳情「搬進」分頁而已，選取狀態
 仍然住在 `popupStack`；任何一條關閉路徑若只關面板而不清 stack，地圖上的節點就會繼續維持選取
 樣式（高亮 + 強制顯示地名）——畫面上看起來就是「面板關了卻還選著」。
-
 **All close routes go through one `closePanel()`.** The panel only *hosts* the place detail as a
 tab; the selection itself lives in `popupStack`. A close path that closes the panel without
 emptying the stack leaves the map node highlighted (selected colour plus a forced label), so
@@ -1728,18 +2023,40 @@ the map reads as "the panel closed but it's still selected".
 **曾經有三條各自為政的關閉路徑，其中兩條忘了清選取。** 分頁再點一次、分頁自己的 ✕、
 詳情自己的 ✕。修好其中兩條之後，把它收斂成一個函式——否則第四條路徑還是會忘。第四條路徑
 現在沒有東西可以忘記。
-There were three separate close routes — re-clicking the active tab, the panel's own ✕, and the
-detail's own ✕ — and two of them forgot. Fixing those two was not enough on its own, so they are
-now one function; a fourth path has nothing to forget.
+There were three separate close routes — re-clicking the active tab, the panel's own ✕, and
+the detail's own ✕ — and two of them forgot. Fixing those two wasn't enough on its own, so
+they're now one function; a fourth path has nothing to forget.
 
 **建築列不能帶 `overflow-hidden`。** 提示畫在卡片**外面**（上一張卡的上方），而
 `overflow-hidden` 會把它整個裁掉——**裁切與堆疊順序是兩件事，z 再高也沒用**。正確的寫法是
 拿掉 `overflow-hidden`，改為在展開時把**卡片自己**提到 `z-30`，這樣後面的同層卡片才不會蓋掉
 提示。
 The building card must not carry `overflow-hidden`. The tooltip renders *outside* that card, over
-the card above it, and `overflow-hidden` clips it away entirely — clipping and stacking order are
-different things, and no z-index undoes a clip. The fix is to drop `overflow-hidden` and instead
-raise the **card itself** to `z-30` while expanded, so a later sibling cannot paint over it.
+the card above it, and `overflow-hidden` clips it away entirely — clipping and stacking order
+are different things, and no z-index undoes a clip. The fix is to drop `overflow-hidden` and
+instead raise the **card itself** to `z-30` while expanded, so a later sibling cannot paint
+over it.
+
+> **不要把任何東西放進 `nextjs-agent-rules` 區塊。** `next dev` 會**整段重寫**那對
+> BEGIN／END 標記之間的內容，放在裡面的手寫段落會在下次啟動時**被刪掉**——連放在裡面的警告
+> 都一樣。專案自己的說明段落請寫在這對標記**之外**。
+>
+> **更麻煩的是：連在文字裡「引用」那對標記都不行。** 生成器是按字面比對的，所以警告裡若寫出
+> 標記本身，它會把警告中間當成區塊的起點，然後從那裡一路重寫到 END 標記為止——於是警告自己
+> 被從中間劈開。要提到標記，請用文字描述，不要照抄。
+>
+> **Never put anything inside the `nextjs-agent-rules` block.** `next dev` rewrites the whole
+> region between the BEGIN and END markers, and any hand-written section placed inside it is
+> **deleted** on the next start — including a warning about this very trap.
+>
+> **Worse: do not even *quote* the markers in your prose.** The generator matches them
+> literally, so a warning that spells them out makes it treat the middle of that warning as the
+> start of the block and rewrite from there to the END marker — splitting the warning in half.
+> Describe the markers; do not reproduce them.
+>
+> Keep this project's own notes *outside* the markers. 專案自己的說明段落請寫在這對標記之外。
+
+<!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know
 
@@ -1752,29 +2069,29 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ### 野心不動了，變的是叛變值 / Ambition is fixed; the defection value moves
 
-**野心是固定初始值，事件不再改寫它。** `ambitionEvents` 階段與 `adminAssign` 原本
+**野心是固定初始值，事件不再改寫它。** `defectionEvents` 階段與 `adminAssign` 原本
 到處寫 `character.ambition`（「未升遷 +0.5」「取得職務 −1、十回合後回 +1」「被免職 +1」），
 現在全部退休：那個扣了再回的機制連同 `adminAmbitionRevertRound` 都沒有意義了。
-`ambitionEvents` 現在只寫**帳本**——每回合產生 `AmbitionEvent`，一行都不改 `Character`。
+`defectionEvents` 現在只寫**帳本**——每回合產生 `DefectionEvent`，一行都不改 `Character`。
 Ambition is a fixed initial stat and events no longer rewrite it. The whole
 deduct-then-revert machinery, `adminAmbitionRevertRound` included, is retired;
-`ambitionEvents` now only writes the ledger and touches no `Character` row.
+`defectionEvents` now only writes the ledger and touches no `Character` row.
 
 **帳本不是裝飾：忠誠檢查每回合把本回合的 delta 加總成「叛變值」。**
 
-    value  = ambition
+    value  = defectionBase
            + (忠誠標籤與君王不同 ? 2 : 0)
-           + 本回合此人的 AmbitionEvent **delta 總和**
+           + 本回合此人的 DefectionEvent **delta 總和**
 
     chance = (value − 17.5) / 17.5 × 0.05        // 17.5 = (5+30)/2
 
-只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `AmbitionEvent`，
+只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `DefectionEvent`，
 所以沒有 delta 可加。其餘全部來自資料庫的真實 delta。**曾經寫成「每筆 +1」是錯的**——
 每筆事件各有各的差值，`−2` 的一筆就該是 `−2`，而一筆 `+3` 就該是 `+3`。
 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生事件，沒有 delta 可讀。
 
 Only the loyalty tag is hardcoded: it is a *comparison* of `Loyalty` tags that never
-produces an `AmbitionEvent`, so there is no delta to add. Everything else is summed from
+produces a `DefectionEvent`, so there is no delta to add. Everything else is summed from
 real deltas. Writing it as "a flat +1 per event" was wrong — each event carries its own
 magnitude.
 
@@ -1787,23 +2104,23 @@ not a floor); a floor would need `(value / 17.5) × 0.05`.
 
 **建立新勢力與叛變都「不」重骰野心。** 原本有五處用
 `CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`（`factionCollapse.ts` 兩處、`loyaltyCheck.ts` 三處）
-把野心拉回 5–15，設定值已一併刪除。取而代之的是**帳本冷卻**：`ambitionEvents` 每回合為
-視窗內每一次叛變寫一筆 `AMBITION_DEFECTION_DELTA`（−2），持續
-`AMBITION_DEFECTION_ROUNDS`（20）回合。**每次叛變各自一筆，所以會疊加**：短時間叛變兩次是
+把野心拉回 5–15，設定值已一併刪除。取而代之的是**帳本冷卻**：`defectionEvents` 每回合為
+視窗內每一次叛變寫一筆 `DEFECTION_COOLING_DELTA`（−2），持續
+`DEFECTION_COOLING_ROUNDS`（20）回合。**每次叛變各自一筆，所以會疊加**：短時間叛變兩次是
 −4。這是刻意選的——連續叛變本身就是更強傾向的證據，封頂 −2 等於把訊息丟掉。
 `charId` 存在 `Event.data` JSON 裡（事件表比欄位老），所以冷卻是查出 `DEFECTION` 事件後在
 JS 裡分組計數，不是 Prisma groupBy。**只寫帳本、不寫可見 Event**：符合條件的人每回合上百，
-逐筆寫進日誌只會淹掉其他資訊；`AmbitionEvent.reason` 已記錄原因。
+逐筆寫進日誌只會淹掉其他資訊；`DefectionEvent.reason` 已記錄原因。
 
 Founding a faction and defecting both **no longer** re-roll ambition. All five re-roll sites
 (`factionCollapse.ts` ×2, `loyaltyCheck.ts` ×3) and the config keys are gone. What replaced it is
-**cooling in the ledger**: `ambitionEvents` writes one `AMBITION_DEFECTION_DELTA` (−2) row per
-defection inside a `AMBITION_DEFECTION_ROUNDS` (20) round window. **One row per defection, so
+**cooling in the ledger**: `defectionEvents` writes one `DEFECTION_COOLING_DELTA` (−2) row per
+defection inside a `DEFECTION_COOLING_ROUNDS` (20) round window. **One row per defection, so
 they stack** — two defections in quick succession is −4. That is deliberate: defecting twice in a
 row is itself the evidence, and capping at −2 would throw it away. `charId` lives inside the
 `Event.data` JSON (the events table predates the column), so the window is counted in JS rather
 than with a Prisma `groupBy`. **Ledger only, no visible Event**: a hundred-odd leaders match per
-round and per-row events would drown the log; `AmbitionEvent.reason` already carries the reason.
+round and per-row events would drown the log; `DefectionEvent.reason` already carries the reason.
 
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
 

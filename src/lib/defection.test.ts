@@ -7,25 +7,25 @@ import {
 import { CONFIG } from '@/lib/gameConfig';
 
 describe('defectionValue', () => {
-  it('is just the ambition when nothing else applies', () => {
-    expect(defectionValue({ ambition: 17, loyaltyMismatch: false, eventDeltaSum: 0 })).toBe(17);
+  it('is just the defectionBase when nothing else applies', () => {
+    expect(defectionValue({ defectionBase: 17, loyaltyMismatch: false, eventDeltaSum: 0 })).toBe(17);
   });
 
   it('adds 2 when the loyalty tag differs from the king', () => {
-    expect(defectionValue({ ambition: 17, loyaltyMismatch: true, eventDeltaSum: 0 })).toBe(19);
+    expect(defectionValue({ defectionBase: 17, loyaltyMismatch: true, eventDeltaSum: 0 })).toBe(19);
   });
 
   it('sums event deltas: the spec example 17 -> 19 -> 21', () => {
     // Two +1 events this round, on top of the loyalty penalty.
-    const v = defectionValue({ ambition: 17, loyaltyMismatch: true, eventDeltaSum: 2 });
+    const v = defectionValue({ defectionBase: 17, loyaltyMismatch: true, eventDeltaSum: 2 });
     expect(v).toBe(21);
   });
 
   it('uses each event delta, not a flat +1 per event', () => {
     // A single -2 must lower the value: the data says so.
-    expect(defectionValue({ ambition: 20, loyaltyMismatch: false, eventDeltaSum: -2 })).toBe(18);
+    expect(defectionValue({ defectionBase: 20, loyaltyMismatch: false, eventDeltaSum: -2 })).toBe(18);
     // And a +3 event is +3, not +1.
-    expect(defectionValue({ ambition: 20, loyaltyMismatch: false, eventDeltaSum: 3 })).toBe(23);
+    expect(defectionValue({ defectionBase: 20, loyaltyMismatch: false, eventDeltaSum: 3 })).toBe(23);
   });
 });
 
@@ -34,7 +34,7 @@ describe('defectionChance', () => {
     // The rule is (value - 17.5) / 17.5 * 0.05. At value 17.5 the excess is zero, so the
     // chance is zero. 0.05 is the *gradient* — what one midpoint's worth of excess buys —
     // not a minimum. This is worth stating because it means a leader at exactly average
-    // ambition can never defect, and so can everyone below it.
+    // defectionBase can never defect, and so can everyone below it.
     expect(defectionChance(DEFECTION_MIDPOINT)).toBe(0);
   });
 
@@ -67,7 +67,7 @@ describe('defectionChance', () => {
     expect(defectionChance(1000)).toBe(1);
   });
 
-  it('tracks the midpoint derived from the ambition range, not a hardcoded 17.5', () => {
+  it('tracks the midpoint derived from the defectionBase range, not a hardcoded 17.5', () => {
     expect(DEFECTION_MIDPOINT).toBe(17.5);
   });
 });

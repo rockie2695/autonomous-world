@@ -81,6 +81,7 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   CHARACTER_MOVED: 'character',
   DEATH: 'character',
   CHILD_BORN: 'character',
+  FRIENDSHIP: 'character',
   DEFECTION: 'character',
   BUILDING_UPGRADE: 'economy',
   INCOME: 'economy',
@@ -90,7 +91,6 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   KING_INHERITED: 'faction',
   ADMIN_ASSIGNED: 'admin',
   ADMIN_REMOVED: 'admin',
-  AMBITION_RECOVERED: 'admin',
   PLACE_CREATED: 'place',
 };
 
@@ -418,13 +418,6 @@ export function EventLog({
 
   function formatEvent(event: GameEvent): ReactNode {
     const p = event.data;
-    // 野心增減附註（-1 / +1），無資料時為空字串 /
-    // Ambition delta suffix (-1 / +1); empty when the event carries no delta
-    const ambitionNote = (delta: unknown): string =>
-      typeof delta === 'number' && delta !== 0
-        ? t('events.ambitionDelta').replace('{delta}', String(delta))
-        : '';
-    // 人名一律可點（事件只存 charName，沒有 charId，所以由上層用名字解析）；
     // 地名帶 placeId，可直接聚焦地圖。缺 id 時退回純文字——寧可不可點也不要壞掉 /
     // Leader names are always clickable (events only store charName, so the page
     // resolves by name); places carry placeId and focus the map directly. Without
@@ -477,6 +470,16 @@ export function EventLog({
         return fillTemplate(t('events.childBornDesc'), {
           character: leaderNode(p.charId, p.charName),
           father: leaderNode(p.fatherId, p.fatherName),
+        });
+      case 'FRIENDSHIP':
+        // 兩個名字都是可點的：友誼是雙向的，而 `charId` 只帶了其中一人（`character1`），
+        // 所以另一邊只能純文字——寧可不可點也不要開錯的人 /
+        // Both names are clickable: friendship is bidirectional, but `charId` only carries
+        // one of the two (`character1`), so the other side can only be plain text —
+        // inert beats opening the wrong leader
+        return fillTemplate(t('events.friendshipDesc'), {
+          character1: leaderNode(p.charId, p.charName),
+          character2: leaderNode(p.friendId, p.character2),
         });
       case 'KING_INHERITED':
         return fillTemplate(t('events.kingInheritedDesc'), {
@@ -551,36 +554,16 @@ export function EventLog({
           level: String(p.newLevel),
         });
       case 'ADMIN_ASSIGNED':
-        return (
-          <>
-            {fillTemplate(t('events.adminAssignedDesc'), {
-              character: leaderNode(p.charId, p.charName),
-              place: placeNode(p.placeId, p.placeName),
-            })}
-            {ambitionNote(p.ambitionDelta)}
-          </>
-        );
+        return fillTemplate(t('events.adminAssignedDesc'), {
+          character: leaderNode(p.charId, p.charName),
+          place: placeNode(p.placeId, p.placeName),
+        });
       case 'ADMIN_REMOVED':
-        return (
-          <>
-            {fillTemplate(t('events.adminRemovedDesc'), {
-              character: leaderNode(p.charId, p.charName),
-              place: placeNode(p.placeId, p.placeName),
-              newAdmin: text(p.newAdminName),
-            })}
-            {ambitionNote(p.ambitionDelta)}
-          </>
-        );
-      case 'AMBITION_RECOVERED':
-        return (
-          <>
-            {fillTemplate(t('events.ambitionRecoveredDesc'), {
-              character: leaderNode(p.charId, p.charName),
-              place: placeNode(p.placeId, p.placeName),
-            })}
-            {ambitionNote(p.ambitionDelta)}
-          </>
-        );
+        return fillTemplate(t('events.adminRemovedDesc'), {
+          character: leaderNode(p.charId, p.charName),
+          place: placeNode(p.placeId, p.placeName),
+          newAdmin: text(p.newAdminName),
+        });
       case 'PLACE_CAPTURED':
         return fillTemplate(t('events.placeCaptureDesc'), {
           character: leaderNode(p.charId, p.charName),
@@ -896,4 +879,3 @@ export function EventLog({
     </div>
   );
 }
-

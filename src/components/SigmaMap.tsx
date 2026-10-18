@@ -1,7 +1,7 @@
 // ============================================================================
 // Sigma 地圖元件 / Sigma Map component
 // ----------------------------------------------------------------------------
-// 純邏輯（題色換算、sprite 快取、資料型別、`MapCameraControls`）都在
+// 純邏輯（顏色換算、sprite 快取、資料型別、`MapCameraControls`）都在
 // `./mapShared`，這個檔案只留元件本身。
 //
 // The pure logic (colour conversion, the sprite cache, the data shapes and
@@ -707,7 +707,7 @@ export function SigmaMap({
     // longer means the same name.
     labelWidthCacheRef.current.clear();
 
-    // 建立勢力題色對照 / Create faction color map
+    // 建立勢力顏色對照 / Create faction color map
     const factionMap = new Map<string, Faction>();
     for (const faction of factions) {
       factionMap.set(faction.id, faction);
@@ -891,7 +891,7 @@ useEffect(() => {
   // **不要**在這裡把 `territoryLabelEls.current` 重設成 null。這個 effect 跑在
   // render/commit 之後，而 `<span>` 的 ref 回呼是由 React 在 commit 階段填的；重設
   // 會把剛綁好的元素清掉，於是 draw() 的 label 迴圈每次都 `continue`，名字就永遠
-  // 停在 opacity 0 且沒有 transform（實測：元素在 DOM 裡、文字與題色都正確，但
+  // 停在 opacity 0 且沒有 transform（實測：元素在 DOM 裡、文字與顏色都正確，但
   // 停在 left:0/top:0）。
   //
   // **Never** reset `territoryLabelEls.current` here. This effect runs after
@@ -906,7 +906,7 @@ useEffect(() => {
   // The array only ever grows; surplus slots are `undefined` and are skipped by the
   // same guard, so there is no length bookkeeping to do here.
 
-  // 每個勢力索引的 RGB；索引順序對應 field.factions。題色一律經過 hslToHex，
+  // 每個勢力索引的 RGB；索引順序對應 field.factions。顏色一律經過 hslToHex，
   // 因為勢力色在資料庫裡是 hsl，WebGL 與 canvas 都要 hex。
   // RGB per faction index, in field.factions order. Colours always go through
   // hslToHex because faction colours are stored as hsl and both WebGL and canvas
@@ -1057,8 +1057,8 @@ useEffect(() => {
     // 填色用平滑貼上：密度場本身就把邊界算成曲線，平滑只去掉最後的格子階梯 / 
     // The fill is blitted smoothed: the density field already computes the border as a
     // curve, so smoothing only removes the last of the cell stepping.
-    // 填色**關閉**平滑：整塊領地要是同一個題色，開平滑會把邊緣糊成漸層（就是那個
-    // 「霧」）。每個格子用同一個題色與同一個 alpha 填滿，所以區塊內部完全一致；邊緣的
+    // 填色**關閉**平滑：整塊領地要是同一個顏色，開平滑會把邊緣糊成漸層（就是那個
+    // 「霧」）。每個格子用同一個顏色與同一個 alpha 填滿，所以區塊內部完全一致；邊緣的
     // 階梯由上面那條向量邊界線蓋掉，所以關平滑不會變成馬賽克。
     //
     // The fill is drawn with smoothing **off**: an area must be one flat colour, and
@@ -1068,7 +1068,7 @@ useEffect(() => {
     // into a mosaic.
     ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
 
-    // 填色：直接把同一組平滑曲線填滿。這是**平塗**（單一題色、單一 alpha），所以不會
+    // 填色：直接把同一組平滑曲線填滿。這是**平塗**（單一顏色、單一 alpha），所以不會
     // 有霧；而它的邊緣就是那條曲線，與邊界完全重合。
     //
     // Fill: flood the same smoothed loops. It is **flat** (one colour, one alpha), so
@@ -1139,29 +1139,20 @@ useEffect(() => {
         continue;
       }
 
-      // ── 標籤放在**最大內切圓的圓心**，字級解成「整塊文字都還在圓裡」──
+      // ── 錨點與字級必須用**同一個座標系**──
       //
-      // 錨點與字級用**同一個**圓，名字就必定整塊落在自己的領地內：內切圓是唯一能保證
-      // 這件事的形狀（`labelRadius` 是該格到最近異主格的距離）。半對角線 ≤ 半徑的矩形
-      // 以圓心為中心就整塊在圓內，而圓是旋轉對稱的，所以**完全不需要夾位置**。
+      // `territoryRegions` 已經決定了名字會不會轉、以及矩形沿哪個座標系量，並且驗證過
+      // 整塊矩形都落在自己領地內。**這裡只負責照著畫**，不再從 `elongation` 重新判斷一次
+      // —— 那正是「名字跑到領地外面」的成因：一塊 elongation 1.42、主軸歪 57° 的領地，
+      // 這裡不轉（水平畫），但矩形是沿那條歪軸量的，於是四個角有三個落在自己地盤之外。
       //
-      // 這裡曾經用「主軸半長／半寬」當可用空間，再把圓心夾進領地的外框。兩處都會讓名字
-      // 跑到領地外面：半長來自共變異數，對彎曲或月牙形的領地可以遠大於實際領地（字因此
-      // 被放大到溢出）；而外框夾取對 L 形領地會正好把名字推進缺口——那個缺口根本不是自己
-      // 的地。內切圓沒有這兩個問題，而且省掉了整段夾取程式碼。
-      //
-      // The anchor and the size come from the **same** circle, which is what makes the whole
-      // text box land on its own claim: the inscribed circle is the only shape that guarantees
-      // it (`labelRadius` is that cell's distance to the nearest differently-owned cell). A
-      // box centred there whose half-diagonal does not exceed the radius is inside by
-      // construction, and a circle is rotation-invariant — so there is nothing to clamp.
-      //
-      // This used to size from the principal half-length/half-width and then clamp the centre
-      // into the region's bounding box. Both steps put names outside the claim: the half-length
-      // comes from the covariance and can far exceed the real claim for a bent or crescent one
-      // (so the text was scaled until it spilled), and clamping into the box pushes the name
-      // straight into the notch of an L-shaped claim — which is not even its own land. The
-      // circle has neither failure, and it deletes the whole clamp.
+      // The anchor and the size must come from the **same frame**. `territoryRegions` has
+      // already decided whether the name rotates and measured the rectangle in that same
+      // frame, verified to lie wholly inside this faction's claim. This block only **draws**
+      // that decision and never re-derives it from `elongation` — which is exactly what put
+      // names off their own land: an elongation-1.42 claim with a 57° axis was drawn
+      // horizontally while its rectangle was measured along that tilted axis, so three of
+      // four corners landed outside.
       const anchor = sigma.graphToViewport({ x: region.labelX, y: region.labelY });
 
       // 這個 transform 的平均縮放：把圖座標的半徑換成螢幕像素 /
@@ -1175,14 +1166,17 @@ useEffect(() => {
         widthAt100: el.offsetWidth || 1,
         heightAt100: el.offsetHeight || 1,
         radiusPx: region.labelRadius * scale,
-        // 沿主軸量出、並驗證整塊都在自己領地內的矩形：這才是「可以用到哪裡」/
-        // The rectangle measured along the principal axis and verified to lie wholly
-        // inside this faction's claim — that is the space the name may actually use
+        // 驗證過整塊都在自己領地內、而且沿**畫字用的那個座標系**量出來的矩形：
+        // 這才是「可以用到哪裡」/
+        // The rectangle measured in **the frame the name is drawn in**, verified to lie
+        // wholly inside this faction's claim — that is the space the name may actually use
         availAlongPx: region.halfAlong * scale,
         availAcrossPx: region.halfAcross * scale,
         fit: CONFIG.TERRITORY_LABEL_FIT,
         fontMax: CONFIG.TERRITORY_LABEL_FONT_MAX,
         fontMin: CONFIG.TERRITORY_LABEL_FONT_MIN,
+        // 光暈（em）算成名字大小的一部分 / the glow (in em) counts toward the name's size
+        glowEm: CONFIG.TERRITORY_LABEL_GLOW_EM,
       });
       // 小到看不清就整個不畫。**不要**把它放大到看得見——放大正是會讓它溢出領地的那件事，
       // 而領地裡一個四像素的髒點比沒有名字更糟。拉近時字級本來就會變大，名字會自己回來。
@@ -1196,17 +1190,27 @@ useEffect(() => {
       }
       el.style.fontSize = `${fontSize.toFixed(1)}px`;
 
-      // 領地夠細長才轉：接近圓形時主軸方向不穩定，轉了只會亂晃 /
-      // Only rotate when the claim is clearly elongated: a near-circular region has an
-      // unstable axis, and rotating would just jitter
-      const rotate = region.elongation > 1.5;
-      // 圖的 y 軸在螢幕上是翻轉的，所以螢幕角度取負；再正規化到 ±90°，字永遠不會顛倒 /
-      // Screen y is flipped relative to graph y, so negate; then normalise to ±90° so the
-      // text is never upside-down
-      let deg = rotate ? (-region.angle * 180) / Math.PI : 0;
-      while (deg > 90) deg -= 180;
-      while (deg < -90) deg += 180;
+      // 旋轉與角度都是 `territoryRegions` 算好的，這裡只讀不推 —— 見上面的說明 /
+      // The rotation and its angle were both decided in `territoryRegions`; read them, do
+      // not re-derive them — see the note above
+      const deg = region.labelAngleDeg;
 
+      // `origin-top-left` 是**必要**的，旋轉時尤其。`transform-origin` 預設 `50% 50%`，
+      // 於是整條變換鏈（含 `translate(-50%,-50%)`）都會繞元素自己的中心旋轉：名字被推開
+      // `(R(deg) − I)·(−hw, −hh)`。deg = 0 時剛好為 0，所以未旋轉的名字一直正常；轉起來
+      // 之後偏移和名字一樣大 —— −78° 的四字名在 62×14 的框上偏了 (17.7, 35.9)px，整個跑到
+      // 領地外面。`origin-top-left` 讓 `translate(-50%,-50%)` 之後的 (0,0) 落在左上角，
+      // 於是旋轉繞錨點發生，中心就精確落在錨點上。
+      //
+      // `origin-top-left` is **load-bearing**, and especially once the name rotates.
+      // `transform-origin` defaults to `50% 50%`, so the whole chain — including
+      // `translate(-50%,-50%)` — is rotated about the element's own centre, displacing the
+      // name by `(R(deg) − I)·(−hw, −hh)`. That is exactly 0 at deg = 0, which is why
+      // unrotated names were always fine; once rotated the offset is as large as the name
+      // itself — a −78° four-glyph name in a 62×14 box shifted by (17.7, 35.9)px and landed
+      // off its claim entirely. With `origin-top-left` the `translate(-50%,-50%)` puts the
+      // origin at the top-left corner, so the rotation happens about the anchor and the box
+      // lands on it exactly.
       el.style.opacity = '1';
       el.style.transform = `translate(${anchor.x}px, ${anchor.y}px) rotate(${deg}deg) translate(-50%, -50%)`;
     }
@@ -1753,7 +1757,7 @@ useEffect(() => {
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
 
-    // 動畫點題色 = 移動者陣營色（無陣營用青綠）/
+    // 動畫點顏色 = 移動者陣營色（無陣營用青綠）/
     // Move dot color = mover's faction color (teal fallback)
     const factionColors = new Map<string, string>();
     for (const faction of factions) {
@@ -1968,7 +1972,7 @@ useEffect(() => {
 
           const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y });
           // 軌道是勢力色 —— 放大到星系層之後，這是唯一還看得到陣營的地方。
-          // **不能**退回節點自己的題色：無主之地的節點色是刻意壓暗的灰，在近黑背景上
+          // **不能**退回節點自己的顏色：無主之地的節點色是刻意壓暗的灰，在近黑背景上
           // 幾乎等於沒畫，整個星系會塌成一個光點。所以無主之地改用一個站得住的冷色 /
           // Orbits carry the faction colour — the only place ownership survives at this zoom.
           // It must NOT fall back to the node's own colour: an unowned node's colour is a
@@ -2004,8 +2008,8 @@ useEffect(() => {
             vp.y,
             glowOuter
           );
-          // 外圈是**同一個題色的全透明版**（`#rrggbb00`），所以漸層一定收在太陽的色相上。
-          // 原本這裡寫死 `rgba(255, 154, 46, 0)` —— 那是其中一種太陽的題色，太陽一換色就
+          // 外圈是**同一個顏色的全透明版**（`#rrggbb00`），所以漸層一定收在太陽的色相上。
+          // 原本這裡寫死 `rgba(255, 154, 46, 0)` —— 那是其中一種太陽的顏色，太陽一換色就
           // 對不上了，而且那個 rgba 沒有任何設定值在管它。
           //
           // The outer stop is **the same hue at zero alpha** (`#rrggbb00`), so the gradient can
@@ -2032,7 +2036,7 @@ useEffect(() => {
             CONFIG.MAP_STAR_PLANET_MIN,
             CONFIG.MAP_STAR_PLANET_MAX
           );
-          // 每個星系洗一次牌，四顆行星各拿一個**不重複**的題色。`[... ]` 是必要的：
+          // 每個星系洗一次牌，四顆行星各拿一個**不重複**的顏色。`[... ]` 是必要的：
           // `CONFIG` 是 `as const`，`shuffle` 會就地改寫，不複製會動到設定本身。
           //
           // One shuffle per system, so the planets take distinct colours. The `[... ]` matters:
@@ -2063,7 +2067,7 @@ useEffect(() => {
               CONFIG.MAP_STAR_PLANET_MIN_PX,
               CONFIG.MAP_STAR_PLANET_MAX_PX
             ) * starScale;
-            // 同一個星系裡的行星**題色不重複**。原本每顆各自 `pick`，所以四顆行星有時會抽到同一個題色，
+            // 同一個星系裡的行星**顏色不重複**。原本每顆各自 `pick`，所以四顆行星有時會抽到同一個顏色，
             // 看起來就像同一顆行星畫了兩次 —— 而「這是一個有四顆行星的星系」正是這一層要說的
             // 事情。做法是**先洗牌再取前 N 個**，不是逐顆重抽：重抽會讓 rng 的狀態多走一步，
             // 而 rng 是從地點 id 種出來的，多走一步就代表這個星系整組抽樣都換了。
@@ -2141,7 +2145,7 @@ useEffect(() => {
                 0,
                 Math.PI * 2
               );
-              // 每顆月球各抽一個題色。單一題色的月球在四顆並排時會看起來像四個一樣的點。
+              // 每顆月球各抽一個顏色。單一顏色的月球在四顆並排時會看起來像四個一樣的點。
               //
               // Each moon draws its own colour. With one colour, four moons in a row read as
               // four identical dots.
@@ -2354,13 +2358,18 @@ useEffect(() => {
               ref={(el) => {
                 territoryLabelEls.current[index] = el;
               }}
-              className="absolute left-0 top-0 whitespace-nowrap font-display leading-none tracking-widest opacity-0"
+              className="absolute left-0 top-0 origin-top-left whitespace-nowrap font-display leading-none tracking-widest opacity-0"
               style={{
                 color: label.color,
-                // 勢力色是執行期資料；文字陰影讓名字在深色與淺色領地上都讀得到 /
-                // Faction colour is runtime data. The shadow keeps the name legible
-                // on both dark and light territory
-                textShadow: `0 0 6px ${CONFIG.MAP_SHADOW_FALLBACK}, 0 1px 2px ${CONFIG.MAP_SHADOW_FALLBACK}`,
+                // 勢力色是執行期資料；文字陰影讓名字在深色與淺色領地上都讀得到。
+                // 半徑是設定值，不是字面量 —— 求解字級時也要把它算成名字的大小，
+                // 否則光暈會自己溢出領地（見 TERRITORY_LABEL_FIT）。
+                //
+                // Faction colour is runtime data. The shadow keeps the name legible on both
+                // dark and light territory. The radius is config, not a literal: the font
+                // solve counts it as part of the name's size, otherwise the glow spills off
+                // the claim on its own (see TERRITORY_LABEL_FIT).
+                textShadow: `0 0 ${CONFIG.TERRITORY_LABEL_GLOW_EM}em ${CONFIG.MAP_SHADOW_FALLBACK}, 0 1px 2px ${CONFIG.MAP_SHADOW_FALLBACK}`,
               }}
             >
               {label.name}

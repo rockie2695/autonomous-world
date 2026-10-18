@@ -24,8 +24,8 @@ describe('Game Configuration', () => {
       expect(CONFIG).toHaveProperty('CHAR_ABILITY_MAX');
       expect(CONFIG).toHaveProperty('CHAR_SPEED_MIN');
       expect(CONFIG).toHaveProperty('CHAR_SPEED_MAX');
-      expect(CONFIG).toHaveProperty('CHAR_AMBITION_MIN');
-      expect(CONFIG).toHaveProperty('CHAR_AMBITION_MAX');
+      expect(CONFIG).toHaveProperty('CHAR_DEFECTION_BASE_MIN');
+      expect(CONFIG).toHaveProperty('CHAR_DEFECTION_BASE_MAX');
 
       // 經濟 / Economy
       expect(CONFIG).toHaveProperty('PLACE_BASE_INCOME');
@@ -55,7 +55,7 @@ describe('Game Configuration', () => {
       // 屬性範圍 / Ability ranges
       expect(CONFIG.CHAR_ABILITY_MIN).toBeLessThan(CONFIG.CHAR_ABILITY_MAX);
       expect(CONFIG.CHAR_SPEED_MIN).toBeLessThan(CONFIG.CHAR_SPEED_MAX);
-      expect(CONFIG.CHAR_AMBITION_MIN).toBeLessThan(CONFIG.CHAR_AMBITION_MAX);
+      expect(CONFIG.CHAR_DEFECTION_BASE_MIN).toBeLessThan(CONFIG.CHAR_DEFECTION_BASE_MAX);
 
       // 年齡範圍 / Age ranges
       expect(CONFIG.CHAR_MAX_AGE_MIN).toBeLessThan(CONFIG.CHAR_MAX_AGE_MAX);

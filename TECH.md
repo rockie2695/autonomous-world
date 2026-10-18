@@ -456,7 +456,7 @@ model Character {
   jing        Int      @default(0)  // 經濟 / Economy
   speed       Int      @default(0)  // 速度 / Speed
   loyalty     String   @default("SELF")
-  ambition    Int      @default(0)
+  defectionBase Int      // the fixed base of the defection value (5-30)
   age         Int
   placeId     String?
   troops      Int      @default(0)
@@ -1293,8 +1293,8 @@ export const CONFIG = {
   CHAR_ABILITY_MAX: 30,
   CHAR_SPEED_MEAN: 17,           // 速度常態分佈平均值
   CHAR_SPEED_SIGMA: 5,           // 速度常態分佈標準差
-  CHAR_AMBITION_MEAN: 17,        // 野心常態分佈平均值
-  CHAR_AMBITION_SIGMA: 5,        // 野心常態分佈標準差
+  CHAR_DEFECTION_BASE_MEAN: 17,        // 野心常態分佈平均值
+  CHAR_DEFECTION_BASE_SIGMA: 5,        // 野心常態分佈標準差
 
   // 經濟 / Economy
   PLACE_BASE_INCOME: 10,
@@ -1341,11 +1341,24 @@ All constants live in `src/lib/gameConfig.ts` (single source of truth). Every fo
 
 | 屬性 Stat | 影響 Effect |
 |---|---|
-| `wu` 武力 | 戰鬥攻擊力 Battle attack power（`× (1 + wu/30)`） |
-| `tong` 統領 | 戰鬥防禦力 Battle defense（`× (1 + tong/30)`，僅將領對戰）；降低部下叛變機率（`× (1 − 0.01 × king.tong)`） |
-| `jing` 經濟 | 領導者實得的收入份額（`× (1 + (jing − INCOME_JING_MIDPOINT) / CHAR_ABILITY_MAX)`）；並參與總督比較（`wu+tong+jing`） |
+| `wu` 武力 | 戰鬥**攻擊力** Battle attack power（`× (1 + wu/30)`）；並參與總督比較（`wu+tong+jing`）；同地點關係可調整它 |
+| `ti` 體魄 | 戰鬥**防禦力** Battle defence power（`× (1 + ti/30)`，乘在守軍兵力上）；同地點關係可調整它 |
+| `tong` 統領 | **購兵量上限** how many troops one purchase can buy（`× (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`）；並參與總督比較（`wu+tong+jing`）。**不影響防禦，也不影響叛變** |
+| `jing` 經濟 | 領導者實得的**收入份額** the leader's cut of a place's income（`× (1 + (jing − INCOME_JING_MIDPOINT) / CHAR_ABILITY_MAX)`）；並參與總督比較（`wu+tong+jing`） |
 | `speed` 速度 | 移動順序（快者先動）；逃跑機率（每點速度差 ±2%） |
-| `ambition` 野心 | 叛變機率基礎（`base = ambition × 0.5`） |
+| `defectionBase` 野心 | 叛變值的**固定基底** the fixed base of the defection value（5–30，**永不改寫**；會變的是帳本裡的 delta） |
+| `age` 年齡 | 老化與死亡；生育的年齡窗 |
+
+> **`tong` 與 `ti` 沒有任何關係**，它們是兩個各自獨立的屬性：`ti` 決定守軍擋不擋得住，
+> `tong` 決定一次買得到幾個兵。過去 `tong` 確實是防禦屬性，那時防禦公式寫的是
+> `(1 + tong/30)`；`ti` 上線後防禦改用 `ti`，而 `tong` 被改派去管購兵量。所以**沒有**
+> 「`(1 + tong/30)`」這種公式——那個片段是舊公式的殘留。
+>
+> **`tong` and `ti` are unrelated**: two independent abilities. `ti` decides whether a garrison
+> holds; `tong` decides how many troops a single purchase can buy. `tong` *was* the defence
+> stat, back when the formula read `(1 + tong/30)`; when `ti` arrived, defence moved to `ti`
+> and `tong` was reassigned to purchase size. So there is **no** `(1 + tong/30)` formula
+> anywhere — that fragment is a leftover of the old one.
 
 > ⚠️ `CHAR_TROOP_CAP_BASE: 100` / `CHAR_TROOP_CAP_PER_TONG: 20` 已定義但**未被任何遊戲邏輯使用**（僅 `gameConfig.ts` 與測試引用）— 兵力目前無上限。
 
@@ -1373,7 +1386,7 @@ All constants live in `src/lib/gameConfig.ts` (single source of truth). Every fo
   1. 出生地無行政官（或行政官已死亡）→ 直接指派：`place.administratorId = 新角色`、`lastPromotedRound = round`、寫入 `ADMIN_ASSIGNED` 事件
   2. 現任行政官是存活的**國王** → 國王保留席位，不比較
   3. 否則比較**總能力 `wu + tong + jing`**（新將領 vs 現任），僅**嚴格較大**才取代（平手不動）
-  4. 取代時：被免職者野心 **＋`AMBITION_ADMIN_REPLACED_DELTA`（1）**，以 `CHAR_AMBITION_MAX` 封頂；寫入 `ADMIN_REMOVED` 事件（含 `newAdminName`/`oldTotal`/`newTotal`）**及** `AmbitionEvent`（`delta` = 實際套用量、`reason` 含地點與接任者）
+  4. 取代時：被免職者野心 **＋`DEFECTION_ADMIN_REPLACED_DELTA`（1）**，以 `CHAR_DEFECTION_BASE_MAX` 封頂；寫入 `ADMIN_REMOVED` 事件（含 `newAdminName`/`oldTotal`/`newTotal`）**及** `DefectionEvent`（`delta` = 實際套用量、`reason` 含地點與接任者）
 - `Place.administratorId` 為全域 `@unique` — 一個角色同時只能管理一個地點
 
 #### 經濟 / Economy（`server/phases/economy.ts`）
@@ -1447,11 +1460,38 @@ garrison += PLACE_BASE_RECRUIT(2) + barracks × PLACE_BARRACKS_RECRUIT_PER_LV(3)
 - `src/lib/placeEffects.test.ts` 鎖的是**規則**（等比費用、線性累加、等級 0 的防禦倍率必須
   恰好是 1），而不是某個常數。
 
+#### 人際關係 / Relationships（`server/phases/relationships.ts`）
+
+每回合把**同地點或相隔一條道路**的存活角色配對，每對各擲一次骰：
+- `FRIEND_FORM_CHANCE(5%)` → 友誼（**雙向**，一列，正規化為 `aId < bId`）
+- `DISCONTENT_FORM_CHANCE(5%)` → 不滿（**互相的**，**兩列**：`a→b` 與 `b→a`）
+
+- **不滿是「一次擲骰、寫兩列」**，所以 `DISCONTENT_FORM_CHANCE` 仍然是「這一對互相不滿的機率」。
+  分別擲兩次會變成 `1-(1-c)²` = 9.75%，等於在無聲中改掉一個設定值。
+- **擲骰的位置不能動。** 擲骰在「查有沒有」**之前**、無條件進行，與原本完全相同。RNG 的取用
+  順序是這套模擬的決定性契約：少擲一次或晚擲一次，之後每一次取樣都會錯位，同一個種子會長出
+  另一個世界。改的只有擲骰**後面**的查詢（`Set` 查詢取代逐對 `findUnique`，因為每對要寫兩列，
+  逐對查詢會變成三倍）。
+- `FRIENDSHIP` 事件在友誼成立時寫入：**友誼現在有後果了**（朋友叛逃會提高叛變值），而這是
+  玩家唯一能看見友誼的管道。它需要在 `EventLog` 的 `EVENT_CATEGORY` 與 `icons.tsx` 註冊，
+  否則會靜默落到預設點。
+- 兩種關係都以**扁平的一對**送到客戶端（`{aId, bId, sinceRound}`，與 `roads` 同形），
+  由 `src/lib/relations.ts` 的 `relationsOf()` 反轉。**去重不是選配**：不滿的同一對有兩列，
+  不去重就會把同一個人在名單裡印兩次。
+- 將領彈窗有「關係」分頁列出朋友與不滿的人（`LeaderRelations`，在 `leader-detail.tsx`），
+  名字可點進對方的彈窗。`DetailModal` 本身**不能**加分頁——它同時是勢力排行的外殼。
+
 #### 建築 / Buildings（`server/phases/build.ts`）
 
 - 每地點每回合隨機挑一種建築升級；僅有總督的地點可升級；總督付錢
 - **費用：`cost = BUILDING_UPGRADE_COST_BASE(100) × 2^currentLevel`**（指數成長：0→1 級 100、1→2 級 200、2→3 級 400、3→4 級 800、4→5 級 1600）
 - 最高等級 5
+- **UI 印的價格必須是「這一步」的價錢**，也就是 `costToReachLevel(level) = upgradeCost(level - 1)`，
+  與 `build.ts` 收的完全相同。原本等級清單印的是「從 0 累積到這裡」的總額（`totalCostToReach(2)`
+  = 300），而卡片印 200 —— 同一個目標兩個價錢，其中一個從未被收過。`totalCostToReach` 已刪除。
+- **卡片同時印下一級的效果**：`+20% → +40%`（**累積**值 `buildingTotal(kind, level + 1)`，
+  不是每級值）。價格標籤用 `place.upgradeCost`（「升級費用」）而不是「金錢」，否則市場的
+  效果（+5 金錢）與價格（金錢）同名，讀起來像同一件事的兩個數量。
 
 #### 戰鬥 / Battle（`server/phases/battle.ts`）
 
@@ -1459,18 +1499,31 @@ garrison += PLACE_BASE_RECRUIT(2) + barracks × PLACE_BARRACKS_RECRUIT_PER_LV(3)
 
 **A. 攻堅駐軍（無主地點或無將領駐軍）：**
 ```
-atk = attacker.troops × (1 + attacker.wu × 1/30) × atkRand
-def = place.garrison  × (1 + fortress × 0.2)   × defRand   // 駐軍無統帥，tong 不計
+atk = attacker.troops × (1 + effectiveWu × 1/30) × atkRand
+def = place.garrison  × (1 + fortress × 0.2)   × defRand   // 駐軍無統帥，ti 不計
 ```
 - `atk > def` → 駐軍全滅、攻擊者 `troops = floor(troops × 0.9)`（疲勞）後佔領
 - 否則攻擊者逃跑：`escapeChance = clamp(0.5 + attacker.speed × 0.02, 0.1, 0.9)`（駐軍速度視為 0）
 
 **B. 將領對戰（攻擊者 vs 地點守將）：**
 ```
-atk = attacker.troops × (1 + attacker.wu × 1/30) × atkRand
-def = defender.troops × (1 + defender.tong × 1/30) × (1 + fortress × 0.2) × defRand
+atk   = attacker.troops  × (1 + effectiveWu   × 1/30) × atkRand
+def   = defender.troops  × (1 + effectiveTi   × 1/30) × (1 + fortress × 0.2) × defRand
 ```
 - 攻擊者勝：守將逃跑（公式同下）；攻擊者 `troops = floor(troops × 0.9)`
+
+**C. 同地點關係對戰鬥力的影響 / Co-located relations and combat ability**
+- 朋友在**同一個地點** → 該將領的 `wu` 與 `ti` **+1**（`FRIEND_SAME_PLACE_DELTA`）
+- 不滿的人在**同一個地點** → 該將領的 `wu` 與 `ti` **−1**（`DISCONTENT_SAME_PLACE_DELTA`）
+- `effectiveWu = max(1, wu + delta)`、`effectiveTi = max(1, ti + delta)`
+- **不寫入資料庫**：`Character` 的欄位完全不動，delta 每次都從目前位置重新推導，
+  所以「離開就回復」是自動的，沒有任何狀態需要撤銷
+- **每種關係各自最多計 `RELATION_SAME_PLACE_MAX`(3) 位**：沒有上限的話十位同地點朋友
+  就是 +10 武力，而整個能力區間只有 5–30
+- 計算在 `src/lib/relationCombat.ts`（純函式），**伺服器與客戶端共用**同一個：
+  `battle.ts` 用它算交戰，將領彈窗用它顯示面板上的數字，兩邊不可能對不上
+- 戰報印的是**有效** `wu`，因為它同時印出
+  `atk = troops × (1 + attackerWu/30) × roll`——印基礎值會跟旁邊的 `attackPower` 對不上
 - 守將勝：攻擊者逃跑，`speedDiff = attacker.speed − defender.speed`
 
 **逃跑 / Escape（兩者共用）：**
@@ -1482,36 +1535,49 @@ escapeChance = clamp(SPEED_ESCAPE_BASE(0.5) + speedDiff × 0.02, 0.1, 0.9)
 
 #### 叛變 / Defection（`server/phases/loyaltyCheck.ts`）
 
-國王與叛變者不會被檢查（`isKing: false` 過濾）。基礎機率：
+國王與叛變者不會被檢查（`isKing: false` 過濾）。叛變值是**加法**的，不是乘法的：
 ```
-base = ambition × AMBITION_DEFECT_BASE_MULT(0.5)
+value  = defectionBase
+       + (忠誠標籤與君王不同 ? DEFECTION_VALUE_LOYALTY_PENALTY(2) : 0)
+       + 本回合此人的 DefectionEvent **delta 總和**
+
+chance = (value − DEFECTION_MIDPOINT(17.5)) / 17.5 × DEFECTION_BASE_RATE(0.05)
 ```
-依序乘算修正，最後 `rng.chance(base / 100)` 擲骰：
+- **沒有乘數。** 舊版的乘算鏈（`defectionBase × 0.5`、忠誠 `× 1.2`、朋友叛逃 `× 1.5`、
+  大勢力 `× 0.8`、不滿 `× 1.3`）**已經移除**。乘數會疊乘，沒有任何單一因子能被單獨讀出
+  來，而且「朋友叛逃 × 1.5」乘的是**機率**而不是**風險**。朋友叛逃現在是**帳本裡的一筆
+  `+DEFECTION_FRIEND_DELTA`**，見下。
+- **No multipliers.** The old multiplicative chain (`defectionBase × 0.5`, loyalty `× 1.2`,
+  friend-defection `× 1.5`, large faction `× 0.8`, discontent `× 1.3`) is **retired**.
+  Multipliers compound, so no single factor could be read off on its own, and "friend
+  defected × 1.5" doubled the *probability* rather than the *risk*. A friend's defection is
+  now a ledger row of `+DEFECTION_FRIEND_DELTA` — see below.
+- 17.5 = (5 + 30) / 2，是 `defectionBase` 的中點。**低於中點時機率為 0**（不是負數）。
+- 忠誠標籤是**唯一**寫死的加項：它是標籤比較，不會產生 `DefectionEvent`，所以沒有
+  delta 可加。其餘全部來自資料庫裡的真實 delta。
 
-| 條件 | 乘數 |
-|---|---|
-| `loyalty ≠ king.loyalty` | `× 1.2` |
-| 國王統率加成（無條件） | `× (1 − 0.01 × king.tong)`（tong 30 → ×0.7） |
-| 朋友於 5 回合內叛逃 | `× 1.5` ⚠️ 實作備註：查詢的事件型別為 `'DEFECT'`，但事件實際寫入為 `'DEFECTION'` → **此乘數目前永遠不會觸發** |
-| 同勢力存活角色 > 500 | `× 0.8`（注意：比對的是**角色數**，非地點數） |
-| 有 Discontent（不滿） | `× 1.3` |
-
-#### 野心變化 / Ambition Changes（`server/phases/ambitionEvents.ts`）
+#### 野心變化 / Defection-value changes（`server/phases/defectionEvents.ts`）
 
 每回合對每個角色計算 `delta`，最終 `clamp(5, 30)`：
-- `+ AMBITION_NO_PROMOTION_DELTA(0.5)`：若 ≥ 20 回合未升遷（`roundsSincePromotion ≥ 20`，從未升遷者以 `round` 計算）
-- `− 0.5 × (king.tong / 30)`：國王統率越高，部下野心降越多（tong 30 → −0.5）
-- 朋友叛逃 `+2`：**未實作**（程式碼標註 `TODO`，該區段被跳過）
-- **行政官暫時減免到期**：`adminAmbitionRevertRound <= round` 且仍存活、仍在職者 `+ AMBITION_ADMIN_ASSIGNED_DELTA` 回復，並記 `AMBITION_RECOVERED` 事件；已被免職（欄位已清空）或已死亡者只清欄位、不回復
+- `+ DEFECTION_NO_PROMOTION_DELTA(1)`：若 ≥ 20 回合未升遷（`roundsSincePromotion ≥ 20`，從未升遷者以 `round` 計算）
+- 國王統率降低叛變值的規則**已移除**（統領現在只影響購兵量）
+- **朋友叛逃 `+ DEFECTION_FRIEND_DELTA(2)`**（每個叛逃的朋友各 +2，影響 `DEFECTION_FRIEND_ROUNDS(10)` 回合）
+  - 與冷卻**相反號**：朋友走了，自己也更想走
+  - **每一位朋友只算一次**：同一人叛逃兩次，重複的那次已由冷卻記過帳
+  - **友誼必須在背叛當時就存在**（`Friendship.sinceRound ≤ 叛逃回合`），否則事後才成為朋友
+    的人仍然會被記上一筆
+  - **晚一回合生效**：本階段（7）在 `loyaltyCheck`（8）之前跑，所以本回合的叛逃此刻還不存在。
+    第 N 回合的背叛，是從第 N+1 回合起影響到 N+10
+  - 查詢只做一次：冷卻視窗（20 回合）較長，由它決定查詢範圍；朋友視窗（10 回合）在同一趟裡過濾
+- 叛變冷卻 `− DEFECTION_COOLING_DELTA(−2)`：視窗內每有一次叛變就各寫一筆，所以會疊加
 
 #### 行政官任命 / Administrator Assignment（`server/adminAssign.ts`）
 
 四條任命路徑共用 `grantAdmin` / `revokeAdmin` / `isAdminChangeCoolingDown`：
 
-- **任命 `grantAdmin`**：清除該角色在其他地點的職務（`administratorId` 全域 `@unique`）→ 寫入 `administratorId`、`Place.adminChangedRound = round`、`lastPromotedRound` → 野心**暫時** `− AMBITION_ADMIN_ASSIGNED_DELTA(1)`（`clamp` 到 `CHAR_AMBITION_MIN`）並記 `AmbitionEvent`；`AMBITION_ADMIN_ASSIGNED_DURATION_ROUNDS(10) 回合後於階段 7 自動 `+1` 回復
-  - 已有未到期減免（連任／換地點）→ **只順延到期回合**，不重複扣減
-  - 已處於最低值（實際扣減為 0）→ 不排定回復，避免到期憑空 `+1`
-- **免職 `revokeAdmin`**：野心 `+ AMBITION_ADMIN_REPLACED_DELTA(1)`（`clamp` 到 `CHAR_AMBITION_MAX`）並**清掉** `adminAmbitionRevertRound`（免職已回補，回復會重複計算）
+- **任命 `grantAdmin`**：清除該角色在其他地點的職務（`administratorId` 全域 `@unique`）→ 寫入 `administratorId`、`Place.adminChangedRound = round`、`lastPromotedRound` → 寫入一筆 `− DEFECTION_ADMIN_ASSIGNED_DELTA(1)` 的 `DefectionEvent`。**沒有自動回復**——這是永久的帳本項目。
+- **免職 `revokeAdmin`**：寫入一筆 `+ DEFECTION_ADMIN_REPLACED_DELTA(1)` 的 `DefectionEvent`。
+- **「暫時減免＋到期回復」整組機制已經移除**：欄位 `adminAmbitionRevertRound`（已刪）、`AMBITION_RECOVERED` 事件型態（從未被任何程式寫出）、以及三個消費它的 UI 分支，都已一併刪除。這段文字以前把它描述成運作中的行為，那是錯的。
 - **路徑**：階段 2 `spawnCharacters`（受冷卻限制）· 階段 12 `assignAdmins`（受冷卻限制）· 階段 10 `battle.ts` 奪取（**不受**冷卻限制）· `POST /api/admin/assign-admin` 手動指派（**不受**冷卻限制，且會先免職舊任者）
 - **冷卻 `ADMIN_CHANGE_COOLDOWN_ROUNDS(10)`**：任何行政官異動都寫入 `Place.adminChangedRound`；`round - adminChangedRound < 10` 時**僅 AI 路徑**跳過該地點（`assignAdmins` 以 `where` 過濾，`spawnCharacters` 以 `isAdminChangeCoolingDown()` 判斷）
 
@@ -1680,7 +1746,7 @@ return { ..., crown: isKing, wuTier: tierFor(character.wu) };
 舊規則只有 `high` 給配件，結果約八成的將領身上完全讀不出能力差異。`mid` 是最常見的一檔，
 所以「大多數將領有額帶、素肩章、銅錢」本身就是資訊；`low` 則刻意畫成破舊的樣子，讓強弱一眼可辨。
 
-`TIER_MATERIAL` 把三段對應到**三種材質**（金 / 鋼 / 麻），三項能力共用同一組題色，所以階級
+`TIER_MATERIAL` 把三段對應到**三種材質**（金 / 鋼 / 麻），三項能力共用同一組顏色，所以階級
 是橫向可比的。銅錢一定要挖方孔——圓外形人人會畫，方孔才是辨識關鍵。
 
 四條渲染規則是實際渲染 27 種組合後才發現的 / four rendering rules, each learned from
@@ -1690,7 +1756,7 @@ rendering all 27 combinations:
    算盤珠／銅錢／補丁全擠在胸口與腰間，於是互相干擾而看不清楚。
 2. **同一個物件逐級劣化**：肩章是金寬板 → 素鋼板 → 細麻補丁；經濟是滿算盤 → 一枚銅錢 → 空袋。
    漸層看得見「順序」，三個無關物件則看不出來。肩章劣化時**還會變小**，因此大小也帶著階級。
-3. **弱的線索要比衣袍亮，且絕不用衣袍的題色**：深色腰帶疊在深色衣袍上等於看不見，與衣袍同色的
+3. **弱的線索要比衣袍亮，且絕不用衣袍的顏色**：深色腰帶疊在深色衣袍上等於看不見，與衣袍同色的
    縫線等於沒有縫線——兩者都會讓 `low` 段悄悄地退回「沒有訊號」。`low` 肩帶刻意是一條素帶，
    因為毛邊會模仿 `high` 肩章的流蘇。頭盔也往上挪到眉毛之上，原本的高度讓盔緣直接橫切過雙眼。
 4. **王冠壓掉頭飾**：君王不戴 `high` 頭盔、也不戴 `mid` 額帶，但保留 `low` 疤痕——疤痕不是
@@ -1735,7 +1801,7 @@ rendering all 27 combinations:
 - **tong（統領）現在只影響購兵量**：
   `上限 = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`，
   與 `jingIncomeMultiplier` 完全同形（測試直接斷言兩者對同一輸入給出同一答案）。
-- **tong 不再降低叛變機率**（`AMBITION_KING_TONG_REDUCE` 的用法已移除），也**不再負責防禦**——
+- **tong 完全不影響叛變**（`AMBITION_KING_TONG_REDUCE` 與 `AMBITION_KING_TONG_DELTA` 皆已移除，後者曾透過帳本持續影響叛變值）
   防禦改由新的**體魄 (ti)** 負責。
 
 ### `INCOME` 事件 / The `INCOME` event
@@ -1811,7 +1877,7 @@ graph.addNode(place.id, {
 
 標籤顯示規則 / Label visibility：**純粹看縮放** —— 只有 `camera.ratio <= CONFIG.LABEL_ZOOM_RATIO`（0.5，定義於 `gameConfig.ts`）才渲染地名，與兵力無關；由 `nodeReducer` 在拉遠時把 `label` 設為 `null`，並把 `labelRenderedSizeThreshold` 釘為 `0`。不要改回用節點尺寸過濾：那样兵多的地名在拉遠時仍會留著，而且縮放比例在該比較中會被抵消，本來就不是縮放門檻。跨過門檻時由 camera 的 `updated` 事件觸發 `refresh()`。覆蓋 `<canvas>`（聚光燈層）畫在 sigma 容器之下，故標籤永遠疊在光環之上。
 
-### 題色轉換 / Color Conversion
+### 顏色轉換 / Color Conversion
 
 Sigma.js/WebGL 不支援 HSL 格式，需轉換為 hex：
 
@@ -1943,7 +2009,7 @@ const vp = sigma.graphToViewport({ x: attrs.x, y: attrs.y }); // 每幀用當前
 //   created → #22d3ee（青）、attacked → #f87171（紅）
 // 移動點：easeInOutQuad 行進（尾跡 0.12），週期
 //   MOVE_ANIM_DURATION (1500ms) 行進 + MOVE_ANIM_PAUSE (2500ms) 停頓
-//   題色 = 移動者陣營色（hslToHex），無陣營 → #5eead4
+//   顏色 = 移動者陣營色（hslToHex），無陣營 → #5eead4
 ```
 
 時序常數位於 `src/lib/gameConfig.ts`：`SPOTLIGHT_ROUNDS`、`MOVE_ANIM_DURATION`、`MOVE_ANIM_PAUSE`。
@@ -2103,13 +2169,13 @@ UMD 產物、不可匯入，所以邊框無法設定在節點程式上，只能�
 
 **放大到 `MAP_STAR_ZOOM_RATIO`（0.2）以下，地點變成星系。** sigma 的 ratio 越小越近，
 所以那是縮放滑桿約 95% 的位置 —— **一般視圖完全沒有星系**，別把「沒有」當成 bug。
-太陽 **不再是同一個題色**：`starClassOf(placeId)` 由地點 id 抽一個 `MAP_STAR_SUN_CLASSES`
+太陽 **不再是同一個顏色**：`starClassOf(placeId)` 由地點 id 抽一個 `MAP_STAR_SUN_CLASSES`
 （`core` / `edge` 成對），在**建圖時**就存進節點的 `starClass`。圓盤由 sigma 畫、柔光由覆蓋層
 畫，是兩條路徑；讓兩邊各自抽並不會錯，但那是兩次雜湊，而且只靠「實作剛好一致」才會保持同步 ——
 節點層是唯一的事實來源，改動時不可能只改到一邊。`nodeReducer` 設 `res.color = starClass.core`，
 柔光用同一組的 `edge`，外圈是 `transparent(edge)`（`#rrggbb00`）而不是寫死的 rgba。
 大小是 `MAP_STAR_SUN_SCREEN_PX * starScale / sigma.scaleSize(1)`，所以跟著鏡頭走。
-**刻意不選深紅與深藍**：軌道才是勢力的通道，而太陽是星系裡最大的一塊題色。
+**刻意不選深紅與深藍**：軌道才是勢力的通道，而太陽是星系裡最大的一塊顏色。
 The sun is **no longer one colour**: `starClassOf(placeId)` draws one `MAP_STAR_SUN_CLASSES`
 entry (a `core`/`edge` pair) from the place id and stores it on the node as `starClass` **at
 graph-build time**. The disc is painted by Sigma and the glow by the overlay, two code paths;
@@ -2125,7 +2191,7 @@ uses the same `edge`, with `transparent(edge)` for its outer stop rather than a 
 **月球的軌道在行星之外**（`planetRadius + MAP_STAR_MOON_GAP_PX + n × _STEP_PX`）。第一版
 用 `0.34 × 節點半徑`，所以每顆月球都在圓盤裡面 —— 那正是「月球和行星都跑到地點裡面去」的
 來源。**軌道的勢力色要讀 `attrs.factionData?.color`，不能退回 `attrs.color`**：無主節點的
-題色是刻意壓暗的灰，在近黑背景上疊半透明幾乎等於沒畫，整個星系會塌成一個光點。
+顏色是刻意壓暗的灰，在近黑背景上疊半透明幾乎等於沒畫，整個星系會塌成一個光點。
 行星與月球純粹由地點 id 決定，什麼都不存。地名畫在星系**上方**，靠 `defaultDrawNodeLabel`；
 sigma 內建的標籤程式只會把文字畫在節點右側、沒有垂直偏移，所以非星系層完全委派回去。
 
@@ -2235,7 +2301,7 @@ radius, four together ~83%.
   地點**節點**的 hover 與點擊不受影響：那屬於地圖本身。
   
   門檻讀自 `cameraRatioRef`（鏡頭 ratio 的鏡像），因為 `onMove` 是穩定閉包、拿不到 sigma 實例；
-  跨過門檻時會**立刻**清掉已亮起的題色與提示，而不是等下一次 mousemove——那些提示是在比例還算大時
+  跨過門檻時會**立刻**清掉已亮起的顏色與提示，而不是等下一次 mousemove——那些提示是在比例還算大時
   產生的，留著會變成一個已不該互動的面積層留下的殘影。
   
   Below `TERRITORY_INTERACTIVE_RATIO` (0.9) the area layer is fully inert: pointing at a patch of
@@ -2291,7 +2357,7 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
 
 `framedPlacement(mapper, radiusFraction)` 呼叫它兩次——一次取世界中心 `(0.5, 0.5)`，一次量出
 「兩個相鄰框化點之間」得到每世界單位的像素數。它住在 `src/lib/spaceShared.ts`，那是兩層共用的
-模組，同時也放著兩個題色工具（`parseHex` / `withAlpha`），所以任一層都不必 import 另一層。
+模組，同時也放著兩個顏色工具（`parseHex` / `withAlpha`），所以任一層都不必 import 另一層。
 
 - **這取代了一個真實的 bug。** sigma 的對應是
   `screen = (framed − camera.position) × scale + centre`，所以 `camera.x` 變大時世界內容往**左**移。
@@ -2331,7 +2397,7 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
   放到近黑的深空上它根本等於不存在，整層讀起來像沒有東西。讓它不會變成一整片白的是上面的密度區間，
   不是上限。
 - **色盤是暖的**（`SPACE_FOG_COLORS`：`#f2e6c8` → `#5c4c38`，近乎白的奶油到暗褐）。重點是它讀起來像
-  **被照亮的星塵**，不是冷灰的霧；`spaceFog.test.ts` 斷言每個題色的紅通道都大於藍通道，所以它不會
+  **被照亮的星塵**，不是冷灰的霧；`spaceFog.test.ts` 斷言每個顏色的紅通道都大於藍通道，所以它不會
   漂回冷色。
 - **它保留完整的可見性閘門**：漂移在離開視窗與分頁隱藏時暫停，`prefers-reduced-motion` 下只畫一幀
   靜態圖——與其他圖層完全相同。
@@ -2355,7 +2421,7 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
   `#1e3a5f`，而節點最多兩千個。所以取它的**構圖與色相，不取曝光**。
 - **星雲 token 也跟著降飽和**：`--color-ds-space-nebula` 原本是飽和的紫與藍，現在是灰紫與石板。
 - **不做半透明拖尾填色，也不用 `lighter` 混合**：疊加會吃掉道路的對比。
-- **所有題色都在 `gameConfig.ts`**（`SPACE_GALAXY_COLOR_CORE/MID`、`NEBULA_COLORS`、
+- **所有顏色都在 `gameConfig.ts`**（`SPACE_GALAXY_COLOR_CORE/MID`、`NEBULA_COLORS`、
   `STAR_COLORS`、`SPACE_FOG_COLORS`）。
 - 星點以 `1 - d³` 的邊緣淡出畫進烘焙圖，圓盤邊緣才不會出現突兀的截斷。
 
@@ -2369,13 +2435,13 @@ framedGraphToViewport: (p: { x: number; y: number }) => { x: number; y: number }
 - **這是全專案唯一使用噪聲的 canvas 層。**
 - **噪聲來自 `three`，不是新相依**：`three/examples/jsm/math/SimplexNoise`。
 - **種子必須是真正的 PRNG**：傳入常數函式會讓所有梯度索引相同，場退化成平滑斜坡。
-- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種題色。
+- **色相取自粒子所在位置的噪聲**，所以同一條絲帶共享一種顏色。
 - **調色盤刻意壓進冷色半邊並降低彩度，而且斷言的是「上限」**：原本是 0–320 全色相、飽和度 78、
   alpha 0.72，那是在它**唯一**是背景時調的。放到暖色銀河上，那些絲帶會打架並吃掉道路對比，
   所以現在是 `195 → 280`、飽和度 45、alpha 0.55。`spaceFlow.test.ts` 斷言飽和度 < 60、
   alpha < 0.6、色相跨度 < 200°。
 - **不做半透明拖尾填色，也不用 `lighter` 混合**。
-- **所有題色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。
+- **所有顏色都在 `gameConfig.ts`**（`SPACE_FLOW_*`）。
 - 色相是**量化**的，每幀零配置。
 
 
@@ -2745,29 +2811,29 @@ raise the **card itself** to `z-30` while expanded, so a later sibling cannot pa
 
 ### 野心不動了，變的是叛變值 / Ambition is fixed; the defection value moves
 
-**野心是固定初始值，事件不再改寫它。** `ambitionEvents` 階段與 `adminAssign` 原本
+**野心是固定初始值，事件不再改寫它。** `defectionEvents` 階段與 `adminAssign` 原本
 到處寫 `character.ambition`（「未升遷 +0.5」「取得職務 −1、十回合後回 +1」「被免職 +1」），
 現在全部退休：那個扣了再回的機制連同 `adminAmbitionRevertRound` 都沒有意義了。
-`ambitionEvents` 現在只寫**帳本**——每回合產生 `AmbitionEvent`，一行都不改 `Character`。
+`defectionEvents` 現在只寫**帳本**——每回合產生 `DefectionEvent`，一行都不改 `Character`。
 Ambition is a fixed initial stat and events no longer rewrite it. The whole
 deduct-then-revert machinery, `adminAmbitionRevertRound` included, is retired;
-`ambitionEvents` now only writes the ledger and touches no `Character` row.
+`defectionEvents` now only writes the ledger and touches no `Character` row.
 
 **帳本不是裝飾：忠誠檢查每回合把本回合的 delta 加總成「叛變值」。**
 
-    value  = ambition
+    value  = defectionBase
            + (忠誠標籤與君王不同 ? 2 : 0)
-           + 本回合此人的 AmbitionEvent **delta 總和**
+           + 本回合此人的 DefectionEvent **delta 總和**
 
     chance = (value − 17.5) / 17.5 × 0.05        // 17.5 = (5+30)/2
 
-只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `AmbitionEvent`，
+只有忠誠標籤是寫死的：它是 `Loyalty` 標籤的**比較**，不會產生 `DefectionEvent`，
 所以沒有 delta 可加。其餘全部來自資料庫的真實 delta。**曾經寫成「每筆 +1」是錯的**——
 每筆事件各有各的差值，`−2` 的一筆就該是 `−2`，而一筆 `+3` 就該是 `+3`。
 只有忠誠標籤是寫死的，因為它是標籤比較、不會產生事件，沒有 delta 可讀。
 
 Only the loyalty tag is hardcoded: it is a *comparison* of `Loyalty` tags that never
-produces an `AmbitionEvent`, so there is no delta to add. Everything else is summed from
+produces a `DefectionEvent`, so there is no delta to add. Everything else is summed from
 real deltas. Writing it as "a flat +1 per event" was wrong — each event carries its own
 magnitude.
 
@@ -2780,15 +2846,15 @@ not a floor); a floor would need `(value / 17.5) × 0.05`.
 
 **建立新勢力與叛變都「不」重骰野心。** 原本有五處用
 `CHAR_NEW_FACTION_AMBITION_RESET_MIN..MAX`（`factionCollapse.ts` 兩處、`loyaltyCheck.ts` 三處）
-把野心拉回 5–15，設定值已一併刪除。取而代之的是**帳本冷卻**：`ambitionEvents` 每回合為視窗內
-每一次叛變寫一筆 `AMBITION_DEFECTION_DELTA`（−2），持續 `AMBITION_DEFECTION_ROUNDS`（20）回合。
+把野心拉回 5–15，設定值已一併刪除。取而代之的是**帳本冷卻**：`defectionEvents` 每回合為視窗內
+每一次叛變寫一筆 `DEFECTION_COOLING_DELTA`（−2），持續 `DEFECTION_COOLING_ROUNDS`（20）回合。
 **每次叛變各自一筆，所以會疊加**：短時間叛變兩次是 −4 —— 連續叛變本身就是更強傾向的證據，
 封頂 −2 等於把它丟掉。只寫帳本、不寫可見 Event，因為符合條件的人每回合上百。
 
 Founding a faction and defecting both **no longer** re-roll ambition: all five re-roll sites
 and the config keys are gone. What replaced it is **cooling in the ledger** — one
-`AMBITION_DEFECTION_DELTA` (−2) row per defection inside a 20-round window
-(`AMBITION_DEFECTION_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
+`DEFECTION_COOLING_DELTA` (−2) row per defection inside a 20-round window
+(`DEFECTION_COOLING_ROUNDS`). **They stack**, so two defections is −4. Ledger only, no visible
 Event: a hundred-odd leaders match per round.
 ### 長條圖的 x 軸與市場的「每回合產出」/ The bar axis and a market's real output
 

@@ -47,6 +47,8 @@ function formatSignal(event: PublicEvent, t: Translator): string {
   const from = readString(data, 'fromPlaceName');
   const to = readString(data, 'toPlaceName');
   const building = readString(data, 'building');
+  const character1 = readString(data, 'character1');
+  const character2 = readString(data, 'character2');
 
   switch (event.type) {
     case 'PLACE_CREATED':
@@ -59,6 +61,10 @@ function formatSignal(event: PublicEvent, t: Translator): string {
         : fallback;
     case 'CHARACTER_SPAWNED':
       return char ? t('events.spawnDesc', { character: char }) : fallback;
+    case 'FRIENDSHIP':
+      return character1 && character2
+        ? t('events.friendshipDesc', { character1, character2 })
+        : fallback;
     case 'DEATH':
       return char ? t('events.deathDesc', { character: char }) : fallback;
     case 'BATTLE_DEATH':
@@ -89,10 +95,6 @@ function formatSignal(event: PublicEvent, t: Translator): string {
       const next = readString(data, 'newAdminName');
       return t('events.adminRemovedDesc', { character: char, place, newAdmin: next ?? '—' });
     }
-    case 'AMBITION_RECOVERED':
-      return char && place
-        ? t('events.ambitionRecoveredDesc', { character: char, place })
-        : fallback;
     default:
       return fallback;
   }

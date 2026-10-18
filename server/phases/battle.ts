@@ -9,8 +9,13 @@
 // - 攻擊者抵達地點，與守軍交戰 / Attackers arrive at place, fight defenders
 // - 攻擊順序：速度降序（v1.1）/ Attack order: speed descending (v1.1)
 // - 若多名攻擊者，後到者與新擁有者交戰 / If multiple attackers, later ones fight the new owner
-// - atk = troops × (1 + wu/30) × rand(0.85, 1.15)
-// - def = troops × (1 + tong/30) × (1 + fortress×0.2) × rand(0.85, 1.15)
+// - atk = troops × (1 + effectiveWu/30) × rand(0.85, 1.15)
+// - def = troops × (1 + effectiveTi/30) × (1 + fortress×0.2) × rand(0.85, 1.15)
+//   防守端用**體魄 (ti)**，不是統領 (tong)：tong 早已不參與防禦，它只影響購兵量。
+//   Defence uses **physique (ti)**, not leadership (tong): tong left defence long ago and
+//   now only sizes a troop purchase.
+// - 同地點的關係會調整 effectiveWu / effectiveTi（見下方）/ Co-located relations adjust
+//   effectiveWu and effectiveTi (see below)
 // - 敗者：依速度差逃跑 / Loser: escape based on speed difference
 //   - escape = clamp(0.5 + speedDiff × 0.02, 0.1, 0.9)
 //   - 若逃跑失敗 → 死亡 / If escape fails → death
@@ -30,6 +35,7 @@ import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
 import { fortressDefenceMult } from '@/lib/placeEffects';
+import { buildRelationCombatDeltas, effectiveAbility } from '@/lib/relationCombat';
 import { buildBattleReport } from '../battleReport';
 import { grantAdmin } from '../adminAssign';
 
@@ -61,6 +67,42 @@ export async function battle(
     adjacent.get(road.aId)!.push(road.bId);
     adjacent.get(road.bId)!.push(road.aId);
   }
+
+  // ── 同地點關係對戰鬥力的影響 / Co-located relations and combat ability ─────
+  // 朋友站在同一個地點會**提高**武力與體魄；不滿的人站在同一個地點則**降低**。
+  //
+  // A friend standing at the same place **raises** martial and physique; someone resented
+  // at the same place lowers them.
+  //
+  // **三次查詢，整個戰鬥階段只做一次**，而不是每位戰鬥者各查一次。
+  //
+  // Three queries, **once for the whole battle phase**, rather than one per combatant.
+  //
+  // `placeOf` **只含活著的角色**：關係不會隨死亡而消失，而亡者的 `placeId` 仍留在
+  // 資料庫裡——不排除的話，已故的朋友會繼續影響他生前所在的地點。
+  //
+  // `placeOf` holds **living characters only**: relations outlive their owners and a dead
+  // character's placeId stays in the database, so without this a dead friend would keep
+  // affecting the place they used to stand in.
+  const [friendRows, discontentRows, placedCharacters] = await Promise.all([
+    prisma.friendship.findMany({ where: { worldId }, select: { aId: true, bId: true } }),
+    prisma.discontent.findMany({ where: { worldId }, select: { aId: true, bId: true } }),
+    prisma.character.findMany({
+      where: { worldId, alive: true },
+      select: { id: true, placeId: true },
+    }),
+  ]);
+
+  const placeOf = new Map(placedCharacters.map((c) => [c.id, c.placeId] as const));
+  const relationDeltas = buildRelationCombatDeltas(placeOf, friendRows, discontentRows);
+
+  /** 某位將領此刻的**有效**武力 / this leader's **effective** martial right now */
+  const effectiveWu = (char: { id: string; wu: number }): number =>
+    effectiveAbility(char.wu, relationDeltas.get(char.id) ?? 0);
+
+  /** 某位將領此刻的**有效**體魄 / this leader's **effective** physique right now */
+  const effectiveTi = (char: { id: string; ti: number }): number =>
+    effectiveAbility(char.ti, relationDeltas.get(char.id) ?? 0);
 
   // 取得所有地點及陣營資訊以決定逃跑目的地 / Get all places with faction info for escape destination
   const allPlaces = await prisma.place.findMany({
@@ -116,9 +158,16 @@ export async function battle(
         CONFIG.BATTLE_RANDOM_MIN,
         CONFIG.BATTLE_RANDOM_MAX
       );
+      // **有效**武力：同地點的朋友提高它，不滿的人降低它。攻擊力用它計算，戰報也用
+      // 它——兩者必須是同一個數字，否則報告裡的算式對不上。
+      //
+      // The **effective** martial: co-located friends raise it, co-located gripes lower it.
+      // The attack power is computed with it and the report quotes it — they have to be the
+      // same number, or the arithmetic in the report will not add up.
+      const attackerWu = effectiveWu(attacker);
       const atk =
         attacker.troops *
-        (1 + attacker.wu * CONFIG.BATTLE_ATK_WU_MULT) *
+        (1 + attackerWu * CONFIG.BATTLE_ATK_WU_MULT) *
         atkRandom;
 
       const defRandom = rng.float(
@@ -133,7 +182,7 @@ export async function battle(
       if (atk > def) {
         const reportParts = {
           attackerTroops: attacker.troops,
-          attackerWu: attacker.wu,
+          attackerWu,
           attackRoll: atkRandom,
           attackPower: atk,
           defenderGarrison: place.garrison,
@@ -155,7 +204,7 @@ export async function battle(
       } else {
         const reportParts = {
           attackerTroops: attacker.troops,
-          attackerWu: attacker.wu,
+          attackerWu,
           attackRoll: atkRandom,
           attackPower: atk,
           defenderGarrison: place.garrison,
@@ -341,9 +390,10 @@ export async function battle(
           CONFIG.BATTLE_RANDOM_MIN,
           CONFIG.BATTLE_RANDOM_MAX
         );
+        const attackerWu = effectiveWu(attacker);
         const atk =
           attacker.troops *
-          (1 + attacker.wu * CONFIG.BATTLE_ATK_WU_MULT) *
+          (1 + attackerWu * CONFIG.BATTLE_ATK_WU_MULT) *
           atkRandom;
 
         // 計算防禦力 / Calculate defense power
@@ -353,7 +403,7 @@ export async function battle(
         );
         const def =
           defender.troops *
-          (1 + defender.ti * CONFIG.BATTLE_DEF_TI_MULT) *
+          (1 + effectiveTi(defender) * CONFIG.BATTLE_DEF_TI_MULT) *
           fortressDefenceMult(place.fortress) *
           defRandom;
 

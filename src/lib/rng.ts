@@ -117,6 +117,32 @@ export class Rng {
   }
 
   /**
+   * 從常態（高斯）分佈產生一個**整數**。
+   * Generate an **integer** from a normal (Gaussian) distribution.
+   *
+   * 給那些資料庫欄位是 `Int` 的屬性用（`defectionBase`、`speed`）。分成自己的函式而不是讓呼叫端
+   * 自己包一層 `Math.round`，是因為**資料庫本來就會把浮點數塞進整數欄位** —— 那件事會成功，
+   * 所以錯誤不會浮現，只會留下一個「這裡的數字看起來是整數，但程式其實送的是浮點數」的欄位。
+   * 明確一點，欄位的型別才等於程式送出的東西。
+   *
+   * For stats whose column is `Int` (`defectionBase`, `speed`). This exists rather than having
+   * callers wrap `Math.round` themselves because the database will happily accept a float
+   * into an integer column — so the mistake does not surface as an error, it just leaves a
+   * column whose type no longer matches what the code says it is sending. Being explicit is
+   * what keeps the column type and the call site telling the same story.
+   *
+   * 回傳的是 `gaussian()` 四捨五入後的結果，所以分佈形狀、上下限與 `gaussian()` 完全一致。
+   * Rounding happens **after** the clamp, so a clamped value stays exactly on its bound.
+   *
+   * The result is `gaussian()` rounded, so the shape and the bounds are identical to
+   * `gaussian()`. Rounding happens **after** the clamp, so a clamped value stays exactly on
+   * its bound rather than being able to round past it.
+   */
+  gaussianInt(mean: number, sigma: number, min: number, max: number): number {
+    return Math.round(this.gaussian(mean, sigma, min, max));
+  }
+
+  /**
    * 從常態（高斯）分佈產生一個值。
    * Generate a value from a normal (Gaussian) distribution.
    * 使用 Box-Muller 轉換產生高品質常態分佈樣本。

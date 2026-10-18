@@ -61,7 +61,23 @@ async function forgeSessionCookie() {
 
 // ── 2. Choreography / 運鏡腳本 ─────────────────────────────────────────────────
 async function choreograph(page) {
-  const popup = page.locator('div.fixed.z-50 h3.font-orbitron').first();
+  // 側欄頁籤與地點列都用 data-testid。**不要**改用 class 名稱或 emoji。
+  //
+  // 這兩個選擇器都因為 UI 改版而失效過，而腳本只會印一行 WARN 就安靜地少拍一段，
+  // 沒有任何東西會看得出來：
+  //   - `div.fixed.z-50 h3.font-orbitron` —— 地點詳情不再是浮動彈出視窗（改成側欄分頁
+  //     內容），而且 `font-orbitron` 早就改名成 `font-display`。
+  //   - `button` + hasText '📜' —— 換個圖示就會壞。
+  //
+  // Both of these selectors broke on a UI change, and the script only ever printed one
+  // WARN line and quietly recorded a shorter video with nothing to notice it by:
+  //   - `div.fixed.z-50 h3.font-orbitron` — the place detail stopped being a floating popup
+  //     (it became side-panel tab content), and `font-orbitron` had already been renamed to
+  //     `font-display`.
+  //   - `button` + hasText '📜' — swapping the icon breaks it.
+  const placeDetail = page.locator('[data-testid="place-detail"]');
+  const placeRow = page.locator('[data-testid="place-list-row"]').first();
+  const tab = (key) => page.locator(`[data-testid="side-tab-${key}"]`).first();
   const zoomIn = page.locator('button[aria-label*="Zoom in"]').first();
   const zoomOut = page.locator('button[aria-label*="Zoom out"]').first();
   const reset = page.locator('button[aria-label*="Reset view"]').first();
@@ -101,32 +117,36 @@ async function choreograph(page) {
   await reset.click().catch(() => {});
   await sleep(1100);
 
-  // 4) Click a place node → detail popup / 點擊地點開啟詳情
-  console.log('[capture] place popup …');
-  // Coordinates read from shot-load.png (post-reset view = default camera view)
-  // 座標取自 shot-load.png（reset 後的預設視圖與載入時相同）
-  const points = [
-    [730, 585], // 龜水 — 王的大節點，命中率最高 / king node, largest hit area
-    [642, 344], [641, 412], [645, 449], [650, 500], [660, 550], // 中央鏈 / center chain
-    [575, 284], [550, 314], [533, 409], [512, 448], [494, 494], // 左側 / left branches
-    [717, 160], [745, 215], [744, 275], [860, 320], [875, 250], // 上方群/右鏈 / top + right
-    [530, 605], [620, 634], [668, 634], // 底部迴圈 / bottom loop
-  ];
+  // 4) 地點詳情 —— 它現在是側欄的「地點」分頁內容，不再是蓋在地圖上的浮動彈出視窗。
+  //    走 DOM（頁籤 → 清單第一列）而不是點地圖座標：節點是畫在 canvas 上的，命中率
+  //    取決於世界資料與版面，舊腳本那 18 個硬編碼座標本來就只是猜的。
+  //
+  //    4) Place detail — it is the 地點 side-panel tab's content now, not a floating popup
+  //    over the map. Drive it through the DOM (tab, then the first list row) rather than
+  //    map coordinates: the nodes are painted on a canvas, so hit-testing depends on the
+  //    world data and layout, and the old script's 18 hardcoded points were only ever guesses.
+  console.log('[capture] place detail …');
   let opened = false;
-  for (const [x, y] of points) {
-    await page.mouse.click(x, y);
-    await sleep(650);
-    opened = await popup.isVisible().catch(() => false);
-    if (opened) break;
+  try {
+    await tab('places').click({ timeout: 10_000 });
+    await sleep(1200);
+    await placeRow.click({ timeout: 10_000 });
+    await placeDetail.waitFor({ state: 'visible', timeout: 10_000 });
+    opened = true;
+  } catch (e) {
+    console.log('[capture] WARN place detail did not open:', e.message);
   }
   if (opened) {
-    console.log('[capture] popup opened, dwelling …');
-    await sleep(2200);
-    await page.screenshot({ path: path.join(VIDEO_DIR, 'shot-popup.png') });
-    await page.mouse.click(24, 24); // dismiss via backdrop / 點背景關閉
-    await sleep(700);
-  } else {
-    console.log('[capture] WARN: no place popup opened, skipping');
+    console.log('[capture] place detail open, dwelling …');
+    await sleep(2400);
+    await page.screenshot({ path: path.join(VIDEO_DIR, 'shot-place-detail.png') });
+    // 用面板自己的 ✕ 關閉。舊腳本點 (24,24) 的背景，但浮動彈出視窗早就沒有了，
+    // 那一下點到的是地圖。
+    //
+    // Close via the panel's own ✕. The old script clicked (24,24) expecting a backdrop;
+    // the floating popup was long gone, so that click landed on the map.
+    await tab('places').click().catch(() => {});
+    await sleep(900);
   }
 
   // 5) Run 2 rounds (admin button) → event log fills / 執行 2 個回合
@@ -167,7 +187,7 @@ async function choreograph(page) {
   // (stats tab skipped: RoundSnapshots only exist at interval milestones,
   //  so the chart would read "此回合尚無資料" during early rounds)
   console.log('[capture] events tab …');
-  await page.locator('button', { hasText: '📜' }).first().click().catch(() => {});
+  await tab('events').click({ timeout: 10_000 }).catch(() => {});
   await sleep(2400);
   await page.screenshot({ path: path.join(VIDEO_DIR, 'shot-events.png') });
   await sleep(1800);

@@ -1105,7 +1105,7 @@ export const RADAR_AXES = [
   { key: 'ti', label: 'character.ti', max: CONFIG.CHAR_ABILITY_MAX },
   { key: 'jing', label: 'character.jing', max: CONFIG.CHAR_ABILITY_MAX },
   { key: 'speed', label: 'character.speed', max: CONFIG.CHAR_SPEED_MAX },
-  { key: 'ambition', label: 'character.ambition', max: CONFIG.CHAR_AMBITION_MAX },
+  { key: 'defectionBase', label: 'character.defectionBase', max: CONFIG.CHAR_DEFECTION_BASE_MAX },
   { key: 'age', label: 'character.age', max: CONFIG.CHAR_MAX_AGE_MAX },
 ] as const;
 

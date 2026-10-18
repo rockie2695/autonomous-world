@@ -103,11 +103,11 @@ export async function factionCollapse(
               factionId: nearbyFactionId,
               isKing: false,
               // 野心是**固定的初始值**：換了勢力也不重骰。叛變的冷卻改由
-              // ambitionEvents 往帳本寫負的 delta 處理。
+              // defectionEvents 往帳本寫負的 delta 處理。
               //
-              // Ambition is a **fixed initial stat**: switching factions does not
+              // The defection base is a **fixed initial stat**: switching factions does not
               // re-roll it. The cooling that follows a defection is handled by the
-              // ledger instead (see ambitionEvents).
+              // ledger instead (see defectionEvents).
             },
           });
           joinedFaction = true;
@@ -146,7 +146,7 @@ export async function factionCollapse(
             name: kingName,
             // 野心是**固定的初始值**：成為國王不會把它拉回 5–15。
             //
-            // Ambition is a **fixed initial stat**: becoming king does not pull it
+            // The defection base is a **fixed initial stat**: becoming king does not pull it
             // back down to 5–15.
           },
         });

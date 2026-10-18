@@ -8,7 +8,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore, Fragment, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, Fragment, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
@@ -22,23 +22,24 @@ import { LeaderAvatar } from '@/components/LeaderAvatar';
 import { apiFetch } from '@/lib/api';
 import { CONFIG } from '@/lib/gameConfig';
 import { defectionValue, defectionChance } from '@/lib/defection';
+import { buildRelationCombatDeltas, effectiveAbility } from '@/lib/relationCombat';
 import { splitIncome } from '../../../server/income';
 import {
   BUILDING_MAX_LEVEL,
   buildingPerLevel,
-  buildingTotal,
+  nextUpgradeGain,
   placeIncome,
   placeRecruits,
   upgradeCost,
-  placeOutputAt,
-  totalCostToReach,
+  costToReachLevel,
+  placeEffectLabel,
   type BuildingKind,
 } from '@/lib/placeEffects';
 import { signOut } from 'next-auth/react';
 import { Ic, Crown } from './icons';
 import { EventLog } from './EventLog';
 import { StatsCharts, CharacterRadarHover, RADAR_AXES } from './stats-charts';
-import { DetailModal, FactionRanking } from './leader-detail';
+import { DetailModal, FactionRanking, LeaderRelations } from './leader-detail';
 import type { WorldInfo, WorldState } from './types';
 import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_CORNER_BR, GM_CORNER_TL, GM_CORNER_TR, GM_FRAME, GM_HUD_CONTROLS_CLOSED, GM_HUD_CONTROLS_OPEN, GM_HUD_LEGEND, GM_KPI, GM_KPI_FIRST, GM_KPI_LABEL, GM_KPI_VALUE, GM_LEGEND, GM_LEGEND_ITEM, GM_MODAL, GM_MODAL_PHOTO, GM_MODAL_VEIL, GM_PANEL, GM_PHOTO, GM_RAIL, GM_SKEL, GM_STAT, GM_STAT_LABEL, GM_STAT_VALUE, GM_STRIP, GM_STRIP_INLINE, GM_STRIP_PHOTO, GM_STRIP_VEIL, GM_TIMELINE, GM_TITLE, GM_VEIL, GM_VIGNETTE } from './styles';
 
@@ -1084,9 +1085,13 @@ onTabChange={(tab) => {
                 : null;
               return king ? king.loyalty : null;
             })()}
-            myEvents={(worldState?.roundAmbitionEvents ?? []).filter(
+            myEvents={(worldState?.roundDefectionEvents ?? []).filter(
               (e) => e.charId === detailChar.id
             )}
+            friendships={worldState?.friendships ?? []}
+            discontents={worldState?.discontents ?? []}
+            characters={worldState?.characters ?? []}
+            onOpenLeader={(id) => openLeaderDetail(id)}
             factionAverage={radarMeanOf(
               (worldState?.characters ?? []).filter(
                 (c) => c.factionId && c.factionId === detailChar.factionId && c.alive
@@ -1193,7 +1198,7 @@ type LeaderSortKey =
   | 'ti'
   | 'jing'
   | 'speed'
-  | 'ambition'
+  | 'defectionBase'
   | 'age'
   | 'troops'
   | 'gold'
@@ -1359,6 +1364,17 @@ function MapSidePanel({
               aria-selected={isActive}
               onClick={() => onTabChange(tab.key)}
               title={tab.label}
+              // 錄影腳本靠這個穩定地切換分頁。不要改用 class 名稱或 emoji：
+              // 兩者都被改過一次 —— `font-orbitron` → `font-display` 之後，
+              // scripts/capture-hero.mjs 的 `div.fixed.z-50 h3.font-orbitron`
+              // 就永遠配不上了，而腳本只會印一行 WARN 然後安靜地少拍一段。
+              //
+              // The capture script switches tabs through this. Do not reach for a class
+              // name or an emoji instead: both have been changed before — after
+              // `font-orbitron` became `font-display`, the script's
+              // `div.fixed.z-50 h3.font-orbitron` could never match again, and it only
+              // printed one WARN and silently recorded a shorter video.
+              data-testid={`side-tab-${tab.key}`}
               className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-display tracking-wider transition-all duration-200 ${
                 isActive ? 'bg-cyan-500/15 text-cyan-300' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
               }`}
@@ -1578,6 +1594,10 @@ function LeaderDetail({
   factionAverage,
   kingLoyalty,
   myEvents,
+  friendships,
+  discontents,
+  onOpenLeader,
+  characters,
   onFocusPlace,
 }: {
   char: WorldState['characters'][0];
@@ -1586,12 +1606,37 @@ function LeaderDetail({
   factionAverage: number[] | null;
   /** 本势力君王的忠誠标签；null = 没有君王可比 / The faction king's loyalty tag; null when there is no king to compare */
   kingLoyalty: string | null;
-  /** 本回合影響此人的 AmbitionEvent / This round's AmbitionEvents affecting them */
+  /** 本回合影響此人的 DefectionEvent / This round's DefectionEvents affecting them */
   myEvents: ReadonlyArray<{ delta: number; reason: string }>;
+  /** 全世界友誼列（扁平）/ every friendship row in the world (flat) */
+  friendships: WorldState['friendships'];
+  /** 全世界不滿列（每對兩列）/ every discontent row in the world (two per pair) */
+  discontents: WorldState['discontents'];
+  /** 全體將領，只為了把人名解析成人 / all leaders, purely to resolve ids to names */
+  characters: WorldState['characters'];
+  /** 從關係清單點名字時開啟那個人的彈窗 / open another leader's popup from the relations list */
+  onOpenLeader: (charId: string) => void;
   /** 點「位置」時把鏡頭移過去並開啟地點分頁 /
    *  Called when 位置 is clicked: move the camera there and open the 地點 tab */
   onFocusPlace: (placeId: string) => void;
 }) {
+  // 關係分頁預設關閉：多數時候讀者來看的是數值，關係是「有興趣才去看」的。
+  // The relations tab starts closed: most readers come for the numbers, and the relations
+  // are there when they want them.
+  const [detailTab, setDetailTab] = useState<'stats' | 'relations'>('stats');
+
+  // 人名查表**每次 render 重建一次**，而不是用 ref 或 memo：這裡只在「點名字」時被呼叫，
+  // 重建的成本是幾個 entry，而 memo 化反而要處理 `characters` 陣列的參考identity——
+  // 每回合它都是新的物件，memo 會直接失效。
+  //
+  // The name lookup is rebuilt every render rather than memoised or held in a ref: it is
+  // only called when a name is clicked, it costs a few entries, and memoising it would mean
+  // tracking the identity of `characters` — a fresh array every round, so the memo would
+  // miss anyway.
+  const nameOf = useMemo(() => {
+    const map = new Map(characters.map((c) => [c.id, c.name] as const));
+    return (id: string) => map.get(id) ?? '—';
+  }, [characters]);
   /**
    * 叛變值與本回合機率，**在客戶端用同一組純函式重算**，而不是讓伺服器多存一份。
    *
@@ -1610,28 +1655,134 @@ function LeaderDetail({
   const eventDeltaSum = myEvents.reduce((sum, e) => sum + e.delta, 0);
   const loyaltyMismatch = kingLoyalty !== null && char.loyalty !== kingLoyalty;
   const defection = defectionValue({
-    ambition: char.ambition,
+    defectionBase: char.defectionBase,
     loyaltyMismatch,
     eventDeltaSum,
   });
   const defectionRate = defectionChance(defection);
 
-  const stats: ReadonlyArray<readonly [string, string | number]> = [
-    [t('character.wu'), char.wu],
-    [t('character.tong'), char.tong],
-    [t('character.ti'), char.ti],
-    [t('character.jing'), char.jing],
-    [t('character.speed'), char.speed],
-    [t('character.ambition'), Math.round(char.ambition)],
-    [t('character.age'), char.age],
-    [t('character.troops'), char.troops],
-    [t('character.gold'), char.gold],
-    [
-      t('character.loyalty'),
-      t(`character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`),
-    ],
-    [t('character.defectionValue'), defection.toFixed(1)],
-    [t('character.defectionChance'), `${(defectionRate * 100).toFixed(1)}%`],
+  /**
+   * 同地點關係對戰鬥力的影響，同樣是**用同一組純函式在客戶端重算**。
+   *
+   * 伺服器在 `battle.ts` 裡用 `buildRelationCombatDeltas()` 算過一次；這裡呼叫同一個
+   * 函式，所以面板顯示的戰鬥力與實際交戰時用的**不可能對不上**。若這裡自己重寫一份
+   * 規則，就會出現「面板寫 24、實際像 20」這種沒有任何機制能發現的不一致。
+   *
+   * The same recomputation, with the *same* pure functions the server fought with.
+   *
+   * `battle.ts` called `buildRelationCombatDeltas()` to roll the fight; calling it again
+   * here means the displayed combat ability and the one the battle used cannot disagree.
+   * Re-deriving the rule by hand here is what would produce a "the panel says 24 but it
+   * behaved like 20" divergence that nothing would ever catch.
+   *
+   * `placeOf` **只含活著的角色**，與伺服器端相同：關係不會隨死亡而消失，而亡者的
+   * `placeId` 仍留在資料庫裡。
+   *
+   * `placeOf` holds **living characters only**, exactly as on the server: relations outlive
+   * their owners and a dead character's `placeId` stays in the database.
+   */
+  const relationCombat = useMemo(() => {
+    const placeOf = new Map(
+      characters.filter((c) => c.alive).map((c) => [c.id, c.placeId] as const)
+    );
+    return buildRelationCombatDeltas(placeOf, friendships, discontents);
+  }, [characters, friendships, discontents]);
+
+  const relationDelta = relationCombat.get(char.id) ?? 0;
+  const effectiveWu = effectiveAbility(char.wu, relationDelta);
+  const effectiveTi = effectiveAbility(char.ti, relationDelta);
+
+  /**
+   * 被關係改動過的數值才需要 tooltip：括號裡已經寫了 `+1`／`−1`，但那是**結果**；
+   * tooltip 說的是**原因**——為什麼這個數字被推高或壓低。
+   *
+   * Only a value that relations actually moved needs a tooltip. The parenthetical already
+   * carries the `+1` / `−1`, but that is the *result*; the tooltip gives the *reason* — why
+   * this number was pushed up or down.
+   */
+  const modifiedNote = (base: number, effective: number): string | undefined => {
+    if (effective === base) return undefined;
+    const diff = effective - base;
+    return t('character.abilityModified', {
+      delta: `${diff > 0 ? '+' : '−'}${Math.abs(diff)}`,
+      base,
+    });
+  };
+
+  /**
+   * 資料分頁分成三組：**基礎**（年齡、位置、金錢、兵力）、**戰力**（五項屬性）、
+   * **忠誠**（忠誠標籤、野心、叛變值、叛變機率）。
+   *
+   * The data tab is three groups: **basics** (age, place, gold, troops), **power** (the five
+   * abilities) and **loyalty** (loyalty tag, ambition, defection value, defection chance).
+   *
+   * 分組不是排版偏好，是**讀法**：混在一張表裡時，讀者得自己分辨「哪些數字決定他打贏」
+   * 與「哪些只是關於他這個人的資料」。分成三組之後，戰力那一組就**只有**會影響交戰的
+   * 數字。
+   *
+   * The grouping is not a layout preference, it is a **reading**: mixed into one table, the
+   * reader has to work out for themselves which numbers decide whether he wins a fight and
+   * which are merely facts about him. In three groups the power group contains **only** the
+   * numbers that affect a fight.
+   */
+  const statGroups: ReadonlyArray<{ title: string; rows: ReadonlyArray<StatRow> }> = [
+    {
+      title: t('character.groupBasic'),
+      rows: [
+        { label: t('character.age'), value: char.age },
+        {
+          label: t('character.place'),
+          // 位置可點：把鏡頭移過去，並且開啟「地點」分頁看那個地方的詳情。
+          // 只是文字時，它等於叫讀者自己去地圖上找那個地方 /
+          // The place is clickable: move the camera there AND open the 地點 tab, so the
+          // detail is actually shown. As plain text it only told the reader where to go
+          // and look for it.
+          value: (
+            <button
+              type="button"
+              onClick={() => onFocusPlace(char.placeId)}
+              className="block max-w-full text-xs text-cyan-300 hover:text-cyan-200 hover:underline transition-colors duration-150 truncate text-left"
+            >
+              {placeName}
+            </button>
+          ),
+        },
+        { label: t('character.gold'), value: char.gold },
+        { label: t('character.troops'), value: char.troops },
+      ],
+    },
+    {
+      title: t('character.groupPower'),
+      rows: [
+        {
+          label: t('character.wu'),
+          value: abilityText(char.wu, effectiveWu),
+          note: modifiedNote(char.wu, effectiveWu),
+        },
+        {
+          label: t('character.ti'),
+          value: abilityText(char.ti, effectiveTi),
+          note: modifiedNote(char.ti, effectiveTi),
+        },
+        { label: t('character.tong'), value: char.tong },
+        { label: t('character.jing'), value: char.jing },
+        { label: t('character.speed'), value: char.speed },
+      ],
+    },
+    {
+      title: t('character.groupLoyalty'),
+      rows: [
+        {
+          label: t('character.loyalty'),
+          value: t(
+            `character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`
+          ),
+        },
+        { label: t('character.defectionBase'), value: char.defectionBase },
+        { label: t('character.defectionValue'), value: defection.toFixed(1) },
+        { label: t('character.defectionChance'), value: `${(defectionRate * 100).toFixed(1)}%` },
+      ],
+    },
   ];
 
   return (
@@ -1677,6 +1828,41 @@ function LeaderDetail({
         </div>
       </div>
       <div className="flex-1 min-w-0 space-y-3">
+        {/* 分頁：資料 / 關係。點擊當前分頁即收起（與地圖側欄同一個互動慣例），
+            所以讀者永遠有一條路把面板清乾淨。
+            Tabs: 資料 / 關係. Clicking the active tab collapses it, the same toggle the map
+            side rail uses, so there is always a way to put the panel away. */}
+        <div className="flex items-center gap-1 border-b border-white/5" role="tablist">
+          {(['stats', 'relations'] as const).map((tab) => {
+            const active = detailTab === tab;
+            return (
+              <button
+                key={tab}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setDetailTab(active && tab === 'relations' ? 'stats' : tab)}
+                className={`px-3 py-1.5 text-xs transition-colors duration-150 border-b-2 -mb-px ${
+                  active
+                    ? 'border-cyan-400 text-cyan-300'
+                    : 'border-transparent text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {tab === 'stats' ? t('character.tabStats') : t('character.tabRelations')}
+              </button>
+            );
+          })}
+        </div>
+        {detailTab === 'relations' ? (
+          <LeaderRelations
+            charId={char.id}
+            friendships={friendships}
+            discontents={discontents}
+            nameOf={nameOf}
+            onOpenLeader={onOpenLeader}
+          />
+        ) : (
+          <>
         {/* interactive：詳情彌窗里的圖是固定的，可以很自然地接受游標；
             而將領表那一列的浮動預稿必須保持 pointer-events-none，
             否則面板會觸發那一列的 mouseleave 而閃烁消失 /
@@ -1688,34 +1874,51 @@ function LeaderDetail({
           color={faction ? faction.color : '#64748b'}
           interactive
         />
-        <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
-          {stats.map(([label, value]) => (
-            <div
-              key={label}
-              className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
+        {/* 每個區塊用一條細線分開，而不是只靠間距。字級提到 14px（`GM_TITLE` 本來就是
+            14px，之前用 `text-xs!` 壓回 12px，和下面 12px 的標籤一樣大，分組標題就看不出
+            是標題）。
+            **間距總量刻意維持原本的 12px**：容器 `space-y-1`（4px）＋分隔線的 `pt-2`（8px）
+            ＝ 12px，和原本的 `space-y-3` 一樣。標題本身**不留**下邊距：上方已經有線條，下方
+            每一列自己就有一條 `border-b` 與 `py-1`，再加 4px 只會讓這個面板在剛好裝得下時
+            溢出 1px、冒出一條捲軸。
+            **The spacing total is deliberately unchanged at 12px**: the container's
+            `space-y-1` (4px) plus the rule's `pt-2` (8px) is exactly what `space-y-3` used to
+            be. The heading carries **no** bottom margin: there is already a rule above it, and
+            every row below has its own `border-b` and `py-1`, so another 4px only pushed the
+            panel 1px past its box and produced a scrollbar on a popup that otherwise fitted. */}
+        <div className="space-y-1">
+          {statGroups.map((group, index) => (
+            <section
+              key={group.title}
+              className={index > 0 ? 'border-t border-white/10 pt-2' : undefined}
             >
-              <dt className="text-xs text-gray-400">{label}</dt>
-              <dd className="text-xs text-gray-200 font-display">{value}</dd>
-            </div>
+              <h4 className={`${GM_TITLE} text-gray-300!`}>{group.title}</h4>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+                {group.rows.map((row) => (
+                  <div
+                    key={row.label}
+                    className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
+                  >
+                    <dt className="text-xs text-gray-400">{row.label}</dt>
+                    {/* 顯示字體放在**值**上，不放在 `dd` 上：「位置」那一列的值是個
+                        按鈕，而按鈕繼承父層的字體——放在 `dd` 上會讓地名變成顯示字體，
+                        那是一次沒人要求的排版變更。
+                        The display face goes on the **value**, not on the `dd`: the place
+                        row's value is a button, and a button inherits its parent's font —
+                        putting it on the `dd` would silently switch the place name to the
+                        display face, which is a typographic change nobody asked for. */}
+                    <dd className="min-w-0 text-xs text-gray-200" title={row.note}>
+                      {typeof row.value === 'string' || typeof row.value === 'number' ? (
+                        <span className="font-display">{row.value}</span>
+                      ) : (
+                        row.value
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
           ))}
-          <div className="flex items-center justify-between gap-2 border-b border-white/5 py-1">
-            <dt className="text-xs text-gray-400">{t('character.place')}</dt>
-            {/* 位置可點：把鏡頭移過去，並且開啟「地點」分頁看那個地方的詳情。
-                只是文字時，它等於叫讀者自己去地圖上找那個地方 /
-                The place is clickable: move the camera there AND open the 地點 tab, so the
-                detail is actually shown. As plain text it only told the reader where to go
-                and look for it. */}
-            <dd className="min-w-0">
-              <button
-                type="button"
-                onClick={() => onFocusPlace(char.placeId)}
-                className="block max-w-full text-xs text-cyan-300 hover:text-cyan-200 hover:underline transition-colors duration-150 truncate text-left"
-              >
-                {placeName}
-              </button>
-            </dd>
-          </div>
-        </dl>
         {/* 叛變值的來源：把「哪些事件把這個數字推高或壓低」列出來。
             一個沒有來源的數字等於沒有解釋——讀者看得到結果，看不到原因，所以這個面板
             在表面上顯示機率、實際上卻沒有任何機制會讓人懷疑它錯了。
@@ -1725,9 +1928,12 @@ function LeaderDetail({
             A number with no visible source is not an explanation — the reader sees the result
             and not the cause, so nothing would ever make them doubt it. Each event carries
             its own delta, positive or negative, so the list shows the raw delta rather than a
-            count of events. */}
-        <div className="mt-3">
-          <div className={`${GM_TITLE} text-xs! mb-1`}>{t('character.defectionEvents')}</div>
+            count of events. 這是同一組區塊裡的第四個，所以用同一條線分開 ——
+            它是「忠誠」那一組的證據，不是另一個面板。*/}
+        <section className="border-t border-white/10 pt-2">
+          <div className={`${GM_TITLE} text-gray-300!`}>
+            {t('character.defectionEvents')}
+          </div>
           {myEvents.length === 0 ? (
             <p className="text-xs text-gray-500">{t('character.noDefectionEvents')}</p>
           ) : (
@@ -1749,7 +1955,10 @@ function LeaderDetail({
               ))}
             </ul>
           )}
+        </section>
         </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1938,7 +2147,7 @@ function CharacterList({
                   ['ti', 'character.ti'],
                   ['jing', 'character.jing'],
                   ['speed', 'character.speed'],
-                  ['ambition', 'character.ambition'],
+                  ['defectionBase', 'character.defectionBase'],
                   ['age', 'character.age'],
                   ['troops', 'character.troops'],
                   ['gold', 'character.gold'],
@@ -2063,10 +2272,7 @@ function CharacterList({
                 <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.ti}</td>
                 <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.jing}</td>
                 <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.speed}</td>
-                {/* 野心存於 Float 欄位（±0.5 增減），顯示取整與其他整數屬性一致 /
-                    Ambition lives in a Float column (±0.5 deltas); round for
-                    display so it matches the other integer stats */}
-                <td className="py-2 pr-3 text-gray-300 font-display text-right">{Math.round(char.ambition)}</td>
+                <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.defectionBase}</td>
                 <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.age}</td>
                 <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.troops}</td>
                 <td className="py-2 pr-3 text-gray-300 font-display text-right">{char.gold}</td>
@@ -2394,6 +2600,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                   <button
                     type="button"
                     onClick={() => onOpenPlace(p)}
+                    data-testid="place-list-row"
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-white/5"
                   >
                     {/* 勢力色塊在地點名左邊，與將領詳情的排列一致 /
@@ -2475,6 +2682,15 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
   return (
     <motion.div
       className={`relative w-full ${GM_MODAL} overflow-hidden`}
+      // 錄影腳本等這個元素來確認「地點詳情真的顯示出來了」。它以前是一個浮動彈出視窗，
+      // 錄影腳本等的是 `div.fixed.z-50`；改成側欄分頁內容之後那個選擇器就永遠配不上，
+      // 於是腳本只印一行 WARN、少拍一段影片，而且沒有人會注意到。
+      //
+      // The capture script waits on this to confirm the place detail actually rendered. It
+      // used to be a floating popup and the script waited for `div.fixed.z-50`; once it
+      // became side-panel tab content that selector could never match, so the script
+      // printed one WARN, recorded a shorter video, and nobody noticed.
+      data-testid="place-detail"
       initial={{ opacity: 0, x: 28 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 28 }}
@@ -2565,6 +2781,26 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                 const level = place[row.kind];
                 const per = buildingPerLevel(row.kind);
                 const cost = level >= BUILDING_MAX_LEVEL ? null : upgradeCost(level);
+                // 下一升到頂了嗎？只用來當開關——顯示的數字是 `buildingTotal(level + 1)`（**累積**值，
+                // 例如堡壘 1→2 是 +40%，不是 +20%），所以不能直接印這個的傳回值。
+                //
+                // Is the next upgrade possible? Used **only as the gate** — the number printed
+                // is `buildingTotal(level + 1)`, the **cumulative** effect (fortress 1→2 is
+                // +40%, not +20%), so this function's own return value must not be printed.
+                const nextGain = nextUpgradeGain(row.kind, level);
+                // 印的數字一律走 `placeEffectLabel`：市場與兵營印**這個地方每回合的總產出**
+                // （1 級 = 基礎 10 + 5 = 15），堡壘沒有「總產出」可言所以印累積百分比。
+                // 展開的等級表與等級圓點的 tooltip 也走同一個函式——以前行與圓點印的是這一棟
+                // 建築自己的貢獻，於是市場 1 級同時有「15 金錢 / 每回合」與「+5 金錢」兩個數字。
+                //
+                // Every printed number goes through `placeEffectLabel`: market and barracks
+                // print the **place's total per round** (level 1 = 10 base + 5 = 15), while
+                // fortress has no total and keeps its cumulative percentage. The expanded level
+                // table and the dots' tooltips go through the same function — the row and the
+                // dots used to print this one building's own contribution, so market level 1
+                // carried both "15 gold / round" and "+5 gold".
+                const currentLabel = placeEffectLabel(row.kind, level);
+                const nextLabel = placeEffectLabel(row.kind, level + 1);
                 const expanded = openBuilding === row.kind;
                 const affordable = adminChar !== null && adminChar.gold >= (cost ?? 0);
                 return (
@@ -2597,46 +2833,85 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                       onBlur={() =>
                         setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
                       }
-                      className={`w-full flex items-center gap-2 px-2.5 py-2 text-left transition-colors duration-150 ${
+                      className={`w-full flex flex-col gap-1 px-2.5 py-2 text-left transition-colors duration-150 ${
                         expanded ? 'bg-cyan-400/10' : 'hover:bg-white/5'
                       }`}
                     >
-                      {/* 等級是主要資訊，所以用等寬字 + active 色，無論展開與否都在 /
+                      {/* 第一行：等級、名稱、價格；第二行：「目前 → 下一級」。
+                          單行時市場那一列是 `1/5 市場 +15 金錢 → +20 金錢 升級費用 200`，
+                          剛好溢出 24rem 的面板 —— 而且溢出的是最右邊的價格，也就是最該讀到
+                          的那個數字。第二行只有兩個數字，任何面板寬度都放得下。
+                          箭頭留在第一行右緣，跟價格同一組，兩者是同一件事。
+
+                          Line one: level, name, price. Line two: "current → next". On one line
+                          the market row was `1/5 市場 +15 金錢 → +20 金錢 升級費用 200`, which
+                          overflowed the 24rem panel — and what overflowed was the price, the one
+                          number that most needs reading. Line two holds two numbers and fits any
+                          width. The chevron stays on line one beside the price, which is the
+                          same piece of information. */}
+                      <div className="flex items-center gap-2">
+                        {/* 等級是主要資訊，所以用等寬字 + active 色，無論展開與否都在 /
                           The level is the headline number, so it keeps the active colour
                           whether or not the table is expanded */}
-                      <span
-                        className={`font-display text-sm tabular-nums shrink-0 ${
-                          level > 0 ? 'text-cyan-300' : 'text-gray-500'
-                        }`}
-                      >
-                        {level}/{BUILDING_MAX_LEVEL}
-                      </span>
-                      <span className="text-base text-gray-200 shrink-0">{t(row.labelKey)}</span>
-                      <span className="flex-1 min-w-0" />
-                      <span className="text-sm text-gray-300 font-display tabular-nums shrink-0">
-                        {formatEffect(buildingTotal(row.kind, level), per.unit)}
-                      </span>
-                      {cost !== null ? (
                         <span
-                          className={`text-sm font-display tabular-nums shrink-0 ${
-                            affordable ? 'text-amber-300' : 'text-rose-300'
+                          className={`font-display text-sm tabular-nums shrink-0 ${
+                            level > 0 ? 'text-cyan-300' : 'text-gray-500'
                           }`}
-                          title={adminChar ? `${t('place.adminHas')} ${adminChar.gold}` : undefined}
                         >
-                          {t('character.gold')} {cost}
+                          {level}/{BUILDING_MAX_LEVEL}
                         </span>
-                      ) : (
-                        <span className="text-sm text-amber-300 shrink-0">{t('place.maxLevel')}</span>
-                      )}
-                      {/* 展開時的箭頭：折疊方向本身就是提示，不需要文字 / A chevron is the
-                          affordance here; the direction already says "this opens" */}
-                      <Ic
-                        className={`w-4 h-4 shrink-0 text-gray-500 transition-transform duration-200 ${
-                          expanded ? 'rotate-180' : ''
-                        }`}
-                      >
-                        <path d="m6 9 6 6 6-6" />
-                      </Ic>
+                        <span className="text-base text-gray-200 truncate">
+                          {t(row.labelKey)}
+                        </span>
+                        <span className="flex-1 min-w-0" />
+                        {cost !== null ? (
+                          <span
+                            className={`text-sm font-display tabular-nums shrink-0 ${
+                              affordable ? 'text-amber-300' : 'text-rose-300'
+                            }`}
+                            title={adminChar ? `${t('place.adminHas')} ${adminChar.gold}` : undefined}
+                          >
+                            {t('place.upgradeCost')} {cost}
+                          </span>
+                        ) : (
+                          <span className="text-sm text-amber-300 shrink-0">{t('place.maxLevel')}</span>
+                        )}
+                        {/* 展開時的箭頭：折疊方向本身就是提示，不需要文字 / A chevron is the
+                            affordance here; the direction already says "this opens" */}
+                        <Ic
+                          className={`w-4 h-4 shrink-0 text-gray-500 transition-transform duration-200 ${
+                            expanded ? 'rotate-180' : ''
+                          }`}
+                        >
+                          <path d="m6 9 6 6 6-6" />
+                        </Ic>
+                      </div>
+                      {/* 第二行：「目前 → 下一級」。箭頭是這裡唯一的說明——它說明右邊是
+                          「多花這筆錢會換到的東西」，而不是另一個並排的數字。
+                          第二行仍然自己 `flex-wrap`，所以就算面板再窄一點也不會溢出。
+
+                          Line two: "current → next". The arrow is the whole explanation — it
+                          says the right-hand number is what the money buys, not another figure
+                          sitting beside this one. Line two wraps on its own, so a narrower
+                          panel cannot push it over the edge either. */}
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className="text-sm text-gray-300 font-display tabular-nums shrink-0">
+                          {formatEffect(currentLabel.value, currentLabel.unit)}
+                        </span>
+                        {nextGain !== null && (
+                          <>
+                            <span className="text-gray-600 shrink-0" aria-hidden="true">
+                              →
+                            </span>
+                            <span
+                              className="text-sm text-cyan-300/90 font-display tabular-nums shrink-0"
+                              title={t('place.nextLevelEffect')}
+                            >
+                              {formatEffect(nextLabel.value, nextLabel.unit)}
+                            </span>
+                          </>
+                        )}
+                      </div>
                     </button>
                     {/* 一級一點：已達到的填滿，目前等級是 active 色，未達到的只剩外框。
                         數字不常駐——滑鼠停在點點上時用 tooltip 顯示，這樣一行只佔幾像素，
@@ -2662,7 +2937,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                                   ? 'bg-cyan-400/45'
                                   : 'border border-white/20 bg-transparent'
                             }`}
-                            title={`L${lvl} · ${formatEffect(buildingTotal(row.kind, lvl), per.unit)}`}
+                            title={`L${lvl} · ${formatEffect(placeEffectLabel(row.kind, lvl).value, placeEffectLabel(row.kind, lvl).unit)} / ${t('place.perRound')}`}
                           />
                           );
                         })}
@@ -2678,18 +2953,20 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           >
                           <ul className="space-y-0.5">
                             {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
-                              const out = placeOutputAt(row.kind, lvl);
+                              const out = placeEffectLabel(row.kind, lvl);
                               // 印的是**此地此刻每回合的總產出**，不是這一棟自己的貢獻：
                               // 市場 0 級時貢獻是 0，但地方照樣有基礎收入，印 0 會讓讀者
                               // 以為這棟建築一點用都沒有。堡壘沒有「總產出」，退回累積百分比。
+                              // 這裡與行內摘要、圓點 tooltip 共用同一個函式，三處不可能再各說各話。
                               //
                               // The **place's total per round** is printed, not this building's own
                               // contribution: at market level 0 the contribution is 0 while the
                               // place still earns its base income, and printing 0 would read as
                               // "this building is worthless". Fortress has no total, so it falls
-                              // back to the cumulative percentage.
-                              const value = out ? out.value : buildingTotal(row.kind, lvl);
-                              const unit = out ? out.unit : 'percent';
+                              // back to the cumulative percentage. The row summary and the dots'
+                              // tooltips share this function, so the three cannot drift apart.
+                              const value = out.value;
+                              const unit = out.unit;
                               return (
                                 <li
                                   key={lvl}
@@ -2701,10 +2978,26 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                                   <span className="flex-1">
                                     {formatEffect(value, unit)} / {t('place.perRound')}
                                   </span>
-                                  {/* 到這一級為止的累計花費，不是從上一級起算的一步 /
-                                      The running total to reach this level, not one step */}
+                                  {/* **升到這一級這一步的價錢**，不是「從 0 升到這裡」的累計。
+                                      這裡原本印的是累計（`totalCostToReach`），而 `build.ts`
+                                      實際收的是**一步**的價錢——於是同一個目標兩處印出不同
+                                      數字（1→2：這裡 300、卡片 200），而卡片才是收費的
+                                      那個。一張價格表卻不列價格，就是讀者回報的那個問題。
+                                      一張列出各級價格的表，若旁邊的卡片寫著另一個數字，
+                                      那個「另一個」才是錯的——所以價格跟著收費走。
+
+                                      The price of **this one step**, not the running total
+                                      from level 0. This used to print `totalCostToReach`
+                                      while `build.ts` charges a single step, so the same
+                                      target printed two different numbers side by side
+                                      (1→2: 300 here, 200 on the card) — and the card is
+                                      the one that gets charged. A price list that does not
+                                      list prices is the bug this fixes; the price follows
+                                      the charge. */}
                                   <span className="shrink-0 text-amber-300/80">
-                                    {lvl === 0 ? '—' : `${t('character.gold')} ${totalCostToReach(lvl)}`}
+                                    {lvl === 0
+                                      ? '—'
+                                      : `${t('place.upgradeCost')} ${costToReachLevel(lvl)}`}
                                   </span>
                                 </li>
                               );
@@ -2858,6 +3151,53 @@ function formatEffect(value: number, unit: 'percent' | 'gold' | 'troops'): strin
   if (unit === 'percent') return `+${Math.round(value)}%`;
   if (unit === 'gold') return `+${value} ${t('character.gold')}`;
   return `+${value}`;
+}
+
+/**
+ * 將領資料表的一列。
+ * One row of the leader's data table.
+ *
+ * `value` 是 ReactNode 而不是字串，因為「位置」那一列的值是**可點的按鈕**——它點下去
+ * 會把鏡頭移過去並開啟地點分頁。把它做成字串就得另外開一條路徑去處理那一列。
+ *
+ * `value` is a ReactNode rather than a string because the place row's value is a **clickable
+ * button** — it moves the camera and opens the place tab. Making it a string would mean a
+ * second code path for that one row.
+ *
+ * `note` 是 tooltip，只有**被規則改動過**的數值才會有：括號裡已經寫了增減量，那是結果；
+ * tooltip 說的是原因。
+ *
+ * `note` is the tooltip, and only a value **a rule has moved** carries one: the parenthetical
+ * already shows the change, which is the result; the tooltip gives the reason.
+ */
+interface StatRow {
+  label: string;
+  value: ReactNode;
+  note?: string;
+}
+
+/**
+ * 戰鬥力的顯示格式。
+ * How a combat ability is displayed.
+ *
+ * **只有被關係改動時**才多印括號裡的基礎值與差額（`24 (20+4)`），沒有改動時就是
+ * 乾淨的一個數字。括號是算式，所以不需要翻譯。
+ *
+ * The base and the difference are printed **only when relations moved the value**
+ * (`24 (20+4)`); otherwise it is a clean number. The parenthetical is arithmetic, so it
+ * needs no translation.
+ *
+ * **顯示的是「計算時真正使用的值」**，因為專案的規則是彈窗不得引用模擬沒有用到的數字
+ * ——戰報裡的算式也必須用同一個數字，否則兩邊對不上。
+ *
+ * It shows the value the **calculation actually uses**, because the rule is that a panel
+ * may not quote a number the simulation did not use — and the battle report has to use the
+ * same number or the arithmetic will not add up.
+ */
+function abilityText(base: number, effective: number): string {
+  if (effective === base) return String(base);
+  const diff = effective - base;
+  return `${effective} (${base}${diff > 0 ? '+' : '−'}${Math.abs(diff)})`;
 }
 
 /**

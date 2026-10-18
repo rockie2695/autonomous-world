@@ -18,7 +18,7 @@ function leader(overrides: Partial<AvatarCharacter> = {}): AvatarCharacter {
     ti: 12,
 speed: 18,
 
-    ambition: 10,
+    defectionBase: 10,
     age: 30,
     isKing: false,
     ...overrides,
@@ -145,11 +145,11 @@ describe('deriveAvatarTraits', () => {
     }
   });
 
-  it('should sharpen the brows for high ambition', () => {
+  it('should sharpen the brows for high defectionBase', () => {
     for (let i = 0; i < 30; i++) {
       const id = `a-${i}`;
-      expect(deriveAvatarTraits(leader({ id, ambition: 25 })).sharpBrow).toBe(true);
-      expect(deriveAvatarTraits(leader({ id, ambition: 8 })).sharpBrow).toBe(false);
+      expect(deriveAvatarTraits(leader({ id, defectionBase: 25 })).sharpBrow).toBe(true);
+      expect(deriveAvatarTraits(leader({ id, defectionBase: 8 })).sharpBrow).toBe(false);
     }
   });
 
