@@ -419,6 +419,8 @@ export function meanNeighbourDistance(
  * @param margin - 範圍往外擴張的比例 / Fraction to grow the extent by on side
  * @param radiusFactor - 宣稱半徑 = 半徑因子 × 最近鄰平均距離 / Claim radius = factor × mean neighbour distance
  * @param minForce - 佔有一格所需的最低力量 / Minimum force for a cell to count as held
+ * @param coreForce - 核心保證項的峰值力 / Peak force of the core-guarantee term
+ * @param coreRadiusFraction - 核心半徑 = 此比例 × 宣稱半徑 / Core radius = this fraction × the claim radius
  * @returns 密度場 / The field, or null when there are no sites
  */
 export function buildTerritoryField(
@@ -436,7 +438,29 @@ export function buildTerritoryField(
    * a few more places push further, and genuinely distant land still falls away
    * instead of smearing across the map.
    */
-  minForce = 0.12
+  minForce = 0.12,
+  /**
+   * 核心保證項的峰值力。0 = 關閉。每個地方在自己的核心半徑內對自己勢力多推一筆
+   * 峰值為此值的力，`argmax` 自然讓該格歸自己——弱勢力在家門口至少保住一小片可見色。
+   * 鄰近敵對地方每一個最多貢獻 1 點力（falloff 峰值是 1），所以 10 在核心內是
+   * 壓倒性的；極端密度下仍可能被疊加力蓋過，那是「強鄰居壓過弱勢力」的既有行為。
+   *
+   * Peak force of the core-guarantee term. 0 = off. Within its core radius each
+   * place adds up to this much extra force to its own faction, so `argmax` hands
+   * those cells to it — a weak faction keeps a small visible patch at its own
+   * doorstep. A rival place contributes at most 1 (the falloff's peak), so 10 is
+   * decisively dominant; extreme stacking can still swamp it, which is the
+   * existing "strong neighbour wins" behaviour.
+   */
+  coreForce = 0,
+  /**
+   * 核心半徑 = 此比例 × 宣稱半徑。用相對比例讓核心跟著地圖密度縮放：
+   * 密世界核心小、疏世界核心大，與宣稱半徑同一把尺 /
+   * Core radius = this fraction × the claim radius. A relative fraction keeps the
+   * core on the same scale as the claim itself: smaller in dense worlds, larger
+   * in sparse ones.
+   */
+  coreRadiusFraction = 0.35
 ): TerritoryField | null {
   const count = sites.length;
   if (count === 0) return null;
@@ -476,6 +500,10 @@ export function buildTerritoryField(
   const fullSpanY = spanY * (1 + margin * 2);
 
   const radius = Math.max(1e-6, radiusFactor * meanNeighbourDistance(sites));
+  // 核心保證半徑：與宣稱半徑同一把相對尺度，格網解析度變了核心大小也不變 /
+  // Core-guarantee radius: the same relative scale as the claim radius, so the
+  // core keeps its size however the grid resolution changes
+  const coreR = Math.max(1e-6, coreRadiusFraction * radius);
 
   // 解析度要讓「宣稱半徑」落在足夠多格子上，否則 upscale 之後邊界還是會有階梯。
   // 目標是半徑約等於 10 格；上限由 maxResolution 決定，2000 個地方時也不會太慢。
@@ -589,6 +617,25 @@ export function buildTerritoryField(
               // the "extent is decided by how much force" rule. Adjacent same-faction
               // places therefore fuse into one region with no internal seam.
               density[f] += w;
+              // 核心保證項：核心半徑內該地方對自己勢力多推一筆峰值 `coreForce` 的力，
+              // 平方衰減到 `d = coreR` 歸零（與 falloff 同一種 C1 形狀，邊界無折角）。
+              // 這讓 `argmax` 在地點家門口自然選它——弱勢力不被鄰近強勢力完全壓過。
+              // **不做**格網後處理硬翻格子：後處理會蓋掉無主之地遮罩刻意留白的格、
+              // 蓋出與力場語意不一致的方形硬邊，且核心大小會跟著格網解析度漂移。
+              //
+              // Core-guarantee term: inside its core radius a place adds up to
+              // `coreForce` of extra force to its own faction, falling off as a square
+              // to zero at `d = coreR` (the same C1 shape as `falloff`, so no corner
+              // at the rim). `argmax` then hands the place's doorstep to it naturally,
+              // and a weak faction is not fully swamped by a stronger neighbour.
+              // This is deliberately **not** a grid post-pass flipping cells: a
+              // post-pass paints over the blanks the unowned mask left on purpose,
+              // draws square hard edges that disagree with the field's semantics, and
+              // lets the core size drift with grid resolution.
+              if (d < coreR) {
+                const ct = 1 - (d / coreR) * (d / coreR);
+                density[f] += coreForce * ct;
+              }
               if (d < nearestOwned) nearestOwned = d;
             }
           }

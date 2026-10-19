@@ -445,19 +445,38 @@ export const CONFIG = {
   // `core` 是圓盤本身（由 sigma 畫），`edge` 是柔光的外圈。兩者必須成套共用，否則太陽會
   // 看起來像「一個核心配著別顆恆星的光暈」。
   //
-  // 刻意不選**深紅**與**深藍**：軌道才是勢力的通道（見 `MAP_STAR_ORBIT_*`），而太陽是
-  // 整個星系裡最大的一塊顏色。若太陽可以是任何顏色，勢力的深色軌道就會被誤讀成「一顆恆星」。
+  // ── `core` 必須自己帶得住這個類別，這是這一組值的重點 ────────────────────────────────
+  // 之前六個 `core` **全部都是白的**（離純白 0–37，兩個最接近的只差 7.2）。於是**圓盤本身
+  // 完全不帶類別資訊**：每一顆太陽都是一個白點，唯一的差別落在背後 16px、0.5 不透明度
+  // 的柔光上。而讀者認一顆星靠的正是**它的本體**，不是背後的光暈——所以實際看起來是
+  // 「一樣的白太陽，只是外套略有不同」。
   //
-  // Deliberately no deep red and no deep blue: the **orbits** are the faction channel (see
-  // MAP_STAR_ORBIT_*), and the sun is the largest block of colour in the system. If suns could
-  // be any colour, a dark faction's orbits would read as "a star".
+  // **The load-bearing rule: `core` must carry the class itself.** The six `core` values used
+  // to be *all white* (0–37 from pure white; the closest pair just 7.2 apart). The disc
+  // therefore carried no class information at all — every sun was a white dot and the only
+  // difference sat in a 16px, 0.5-alpha glow *behind* it. But a star is identified by its
+  // **body**, not by the halo behind it, so what you actually saw was "identical white suns
+  // wearing slightly different jackets". `mapShared.test.ts` now asserts the cores are
+  // separable, so they cannot quietly wash out again.
+  //
+  // ── 為什麼現在可以有顏色了 ───────────────────────────────────────────────────────────
+  // 舊的禁令是「不要深紅、不要深藍」，因為軌道是勢力的通道，怕太陽的顏色蓋掉它。真正的
+  // 衝突是**低明度的深色**，不是「有色」本身。所以現在的規則是**亮，而不是淡**：每個
+  // `core` 的亮度都在 149–255 之間（真實的亮星就是這樣），而太陽是 11px 的小圓盤、軌道是
+  // 細環——本體亮著、勢力色留在環上，兩者不會搶。
+  //
+  // The old rule banned **deep** red and blue because the orbits are the faction channel. The
+  // real conflict is **darkness**, not hue. So the rule is now "bright, not pale": every
+  // `core` sits at luminance 149–255 (which is how real bright stars look), while the sun is
+  // an 11px disc and the orbits are thin rings. The body glows; the faction colour stays on
+  // the rings. Neither has to yield.
   MAP_STAR_SUN_CLASSES: [
-    { core: '#fff8dc', edge: '#ff9a2e' }, // 橙星 / orange
-    { core: '#fffdf0', edge: '#ffc94d' }, // 黃星 / yellow
-    { core: '#fff4e2', edge: '#ff7a3d' }, // 橘紅星 / amber
+    { core: '#ff7d72', edge: '#ff3b4d' }, // 紅巨星 / red giant
+    { core: '#ffa348', edge: '#ff8c1a' }, // 橙星 / orange
+    { core: '#ffe27a', edge: '#ffc233' }, // 黃星 / yellow
     { core: '#ffffff', edge: '#ffe9b0' }, // 白星 / white
-    { core: '#f2f7ff', edge: '#bcd8ff' }, // 藍白星 / blue-white
-    { core: '#ffeede', edge: '#ff5f6d' }, // 紅巨星 / red giant
+    { core: '#bcd8ff', edge: '#7fb0ff' }, // 藍白星 / blue-white
+    { core: '#7fc4ff', edge: '#3fa9e8' }, // 冰藍星 / ice
   ],
   MAP_STAR_SUN_GLOW: 16,          // 太陽外柔光半徑（px）/ Sun outer glow radius (px)
   MAP_STAR_SUN_GLOW_ALPHA: 0.5,   // 柔光不透明度 / Glow opacity
@@ -1010,7 +1029,23 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // 每個地方的宣稱半徑 = 半徑因子 × 最近鄰平均距離 / Claim radius per place = factor × mean
   // nearest-neighbour distance. A *relative* scale, because world density changes:
   // a fixed radius smears everything when places are dense and vanishes when sparse
-  TERRITORY_BLOB_RADIUS: 2.4,
+  TERRITORY_BLOB_RADIUS: 3.0,
+  // 核心保證項：每個地方在自己的核心半徑內對自己勢力多推最高此值的力，`argmax`
+  // 讓家門口那幾格自然歸自己——弱勢力（如只有兩個地方的神鷹海國）不被鄰近強勢力
+  // 完全壓到消失。鄰近敵對地方每個最多貢獻 1（falloff 峰值），10 是壓倒性的。
+  // 0 = 關閉。
+  // Core-guarantee term: within its core radius each place adds up to this much
+  // extra force to its own faction, so `argmax` hands its doorstep to it — a weak
+  // faction (e.g. 神鷹海國 with two places) is not fully swamped out of sight by a
+  // stronger neighbour. A rival place contributes at most 1 (the falloff peak), so
+  // 10 is decisively dominant. 0 = off.
+  TERRITORY_CORE_FORCE: 10,
+  // 核心半徑 = 此比例 × 宣稱半徑。相對比例讓核心與宣稱用同一把尺：密世界核心小、
+  // 疏世界核心大，且不隨格網解析度漂移。
+  // Core radius = this fraction × the claim radius, so the core stays on the
+  // claim's own scale (smaller when dense, larger when sparse) and never drifts
+  // with grid resolution.
+  TERRITORY_CORE_RADIUS: 0.35,
   // 每軸的格數上限；實際解析度還會再依地方數量縮小 /
   // Cap on cells per axis; the real resolution also scales down with place count
   // 每軸的格數上限。格數越多，邊界曲線越平滑（放大後不會看到階梯），但密度場是
@@ -1186,7 +1221,7 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // faction size has no effect on the area. This is what makes accumulated force
   // decide reach: a lone place holds ~65% of the radius, four together ~83%. Raise
   // it for tighter, clearer borders; lower it for sprawling, overlapping regions.
-  TERRITORY_MIN_FORCE: 0.12,
+  TERRITORY_MIN_FORCE: 0.05,
   // 領地視圖裡，游標離地方節點多近算「指到它」。用**螢幕像素**而不是圖座標距離：
   // 這個視圖的節點很小而且會隨縮放變大變小，用圖座標的話同一個門檻在拉遠時會大到
   // 整片區域都被當成「指到某個地方」，於是勢力提示永遠出來不了。
@@ -1209,6 +1244,19 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   MAP_UNOWNED_COLOR: '#374151',
   /** 據點的預設色（無勢力）/ the default node colour when unaffiliated */
   MAP_UNOWNED_NODE_COLOR: '#4a5568',
+  /**
+   * 地方提示最多列出幾位將領的名字，超出的收成「另有 N 位」。
+   *
+   * 提示是一個跟著游標走的小面板，而一個地方可以站著很多位將領。全部列出會讓提示高到
+   * 蓋住地圖本身——那正好抵消了提示存在的理由，所以一定要有上限。
+   *
+   * How many leader names a place tooltip lists before collapsing the rest into "+N more".
+   *
+   * The tooltip is a small panel that follows the cursor, and a place can hold a lot of
+   * leaders. Listing them all makes it tall enough to cover the map, which defeats the point
+   * of having a tooltip at all, so this needs a ceiling.
+   */
+  MAP_TOOLTIP_MAX_LEADERS: 4,
   /** 勢力標籤與地名的螢光青 / the neon cyan used for place labels */
   MAP_LABEL_COLOR: '#1EBDD6',
   /** 沒有勢力名稱時的預設文字色 / default text colour when a faction has no name */

@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, Fragment, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import { motion, AnimatePresence, useReducedMotion, useSpring } from 'motion/react';
@@ -373,6 +373,29 @@ export default function GamePage() {
     },
     staleTime: 30 * 1000,
     enabled: canFetchRound,
+    // ── 換回合時**沿用上一回合的畫面**，不要整頁閃一下 ──────────────────────────────
+    // 沒有這裡的話，按「下一回合」或點時間軸的回合，`queryKey` 變了 → `worldState` 變成
+    // `undefined` → 上面 `if ((isLoading || worldInfoPending) && !worldState)` 成立 → **整個
+    // 頁面換成骨架畫面**，`SigmaMap` 跟著被卸載重掛。於是 sigma 實例整個重建：星雲、
+    // 覆蓋層、rAF 迴圈全部重來，鏡頭回到預設視角。看起來就是「整個畫面重新整理了一次」。
+    //
+    // `keepPreviousData` 讓舊資料在新資料到達之前繼續留在畫面上，於是地圖**不會被卸載**：
+    // sigma 實例、鏡頭、覆蓋層與動畫全部原封不動，只是節點換成新回合的內容。這也正好
+    // 補上 AGENTS.md 記錄的那條規則——鏡頭要在資料更新後活下來——因為根本沒有「更新後」，
+    // 期間連元件都沒有被卸載。
+    //
+    // Without this, pressing "Next Round" or picking a round changes the `queryKey`, so
+    // `worldState` becomes `undefined`, so the whole page swaps to the skeleton and
+    // **`SigmaMap` unmounts with it**. Sigma is then rebuilt from scratch — galaxy, overlays,
+    // every rAF loop — and the camera returns to its default view. It reads as "the screen
+    // refreshed".
+    //
+    // `keepPreviousData` keeps the previous round on screen until the new one arrives, so the
+    // map is never unmounted: the sigma instance, camera, overlays and animations all survive,
+    // and only the node set changes. That also satisfies the rule AGENTS.md records — the
+    // camera must survive a data refresh — because for the whole transition there is no
+    // unmount at all.
+    placeholderData: keepPreviousData,
   });
 
   const errorMessage = error instanceof Error ? error.message : null;
@@ -1078,6 +1101,9 @@ onTabChange={(tab) => {
             placeName={
               (worldState?.places ?? []).find((pl) => pl.id === detailChar.placeId)?.name ?? '—'
             }
+            controlledPlaceName={
+              (worldState?.places ?? []).find((pl) => pl.administratorId === detailChar.id)?.name ?? '—'
+            }
             kingLoyalty={(() => {
               const f = (worldState?.factions ?? []).find((x) => x.id === detailChar.factionId);
               const king = f?.kingId
@@ -1599,6 +1625,7 @@ function LeaderDetail({
   onOpenLeader,
   characters,
   onFocusPlace,
+  controlledPlaceName,
 }: {
   char: WorldState['characters'][0];
   faction: WorldState['factions'][0] | null;
@@ -1619,6 +1646,8 @@ function LeaderDetail({
   /** 點「位置」時把鏡頭移過去並開啟地點分頁 /
    *  Called when 位置 is clicked: move the camera there and open the 地點 tab */
   onFocusPlace: (placeId: string) => void;
+  /** 這個角色管理的**地方**（`Place.administratorId === char.id`）/ The place this leader administers */
+  controlledPlaceName: string;
 }) {
   // 關係分頁預設關閉：多數時候讀者來看的是數值，關係是「有興趣才去看」的。
   // The relations tab starts closed: most readers come for the numbers, and the relations
@@ -1744,6 +1773,21 @@ function LeaderDetail({
               className="block max-w-full text-xs text-cyan-300 hover:text-cyan-200 hover:underline transition-colors duration-150 truncate text-left"
             >
               {placeName}
+            </button>
+          ),
+        },
+        {
+          label: t('character.administeredPlace'),
+          // 領導所管理的**地方**：就是 `Place.administratorId` 指向他的那個地點。
+          // 無主勢力的國王或沒有管理任何地方時顯示「無」。
+          value: (
+            <button
+              type="button"
+              disabled={controlledPlaceName === '—'}
+              onClick={() => onFocusPlace(char.placeId)}
+              className="block max-w-full text-xs text-cyan-300 hover:text-cyan-200 hover:underline transition-colors duration-150 truncate text-left"
+            >
+              {controlledPlaceName}
             </button>
           ),
         },
@@ -2595,6 +2639,10 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
             >
               {shown.map((p) => {
               const owner = factions.find((f) => f.id === p.factionId);
+              const adminId = p.administratorId;
+              const adminChar = (characters ?? []).find(
+                (c: any) => c.id === adminId
+              );
               return (
                 <li key={p.id}>
                   <button
@@ -2613,6 +2661,14 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                     <span className="min-w-0 flex-1 truncate text-sm text-gray-200">
                       {p.name}
                     </span>
+                    {adminChar ? (
+                      <span
+                        className="shrink-0 text-[11px] text-cyan-300/90 truncate max-w-[8rem]"
+                        title={t('place.administeredBy', { name: adminChar.name })}
+                      >
+                        👤 {adminChar.name}
+                      </span>
+                    ) : null}
                     {!owner && (
                       <span className="shrink-0 text-xs text-gray-500">
                         {t('place.unowned')}

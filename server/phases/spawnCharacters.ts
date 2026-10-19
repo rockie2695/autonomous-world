@@ -135,6 +135,17 @@ export async function spawnCharacters(
     });
 
     // 記錄生成事件 / Log the spawn event
+    //
+    // `placeName` 與 `placeId` **一起**寫下來：日誌要回答「秦虎 在**哪裡**誕生」，而地名
+    // 當時就在手上（`place` 是這個迴圈揀出來的），所以存起來沒有任何成本。
+    // 只存 id 的話，日誌就必須在讀取時回查資料庫才拿得到名字——而舊事件根本不會有那個名字，
+    // 讀起來會是一個沒有地名的空白按鈕。
+    //
+    // `placeName` travels with `placeId` rather than being looked up later: the log answers
+    // "where was 秦虎 born", the name was already in hand (`place` is the row this loop picked),
+    // and storing it costs nothing. With only the id the log would have to hit the database on
+    // read, and rows written before this change would still have no name — a clickable button
+    // with a blank label.
     await prisma.event.create({
       data: {
         worldId,
@@ -144,6 +155,7 @@ export async function spawnCharacters(
           charId: created.id,
           charName: name,
           placeId: place.id,
+          placeName: place.name,
         },
       },
     });
@@ -158,7 +170,8 @@ export async function spawnCharacters(
     // 4. 否則不動 / Otherwise no change
     // 5. 地點若在行政官冷卻期（剛換過領導）→ 一律不動 /
     //    Place in the admin-change cooldown (leader just changed) → no change
-    if (!isAdminChangeCoolingDown(place.adminChangedRound, round)) {
+    // 臥位（無行政官）直接指派，不受冷卻期阻擋；有行政官才依能力比較並受冷卻期限制
+    if (place.administratorId === null || !isAdminChangeCoolingDown(place.adminChangedRound, round)) {
       await assignSpawnPlaceAdmin(worldId, round, place, {
         id: created.id,
         name,

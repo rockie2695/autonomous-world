@@ -247,17 +247,42 @@ export function EventLog({
   );
 
   /**
-   * 舊的在上、新的在下（聊天式）。
+   * 舊的在上、新的在下（聊天式）。**直接畫 API 的順序，不要反轉。**
    *
-   * 來源 API 是新到舊，所以直接畫會讓最新的一條在最上面；使用者要往**上**捲才看得到
-   * 最新的訊息。這裡反轉成由舊到新，於是「往上捲 = 看更早」與「最新在底部」一致。
-   * Oldest on top, newest at the bottom, chat-style.
+   * 這個 `.reverse()` 原本是建立在一個錯誤前提上：註解說「來源 API 是新到舊」。
+   * 但 `/api/world/events` 的回合內排序**一直是** `createdAt: 'asc'`，也就是舊到新——
+   * 只有全回合分支寫過 `round: 'desc'`，那是**回合之間**的順序，不是回合內的。
+   * 於是這個反轉把每一回合都翻成新的在上，日誌讀起來是「升級 → 佔領 → 任命 → 移動 →
+   * 購兵 → 收益」：錢賺在最後，升級在最前。因果順序整個倒過來。
    *
-   * The API returns newest-first, so drawing it as-is puts the newest row at the very top
-   * and makes the reader scroll *up* to reach it. Reversing puts the newest at the bottom,
-   * so "scroll up for older" and "new messages arrive below" are the same gesture.
+   * 它也讓同一個檔案裡的其他註解全部自相矛盾：下面 `shown` 取**尾端**是為了「一進去看到
+   * 最新的那一段」，而底部自動捲動也是為了停在最新的事件——兩者都只有在順序由舊到新時才
+   * 成立。加上反轉之後，尾端變成最舊的一批，`hasOlder` 也答錯了。
+   *
+   * API 現在兩種模式都統一由舊到新，所以前端**不需要**任何反轉：最舊的在頂上、最新的在
+   * 最下面，往上捲＝看更早，新事件從底下長出來。回合內也因此是因果順序。
+   *
+   * Oldest on top, newest at the bottom, chat-style. **Draw the API's order as-is — do not
+   * reverse it.**
+   *
+   * This `.reverse()` rested on a false premise: its comment claimed the API returns
+   * newest-first. But `/api/world/events` has *always* ordered within a round by
+   * `createdAt: 'asc'` — oldest to newest. Only the all-rounds branch ever wrote
+   * `round: 'desc'`, and that is the order *between* rounds, not within one. The reversal
+   * therefore flipped every round to newest-first, and the log read "upgrade → capture →
+   * appointed → moved → bought → income": the money earned last, the upgrade first. The
+   * causal order was exactly inverted.
+   *
+   * It also made the rest of this file contradict itself. `shown` below deliberately takes
+   * the **tail** so the reader lands on the newest slice, and the auto-scroll pins to the
+   * bottom for the same reason — both only hold when the order runs oldest to newest. With
+   * the reversal in place the tail became the oldest slice and `hasOlder` answered wrong.
+   *
+   * The API now returns oldest-to-newest in both modes, so the client needs no reversal at
+   * all: the oldest row is at the top, the newest at the bottom, scrolling up goes back in
+   * time, new rows arrive underneath — and within a round the rows are causal.
    */
-  const ordered = useMemo(() => [...filtered].reverse(), [filtered]);
+  const ordered = useMemo(() => filtered, [filtered]);
 
   /**
    * 顯示的是 `ordered` 的**最後** visibleCount 筆，而不是前 visibleCount 筆。
@@ -459,7 +484,18 @@ export function EventLog({
           place: placeNode(p.placeId, p.placeName),
         });
       case 'CHARACTER_SPAWNED':
-        return fillTemplate(t('events.spawnDesc'), { character: leaderNode(p.charId, p.charName) });
+        // 「在哪裡誕生」是讀者接下來一定會問的問題：這個勢力多了一個人，而那個人的位置
+        // 決定了他下一回合能做什麼。只印名字等於要讀者自己去地圖上找。
+        // 缺 `placeName`（本次改動之前的事件）時退回只有名字，而不是印出一個空白的地名。
+        //
+        // "Where" is the obvious next question: this faction has gained a person, and where that
+        // person stands decides what they can do next round. Printing the name alone sends the
+        // reader hunting across the map for it. Rows written before this change carry no
+        // `placeName`, so they fall back to the name alone rather than rendering a blank place.
+        return fillTemplate(t('events.spawnDesc'), {
+          character: leaderNode(p.charId, p.charName),
+          place: placeNode(p.placeId, p.placeName),
+        });
       case 'CHARACTER_MOVED':
         return fillTemplate(t('events.moveDesc'), {
           character: leaderNode(p.charId, p.charName),
@@ -509,7 +545,7 @@ export function EventLog({
         // part for the player to guess.
         const oldName = typeof p.oldFactionName === 'string' ? p.oldFactionName : null;
         const newName = typeof p.newFactionName === 'string' ? p.newFactionName : null;
-        const founded = p.reason === 'created_new_faction';
+        const founded = p.reason === 'created_new_faction' || (p.reason === 'admin_defection' && !!newName);
         return (
           <>
             {fillTemplate(t('events.defectionDesc'), {

@@ -59,29 +59,53 @@ export async function GET(request: NextRequest) {
   }
 
   // 取得事件（單一回合或所有回合）/ Fetch events (single round or all rounds)
-  // 全部模式依回合倒序、回合內依建立時間正序（新的在前）/
-  // All mode: round desc, createdAt asc within a round (newest round first)
+  //
+  // 兩種模式都**由舊到新**（聊天式）：回合升冪、回合內依建立時間。
+  // 所有回合的模式原本是 `round: 'desc'`，配合前端的 `.reverse()` 剛好也是由舊到新；
+  // 但那兩個寫法互相依賴，只要其中一邊改了就會整個翻面——而且單一回合分支根本沒有
+  // `desc`，所以同一個 endpoint 對兩種查詢會給出**相反**的順序。這裡只留一種順序。
+  //
+  // Both modes are **oldest to newest** (chat-style): round ascending, then createdAt within
+  // the round. The all-rounds mode used to say `round: 'desc'` and rely on the client's
+  // `.reverse()` to land back on oldest-first — two halves depending on each other, so
+  // changing either one flips the whole thing. Worse, the single-round branch had no `desc`
+  // at all, so one endpoint returned **opposite** orders depending on the query. One order
+  // now, no reversal on either side.
+  //
+  // `id` 是最後的破平手，而且不是裝飾：Postgres 的 timestamp 比較到毫秒，同一回合裡
+  // 連續寫入的事件常常落在同一毫秒，沒有這一層排序它們的先後是**未定義**的。這正是
+  // 「順序有時候對、有時候錯」而不是穩定錯掉的原因。
+  //
+  // The `id` tiebreak is load-bearing, not decorative: Postgres compares timestamps at
+  // millisecond resolution, and events written back to back within a round routinely land in
+  // the same millisecond, leaving their order **undefined** without it. That is what makes an
+  // ordering bug look intermittent instead of consistently wrong.
   const events = await prisma.event.findMany({
     where: {
       worldId: world.id,
       ...(round !== undefined ? { round } : {}),
     },
-    orderBy:
-      round !== undefined
-        ? { createdAt: 'asc' }
-        : [{ round: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    orderBy: [{ round: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
   });
 
-  // 讀取時 enrich：CHARACTER_MOVED 只存 placeId，補上地名（讀取時 join 讓
-  // 舊事件也能顯示地名，不需回填資料庫）/
-  // Read-time enrichment: CHARACTER_MOVED stores only placeIds — join place
-  // names here so LEGACY events also render names without a DB backfill.
+  // 讀取時 enrich：只存 placeId 的事件補上地名（讀取時 join 讓舊事件也能顯示地名，
+  // 不需回填資料庫）。`CHARACTER_SPAWNED` 與 `CHILD_BORN` 的 `placeName` 雖然已經隨事件
+  // 一起寫入，但**舊事件沒有**，所以這裡照樣由 id 補名——否則那幾回合的「誕生於」會是
+  // 一個沒有文字的按鈕。
+  //
+  // Read-time enrichment: events that store only a placeId get the name joined here, so legacy
+  // rows render names without a DB backfill. `CHARACTER_SPAWNED` and `CHILD_BORN` now write
+  // `placeName` alongside the id, but rows written before that do not, so the name is still
+  // resolved by id here — otherwise those rounds' birthplace would be a button with no label.
   const movedPlaceIds = new Set<string>();
   for (const event of events) {
     if (event.type === 'CHARACTER_MOVED') {
       const data = event.data as { fromPlaceId?: string; toPlaceId?: string };
       if (data.fromPlaceId) movedPlaceIds.add(data.fromPlaceId);
       if (data.toPlaceId) movedPlaceIds.add(data.toPlaceId);
+    } else if (event.type === 'CHARACTER_SPAWNED' || event.type === 'CHILD_BORN') {
+      const data = event.data as { placeId?: string; placeName?: unknown };
+      if (data.placeId) movedPlaceIds.add(data.placeId);
     }
   }
 
@@ -139,7 +163,21 @@ export async function GET(request: NextRequest) {
         ? (data as { fromPlaceId?: string; toPlaceId?: string })
         : null;
 
-    if (!moved && !charId) return event;
+    // 出生地只有**一個** id，所以不像 CHARACTER_MOVED 需要兩個欄位；而且只在事件本身
+    // 沒有名稱時才補——已寫入 `placeName` 的新事件直接沿用它，不覆蓋。
+    //
+    // A birthplace has only **one** id, so unlike CHARACTER_MOVED there is no second field —
+    // and it is only filled when the event does not already carry a name, so rows written with
+    // `placeName` keep theirs rather than being overwritten.
+    const spawnPlace =
+      placeNameById &&
+      (event.type === 'CHARACTER_SPAWNED' || event.type === 'CHILD_BORN') &&
+      typeof data.placeId === 'string' &&
+      typeof data.placeName !== 'string'
+        ? { placeId: data.placeId }
+        : null;
+
+    if (!moved && !charId && !spawnPlace) return event;
     return {
       ...event,
       data: {
@@ -154,6 +192,9 @@ export async function GET(request: NextRequest) {
                 ? placeNameById!.get(moved.toPlaceId) ?? null
                 : null,
             }
+          : {}),
+        ...(spawnPlace
+          ? { placeName: placeNameById!.get(spawnPlace.placeId) ?? null }
           : {}),
       },
     };

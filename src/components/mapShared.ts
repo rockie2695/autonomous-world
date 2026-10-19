@@ -268,6 +268,15 @@ export interface Faction {
   color: string;
   alive: boolean;
   collapsing: boolean;
+  /**
+   * 君王 id。地點提示要靠它回答「控制這個地方的勢力，其君主是誰」——而且那**不是**這個
+   * 地方的行政官。兩者經常是不同的人，合成一列會讓人誤以為地方與勢力共用一個首腦。
+   *
+   * King id. The place tooltip needs it to answer "who rules the faction controlling this
+   * place" — and that is **not** the place's administrator. The two are routinely different
+   * people, and collapsing them reads as though place and faction share one head.
+   */
+  kingId: string | null;
 }
 
 export interface Road {
@@ -280,6 +289,15 @@ export interface Character {
   id: string;
   name: string;
   placeId: string;
+  /**
+   * 所屬勢力。勢力提示的「將領數」依它計算，而不是依人站在哪個地方——一個還活著、
+   * 但已離開本勢力地盤的將領仍然算這個勢力的人。
+   *
+   * The faction this leader belongs to. The faction tooltip's leader count is computed from
+   * it rather than from where the person stands: someone still alive but no longer on this
+   * faction's ground is still its person.
+   */
+  factionId: string | null;
   troops: number;
   gold: number;
   isKing: boolean;
@@ -348,7 +366,6 @@ export interface PlaceTooltip {
   y: number;
   place: Place;
   faction: Faction | null;
-  characterCount: number;
   /**
    * 住在這裡的存活將領**各自帶著的兵力總和**，不含 `place.garrison`。
    *
@@ -362,7 +379,53 @@ export interface PlaceTooltip {
    * node size legible: the reader can see where it came from.
    */
   leaderTroops: number;
+  /**
+   * 這個地方的**行政官**（總督）。無主之地或還沒任命時是 `null`。
+   *
+   * 提示原本完全沒有這一項：地方有名字、有勢力色、有兵力，卻看不出**誰在管這個地方**。
+   * 而「誰在管」正是讀者第一個想知道的問題——它決定後面每一個數字是誰的產出。
+   *
+   * The place's **administrator**. `null` for unowned land or an unassigned place.
+   *
+   * The tooltip had no such line at all: a place had a name, a faction colour and troop
+   * counts, but nothing said *who runs it* — which is the reader's first question, because it
+   * decides whose output every other number on the panel is.
+   */
+  administratorName: string | null;
+  /**
+   * 控制這個地方的**勢力之君主**。無主之地是 `null`。
+   *
+   * 與行政官分開印，因為兩者經常**不是同一個人**：行政官是被任命的治理者，君主是勢力
+   * 的最高權力。合併成一列會讓讀者以為地方與勢力共享同一個首腦。
+   *
+   * The **ruler of the controlling faction**. `null` for unowned land.
+   *
+   * Kept separate from the administrator because the two are routinely *not the same person*:
+   * the administrator is the appointed governor, the king is the faction's highest authority.
+   * Collapsing them into one line reads as though place and faction share a single head.
+   */
+  factionRulerName: string | null;
+  /**
+   * 住在這裡的存活將領，**依兵力由大到小**。行政官與君主也在其中（用旗標標出），
+   * 因為把某個人單獨印一次、又在這份名單裡出現第二次，只會讓讀者以為是兩個人。
+   *
+   * Living leaders based here, **largest troop count first**. The administrator and the ruler
+   * are *in* this list (flagged), because printing one of them separately and then again in
+   * the list makes the reader think they are two different people.
+   */
+  leaders: PlaceLeader[];
   linkedPlaces: string[];
+}
+
+/** 提示裡列出的一位將領 / One leader listed in the tooltip */
+export interface PlaceLeader {
+  id: string;
+  name: string;
+  troops: number;
+  /** 此人是勢力君主 / This leader is a faction's ruler */
+  isKing: boolean;
+  /** 此人是這個地方的行政官 / This leader administers this place */
+  isAdministrator: boolean;
 }
 
 /**
@@ -386,6 +449,36 @@ export interface FactionTooltip {
   color: string;
   /** 該勢力控制的**地方**數（不是格子數）/ Places this faction owns (not cell count) */
   placeCount: number;
+  /**
+   * 勢力總兵力 = 該勢力所有地方的「駐軍 + 將領兵力」總和。
+   *
+   * **與地方提示和節點大小是同一個口徑。** 勢力提示若改用別的定義（例如只有駐軍），
+   * 讀者就會看到「這個勢力 300 兵」而點進某地寫「將領兵力 200」，兩個數字推不出關係。
+   *
+   * The faction's total troops: `garrison + leader troops` summed over all its places.
+   *
+   * **The same basis as the place tooltip and the node size.** A different definition here
+   * (garrison only) would show "this faction has 300 troops" next to a place reading
+   * "leader troops 200", with no way to relate the two numbers.
+   */
+  troops: number;
+  /**
+   * 勢力的**存活**將領人數，依 `factionId` 算而不是依站在哪個地方——一個還活著、
+   * 但已離開本勢力地盤的將領仍然算這個勢力的人。這與勢力排行同一口徑。
+   *
+   * Living leaders in this faction, counted by `factionId` rather than by where they stand —
+   * someone still alive but no longer standing on this faction's ground is still its person.
+   * The same basis as the faction ranking.
+   */
+  leaderCount: number;
+  /**
+   * 勢力君主的名字。`kingId` 指向的角色已死、或快照早於王位繼承時會是 `null`，
+   * 那就整列不印，而不是印一個空白。
+   *
+   * The ruler's name. `null` when `kingId` points at a dead character, or in a snapshot from
+   * before throne inheritance existed; then the row is omitted rather than printed blank.
+   */
+  kingName: string | null;
 }
 
 export type Tooltip = PlaceTooltip | FactionTooltip;

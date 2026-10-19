@@ -2212,6 +2212,32 @@ the Stellaris / CK3 idea. The territory is a **translucent tint over the map**: 
 roads stay opaque and unowned land is never coloured, so topography and territory
 read at the same time.
 
+#### 勢力提示的三個數字 / The faction tooltip's three numbers
+
+勢力提示回答的是「這塊地是誰的、靠什麼撐著」，因此除了地方數，還印**總兵力**、
+**將領數**與**君主**。原本只有地方數，於是勢力排行與雷達都顯示著地圖從未呈現的數字，
+三個面板對同一個勢力各說各話。
+
+The faction tooltip answers "whose ground is this, and what holds it up", so beyond the
+place count it also prints **total troops**, **leader count** and the **ruler**. It carried
+only a place count before, so the faction ranking and the radar showed numbers the map
+never displayed and three panels disagreed about the same faction.
+
+| 欄位 / field | 來源 / source | 為這樣定義 / why |
+|---|---|---|
+| `troops` | 該勢力所有地方的 `garrison + 將領兵力` / `garrison + leader troops` over all its places | **與地方提示和節點大小同一個口徑。** 若只算駐軍，讀者會看到「這個勢力 300 兵」而點進某地寫「將領兵力 200」，兩個數字推不出關係 / **The same basis as the place tooltip and the node size.** Garrison-only would show "300 troops" beside a place reading "leader troops 200", with no way to relate them |
+| `leaderCount` | 依 `factionId` 計算存活將領 / living leaders counted by `factionId` | 還活著但已離開本勢力地盤的人仍然算這個勢力的人 —— 與勢力排行同一口徑 / Someone alive but no longer standing on this faction's ground is still its person, which is what the ranking also uses |
+| `kingName` | `faction.kingId` → `characters` 查找 / resolved through a `characters` lookup | 沒有君主時**整列不印**，而不是印「無」；且與地方提示的行政官**分開兩列** / Omitted entirely when there is none rather than printed as "none", and deliberately a **separate row** from the place tooltip's administrator |
+
+已對資料庫驗證：31 駐軍 + 81 將領兵力 = 提示印出的 112。`troopsAtPlace` 是在領地 effect 裡
+重算的，而不是與建圖那一趟共用快取 —— 兩份獨立快取必定有一份會過期，而勢力提示會安靜地
+少報兵力。
+
+Verified against the database: 31 garrison + 81 leader troops = the 112 the tooltip printed.
+`troopsAtPlace` is recomputed inside the territory effect rather than shared with the
+graph-build pass: two independent caches means one goes stale, and the faction tooltip
+silently under-reports its troops.
+
 `src/lib/territory.ts` 是**純邏輯**，所以可以在專案的 `node` vitest 環境下直接測：
 
 ```typescript
@@ -2750,6 +2776,121 @@ share **one size**. Rank is carried by material, the dark rim and the detailing 
 the heavy band, stitching for the worn one), not by extent — a smaller mid/low guard made the
 low band's signal "almost invisible" rather than "weak", and at the 40px list size that is
 where the only ti signal lives.
+
+### 事件日誌的順序 / Event log ordering
+
+事件誌**由舊到新**讀，而這個順序就是因果順序：收益 → 購兵 → 移動 → 佔領 → 任命 → 升級。
+這裡有三個**各自獨立**的缺陷，必須同時修 —— 只修顯示層等於把另外兩個**藏起來**。
+
+The log reads **oldest to newest**, and that order is causal: earn → buy → move → capture →
+appointed → upgrade. Three **independent** defects had to be fixed together, because repairing
+the display alone would *hide* the other two rather than repair them.
+
+**1. 前端把一個本來就已經是舊到新的陣列反轉。**
+`EventLog.tsx` 原本是 `[...filtered].reverse()`，而它的註解說「來源 API 是新到舊」。那是錯的：
+`/api/world/events` 回合內**一直**是 `createdAt: 'asc'`；只有全回合分支寫過 `round: 'desc'`，
+而那是**回合之間**的順序。於是日誌讀成「升級 → 佔領 → 任命 → 移動 → 購兵 → 收益」—— 錢賺在
+最後、升級在最前。它也讓同一個檔案自相矛盾：`shown` 刻意取**尾端**（「一進去看到最新的一段」）、
+底部自動捲動（停在最新），兩者只有在由舊到新時才成立；加上反轉之後尾端變成最舊的一批，
+`hasOlder` 也答錯了。**不要再加回去。**
+
+`EventLog.tsx` used to reverse an array that was *already* oldest-first. Its comment claimed the
+API returns newest-first, but the route has always sorted within a round by `createdAt: 'asc'`;
+only the all-rounds branch ever wrote `round: 'desc'`, and that is the order *between* rounds. The
+log therefore read "upgrade → capture → appointed → moved → bought → income". It also made the
+rest of the file self-contradictory: `shown` deliberately takes the **tail** so the reader lands
+on the newest slice, and the auto-scroll pins to the bottom, which only hold oldest-first — with
+the reversal the tail became the *oldest* slice and `hasOlder` answered wrong.
+
+**2. 同一個 endpoint 依查詢方式回傳相反的順序。**
+
+```typescript
+// 兩種模式統一 / both modes, one order
+orderBy: [{ round: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }]
+```
+
+`id` 破平手是**必要的**，不是裝飾：Postgres 的 timestamp 比較到毫秒，同一回合裡連續寫入的事件
+經常落在同一毫秒，沒有它先後是**未定義**的。這正是「順序有時候對、有時候錯」而不是穩定錯掉的
+原因。
+
+The `id` tiebreak is load-bearing: Postgres compares timestamps at millisecond resolution, and
+events written back to back within a round routinely land in the same millisecond, leaving their
+order *undefined* without it. That is what makes an ordering bug look intermittent rather than
+consistently wrong.
+
+**3. 模擬把任命寫在佔領之前。**
+`server/phases/battle.ts` 原本先 `grantAdmin()` 再寫 `PLACE_CAPTURED`，所以日誌讀成先「被任命為
+某地行政官」後「佔領某地」。兩者都是循序的 `await`、沒有競爭，所以資料庫裡的先後**完全**由
+陳述順序決定。對調之後遊戲行為不變：行政官仍在 build 階段（第 11 階段）之前到位，所以「當回合
+佔領、當回合升級」依然成立，改變的只有日誌裡的先後。
+
+`server/phases/battle.ts` called `grantAdmin()` *before* the `PLACE_CAPTURED` create, so the log
+read "appointed administrator of X" before "captured X". Both are sequential `await`s with no
+race, so the database order was decided entirely by statement order. Swapping them changes no
+gameplay: the administrator still arrives before the build phase (11), so "captured this round,
+upgraded this round" still holds.
+
+**4. 守住它：`server/battle.eventOrder.test.ts`。**
+它讀**原始碼**而不是測行為 —— 測試環境是 `node`、沒有資料庫，而這兩個 `await` 沒有競爭，
+所以唯一能驗證的不變量就是「哪一句寫在前面」。這與 `territoryLabelPlacement.test.ts` 守住一段
+CSS 宣告是同一種做法。已雙向驗證：換回舊順序會以 `expected 13395 to be less than 13102` 失敗；
+第二個案例還檢查 `grantAdmin` 必須留在 `if (captured)` 區塊內，因為單靠相對位置抓不到那種情況。
+
+It reads the **source** rather than testing behaviour: the environment is `node` with no database,
+and with no race the only checkable invariant is which statement comes first — the same approach
+as `territoryLabelPlacement.test.ts`, which guards a CSS declaration. Verified in both directions;
+a second case also checks `grantAdmin` stays **inside** the `if (captured)` block.
+
+**5. 既有回合維持已儲存的順序。**
+事件誌是唯讀追加的，没有任何機制會回頭改寫；為了讓故事讀起來合理而回填，會摧毀它之所以
+可信的那件事。只有修好之後執行的回合才會顯示「先佔領、後任命」。
+
+**Existing rounds keep their stored order.** The log is append-only and nothing rewrites rows;
+back-dating entries to make a story read better would destroy what makes it trustworthy.
+
+### 回合切換不會讓地圖重整 / Switching rounds does not rebuild the map
+
+「下一回合」與時間軸選回合**是同一個 bug**，因為兩者都走 `setSelectedRound`。世界狀態查詢現在
+帶 `placeholderData: keepPreviousData`，所以切換回合時舊回合會留在畫面上，直到新回合到達。
+
+"Next Round" and picking a round from the timeline are **one bug**, because both go through
+`setSelectedRound`. The world-state query now carries `placeholderData: keepPreviousData`, so the
+previous round stays on screen until the new one arrives.
+
+```typescript
+useQuery({
+  queryKey: ['worldState', round],
+  // ...
+  placeholderData: keepPreviousData,
+})
+```
+
+**沒有它的話會發生什麼：** `queryKey` 改變 → `worldState` 變成 `undefined` → 全頁的
+`if ((isLoading || worldInfoPending) && !worldState)` 成立 → **整頁換成骨架畫面，`SigmaMap` 跟著
+被卸載** → sigma 實例、兩張覆蓋層與所有 rAF 迴圈全部重建 → 鏡頭回到預設視角。讀起來就是
+「畫面重新整理了一次」。骨架上那個 `&& !worldState` 因此是**承重**的，不是裝飾：它就是把
+「載入中」變成「整頁被卸載」的東西。
+
+Without it: the `queryKey` change sets `worldState` to `undefined`, the page-wide
+`if ((isLoading || worldInfoPending) && !worldState)` skeleton fires, and **`SigmaMap` unmounts
+with it** — sigma, both overlays and every rAF loop rebuilt from scratch, camera back to default.
+That is why the skeleton's `&& !worldState` guard is load-bearing rather than cosmetic: it is what
+turns "pending" into "the whole page unmounted".
+
+已驗證：在地圖容器元素上留一個記號，並用 `MutationObserver` 觀察四次回合切換。修前 **1 次卸載**
+（相機縮放不變，因為卸載後新 sigma 的預設視角恰好相同，這也是它不易察覺的原因），修後
+**0 次卸載**，相機全程停在 68。
+
+Verified by marking the container element and watching a `MutationObserver` across four round
+switches: **1 unmount before, 0 after**. The camera zoom read 68 throughout — it only looked
+"fine" beforehand because a freshly rebuilt sigma happens to default to a similar view.
+
+`StatsCharts` **不需要**這個：它用手動 `useEffect` 抓資料，而且只在成功時 `setData`，所以重抓期間
+仍握著上一份 payload。不要為了「一致性」在開頭先 `setData(null)`。
+
+`StatsCharts` does **not** need it: it fetches with a manual `useEffect` and only calls `setData`
+on success, so it holds the previous payload while refetching. Do not "fix" it by clearing `data`
+first.
 
 ### 事件日誌、雷達提示與地點兵力 / Event log, the radar tooltip and a place's soldiers
 

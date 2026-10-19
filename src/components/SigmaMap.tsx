@@ -21,8 +21,10 @@ import {
   starScaleAt,
   transparent,
   type StarClass,
+  type Character,
   type Faction,
   type Place,
+  type PlaceLeader,
   type Tooltip,
   type SigmaMapProps,
 } from './mapShared';
@@ -32,6 +34,7 @@ import Sigma from 'sigma';
 import { drawDiscNodeHover, drawDiscNodeLabel } from 'sigma/rendering';
 import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
+import { t } from '@/lib/i18n';
 import { createRng } from '@/lib/rng';
 import {
   buildTerritoryField,
@@ -384,8 +387,10 @@ export function SigmaMap({
         y: viewportPos.y,
         place: attrs.placeData,
         faction: attrs.factionData,
-        characterCount: attrs.characterCount,
         leaderTroops: attrs.leaderTroops,
+        administratorName: attrs.administratorName,
+        factionRulerName: attrs.factionRulerName,
+        leaders: attrs.leaders,
         // 走**共用**的 helper，不要在這裡再寫一份鄰居→名字的邏輯 /
         // Through the **shared** helper — do not re-derive neighbour→name here.
         linkedPlaces: linkedPlaceNames(graph, node),
@@ -713,21 +718,56 @@ export function SigmaMap({
       factionMap.set(faction.id, faction);
     }
 
-    // 計算每個地方的將領數和總兵力
-    // Calculate character count and total troops per place
-    const charsPerPlace = new Map<string, number>();
+    // 計算每個地方的將領與總兵力 / The leaders based at each place, and their total troops
     const troopsPerPlace = new Map<string, number>();
+    /**
+     * 每個地方有哪些存活將領，依兵力由大到小。
+     *
+     * **提示要印的是名字，不是數字。** 原本只有 `👥 將領: 3`——讀者知道有三個人，卻不知道
+     * 是誰，而「這個地方現在是誰的地盤」正是 hover 一個節點最想得到的答案。名字連同
+     * 各自的兵力一起給，節點大小的來源才真的讀得出來。
+     *
+     * Who is based at each place, largest troop count first.
+     *
+     * **The tooltip needs names, not a number.** It used to print `👥 將領: 3` — the reader
+     * learns that three people are here but not *who*, and "who holds this place right now"
+     * is the whole reason to hover a node. Names plus their own troops also make the node's
+     * size legible, which a bare count never could.
+     *
+     * 排序用兵力而不是 id 或名字：提示裡最上面那一列應該是最有存在感的那位，而不是
+     * 資料庫剛好回傳的那一位。
+     *
+     * Sorted by troops rather than by id or name: the top line of a tooltip should be the
+     * most consequential person standing there, not whichever one the database returned first.
+     */
+    const leadersPerPlace = new Map<string, Character[]>();
+    // 單一迴圈。`charsPerPlace`（數人數）與 `troopsPerPlace`（數兵力）原本是兩個迴圈，
+    // 現在 `leadersPerPlace`（帶名字的人）取代了前者——它的 `.length` **就是**人數。
+    // 留著兩個迴圈只會讓人以為「數人數」與「列名字」是兩件不同的事，而它們其實是同一
+    // 份資料的兩種投影；而且多一趟 `characters` 的掃描只會更慢。
+    //
+    // One pass. `charsPerPlace` (counting) and `troopsPerPlace` (summing) were two loops, and
+    // `leadersPerPlace` now supersedes the former — its `.length` **is** the count. Keeping
+    // both would suggest that counting people and naming them are separate facts, when they
+    // are two projections of the same data, and the extra pass over `characters` is only
+    // slower.
     for (const char of characters) {
-      if (char.alive) {
-        charsPerPlace.set(char.placeId, (charsPerPlace.get(char.placeId) ?? 0) + 1);
-        troopsPerPlace.set(char.placeId, (troopsPerPlace.get(char.placeId) ?? 0) + char.troops);
-      }
+      if (!char.alive) continue;
+      troopsPerPlace.set(char.placeId, (troopsPerPlace.get(char.placeId) ?? 0) + char.troops);
+      const list = leadersPerPlace.get(char.placeId);
+      if (list) list.push(char);
+      else leadersPerPlace.set(char.placeId, [char]);
     }
+    for (const list of leadersPerPlace.values()) {
+      list.sort((a, b) => b.troops - a.troops);
+    }
+    /** 依 id 查人，供「這個地方的行政官是誰」「這個勢力的君主是誰」使用 /
+        Look a leader up by id, for "who administers this place" and "who rules this faction" */
+    const charById = new Map(characters.map((c) => [c.id, c]));
 
     // 新增地方節點 / Add place nodes
     for (const place of places) {
       const faction = place.factionId ? factionMap.get(place.factionId) : null;
-      const charCount = charsPerPlace.get(place.id) ?? 0;
       const leaderTroops = troopsPerPlace.get(place.id) ?? 0;
       const totalTroops = leaderTroops + place.garrison;
 
@@ -763,9 +803,36 @@ export function SigmaMap({
         // 儲存額外資料 / Store extra data for tooltips
         placeData: place,
         factionData: faction,
-        characterCount: charCount,
         leaderTroops,
         totalTroops,
+        // 人名在**建圖時**算好存在節點上，兩條 hover 路徑（sigma 的 `enterNode` 與
+        // wrapper 的 `mousemove`）都只讀這一份。這跟 `leaderTroops` 是同一個理由：
+        // 兩邊各自推導不會出錯，但那是兩份實作，只要一邊漏掉更新就會看到兩個不同的提示。
+        //
+        // The names are resolved **here**, at build time, and stored on the node; both hover
+        // paths (sigma's `enterNode` and the wrapper's `mousemove`) read this one value.
+        // Same reason as `leaderTroops`: deriving them in both places would not be *wrong*,
+        // but it is two implementations, and one missed update shows the reader two
+        // different tooltips for the same place.
+        administratorName: place.administratorId
+          ? (charById.get(place.administratorId)?.name ?? null)
+          : null,
+        // 勢力的君主是 `faction.kingId`，**不是**這個地方的行政官。兩者經常不是同一人，
+        // 合成一列會讓人誤以為地方與勢力共用同一個首腦。
+        //
+        // The faction's ruler is `faction.kingId`, **not** this place's administrator. The
+        // two are routinely different people, and collapsing them reads as though place and
+        // faction share one head.
+        factionRulerName: faction?.kingId
+          ? (charById.get(faction.kingId)?.name ?? null)
+          : null,
+        leaders: (leadersPerPlace.get(place.id) ?? []).map((c) => ({
+          id: c.id,
+          name: c.name,
+          troops: c.troops,
+          isKing: c.isKing,
+          isAdministrator: c.id === place.administratorId,
+        })),
       });
     }
 
@@ -825,10 +892,18 @@ field: buildTerritoryField(
       CONFIG.TERRITORY_MAX_RESOLUTION,
       CONFIG.TERRITORY_MARGIN,
       CONFIG.TERRITORY_BLOB_RADIUS,
-      CONFIG.TERRITORY_MIN_FORCE
+      CONFIG.TERRITORY_MIN_FORCE,
+      CONFIG.TERRITORY_CORE_FORCE,
+      CONFIG.TERRITORY_CORE_RADIUS
     ),
     };
-  }, [places]);
+  }, [
+    places,
+    CONFIG.TERRITORY_BLOB_RADIUS,
+    CONFIG.TERRITORY_MIN_FORCE,
+    CONFIG.TERRITORY_CORE_FORCE,
+    CONFIG.TERRITORY_CORE_RADIUS,
+  ]);
 
   // 要標名字的勢力區域；同時當成位置表與名字表的共同來源，兩者才會對齊 /
   // The regions worth labelling. This is the single source for both the positions
@@ -1216,17 +1291,76 @@ useEffect(() => {
     }
   };
 
-  // 勢力 id → 名稱 / 色 / 控制的地方數，tooltip 用 /
-  // Faction id → name / colour / owned place count, for the tooltip. Counted from
-  // the places rather than the density field, so the number matches what the rest
-  // of the UI calls this faction's holdings
-  const factionInfo = new Map<string, { name: string; color: string; placeCount: number }>(
-    factions.map((faction) => [faction.id, { name: faction.name, color: faction.color, placeCount: 0 }])
+  // 勢力的總兵力需要「每個地方的將領兵力」。這與建圖時那份 `troopsPerPlace` 是同一份
+  // 資料，所以要重算一次——兩處各自快取只會有一份過期，而勢力提示會安靜地少報兵力。
+  //
+  // The faction total needs each place's leader troops. It is the same data as the
+  // graph-build `troopsPerPlace`, so it is recomputed here: two independent caches means one
+  // of them goes stale, and the faction tooltip silently under-reports its troops.
+  const troopsAtPlace = new Map<string, number>();
+  for (const char of characters) {
+    if (!char.alive) continue;
+    troopsAtPlace.set(char.placeId, (troopsAtPlace.get(char.placeId) ?? 0) + char.troops);
+  }
+
+  // 勢力 id → 名稱 / 色 / 控制的地方數 / 兵力 / 將領數 / 君主，tooltip 用 /
+  // Faction id → name / colour / owned place count / troops / leader count / king, for the
+  // tooltip. Counted from the places rather than the density field, so the numbers match
+  // what the rest of the UI calls this faction's holdings.
+  //
+  // **兵力用「駐軍 + 將領兵力」，與地方提示和節點大小同一個定義。** 若勢力提示改用另一個
+  // 口徑（例如只有駐軍），讀者會看到「這個勢力 300 兵」，點進某個地方卻寫「將領兵力 200」
+  // —— 兩個數字沒有任何關係可推。
+  //
+  // **Troops use "garrison + leader troops", the same definition as the place tooltip and the
+  // node size.** If the faction tooltip used a different basis (garrison only), the reader
+  // would see "this faction has 300 troops" and then open a place reading "leader troops 200",
+  // with no way to relate the two.
+  const factionInfo = new Map<
+    string,
+    {
+      name: string;
+      color: string;
+      placeCount: number;
+      troops: number;
+      leaderCount: number;
+      kingName: string | null;
+    }
+  >(
+    factions.map((faction) => [
+      faction.id,
+      {
+        name: faction.name,
+        color: faction.color,
+        placeCount: 0,
+        troops: 0,
+        leaderCount: 0,
+        kingName: null,
+      },
+    ])
   );
+  const kingNameById = new Map(characters.map((c) => [c.id, c.name]));
+  for (const faction of factions) {
+    const entry = factionInfo.get(faction.id);
+    if (entry && faction.kingId) {
+      entry.kingName = kingNameById.get(faction.kingId) ?? null;
+    }
+  }
+  // 勢力的將領數只算**活著的**，而且是依 `factionId` 算，不是依「站在哪個地方」。
+  // 一位已經離開本勢力地盤、但還沒轉投別人的將領，他仍然算這個勢力的人——這跟
+  // `loans`/勢力排行用的是同一個口徑，所以三個面板的數字才會一致。
+  for (const char of characters) {
+    if (!char.alive || !char.factionId) continue;
+    const entry = factionInfo.get(char.factionId);
+    if (entry) entry.leaderCount += 1;
+  }
   for (const place of places) {
     if (!place.factionId) continue;
     const entry = factionInfo.get(place.factionId);
-    if (entry) entry.placeCount += 1;
+    if (!entry) continue;
+    entry.placeCount += 1;
+    // 節點大小的同一個算式 / the node-size formula, unchanged
+    entry.troops += (place.garrison + (troopsAtPlace.get(place.id) ?? 0));
   }
 
   /**
@@ -1369,8 +1503,10 @@ useEffect(() => {
       const attrs = graph.getNodeAttributes(site.id) as {
         placeData: Place;
         factionData: Faction | null;
-        characterCount: number;
         leaderTroops: number;
+        administratorName: string | null;
+        factionRulerName: string | null;
+        leaders: PlaceLeader[];
       };
       setTooltip({
         kind: 'place',
@@ -1378,8 +1514,10 @@ useEffect(() => {
         y: vy,
         place: attrs.placeData,
         faction: attrs.factionData,
-        characterCount: attrs.characterCount,
         leaderTroops: attrs.leaderTroops,
+        administratorName: attrs.administratorName,
+        factionRulerName: attrs.factionRulerName,
+        leaders: attrs.leaders,
         // 與 `enterNode` **走同一個 helper**。
         //
         // Through the **same helper** as `enterNode`.
@@ -1505,6 +1643,9 @@ useEffect(() => {
       name: owner?.name ?? key,
       color: owner?.color ?? CONFIG.MAP_TERRITORY_FALLBACK,
       placeCount: owner?.placeCount ?? 0,
+      troops: owner?.troops ?? 0,
+      leaderCount: owner?.leaderCount ?? 0,
+      kingName: owner?.kingName ?? null,
     });
     canvas.style.cursor = 'default';
     // 點在勢力面積上不聚焦任何地方（用戶要求：面積上不顯示地方提示）/
@@ -2428,9 +2569,36 @@ useEffect(() => {
                 </span>
               </div>
               <div className="text-gray-400 text-sm">
-                控制地方:{' '}
+                {t('map.controlledPlaces')}:{' '}
                 <span className="text-cyan-400 font-display">{tooltip.placeCount}</span>
               </div>
+              {/* 勢力層補上兵力、將領數與君主。這三個數字回答的是「這片領地是誰的、靠什麼
+                  撐著」，而原本只有一個地方數——勢力排行與雷達都有這些數字，只有地圖提示
+                  沒有，三個面板於是各說各話。
+                  君主要**單獨**列出：勢力可以沒有君主（君主剛死、還沒繼承），那就不印，
+                  而不是印「無」。
+
+                  The faction panel adds troops, leader count and the ruler. Together with the
+                  place count these answer "whose ground is this and what holds it up" — and the
+                  place count alone left the faction ranking and the radar carrying numbers the
+                  map never showed, so three panels disagreed about the same faction.
+                  The ruler is listed **separately** because a faction may have none (the king
+                  just died, no heir yet), and then the row is omitted rather than printed as
+                  "none". */}
+              <div className="text-gray-400 text-sm">
+                {t('map.troops')}:{' '}
+                <span className="text-cyan-400 font-display">{tooltip.troops}</span>
+              </div>
+              <div className="text-gray-400 text-sm">
+                {t('map.leaders')}:{' '}
+                <span className="text-cyan-400 font-display">{tooltip.leaderCount}</span>
+              </div>
+              {tooltip.kingName && (
+                <div className="text-gray-400 text-sm">
+                  👑 {t('map.factionRuler')}:{' '}
+                  <span className="text-white">{tooltip.kingName}</span>
+                </div>
+              )}
             </>
           ) : (
             <>
@@ -2452,19 +2620,87 @@ useEffect(() => {
                     Garrison and leader troops are listed separately, because node size has
                     always been their sum. The total is given alongside so the node's size
                     can be accounted for. */}
-                <div>⚔️ 駐軍: <span className="text-cyan-400 font-display">{tooltip.place.garrison}</span></div>
-                <div>🛡️ 將領兵力: <span className="text-cyan-400 font-display">{tooltip.leaderTroops}</span></div>
+                <div>⚔️ {t('map.garrison')}: <span className="text-cyan-400 font-display">{tooltip.place.garrison}</span></div>
+                <div>🛡️ {t('map.leaderTroops')}: <span className="text-cyan-400 font-display">{tooltip.leaderTroops}</span></div>
                 <div className="text-[11px] text-gray-500">
-                  合計 {tooltip.place.garrison + tooltip.leaderTroops}
+                  {t('map.troopTotal')} {tooltip.place.garrison + tooltip.leaderTroops}
                 </div>
-                <div>🏰 堡壘: <span className="text-gray-400 font-display">{tooltip.place.fortress}</span></div>
-                <div>🏪 市場: <span className="text-gray-400 font-display">{tooltip.place.market}</span></div>
-                <div>🏯 兵營: <span className="text-gray-400 font-display">{tooltip.place.barracks}</span></div>
-                <div>👥 將領: <span className="text-gray-400 font-display">{tooltip.characterCount}</span></div>
+                <div>🏰 {t('map.fortress')}: <span className="text-gray-400 font-display">{tooltip.place.fortress}</span></div>
+                <div>🏪 {t('map.market')}: <span className="text-gray-400 font-display">{tooltip.place.market}</span></div>
+                <div>🏯 {t('map.barracks')}: <span className="text-gray-400 font-display">{tooltip.place.barracks}</span></div>
               </div>
+              {/* 「誰在管這個地方」與「誰是這個勢力的君主」分成兩列。
+                  兩者經常不是同一人——行政官是被任命的治理者，君主是勢力的最高權力——
+                  合成一列會讓人誤以為地方與勢力共用一個首腦。兩者都可能是 null：
+                  無主之地就沒有君主，還沒任命的地點就沒有行政官，那一列就整個不印，
+                  而不是印一個空白或「無」。
+                  The place's **administrator** and the controlling faction's **ruler** are two
+                  separate lines. They are routinely different people — the administrator is
+                  the appointed governor, the king is the faction's highest authority — so one
+                  line would read as though place and faction share a single head. Either can
+                  be null: unowned land has no ruler, an unassigned place has no administrator,
+                  and then the row is omitted entirely rather than printed blank or "none". */}
+              {(tooltip.administratorName || tooltip.factionRulerName) && (
+                <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 space-y-0.5 text-gray-400 text-sm">
+                  {tooltip.administratorName && (
+                    <div>
+                      👤 {t('map.administrator')}:{' '}
+                      <span className="text-white">{tooltip.administratorName}</span>
+                    </div>
+                  )}
+                  {tooltip.factionRulerName && (
+                    <div>
+                      👑 {t('map.factionRuler')}:{' '}
+                      <span className="text-white">{tooltip.factionRulerName}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* 將領列出**名字**與各自的兵力，而不再只是一個數字。行政官與君主也在
+                  這份名單裡（用 👤 / 👑 標出）——把某個人在上面單獨印一次、又在名單裡出現
+                  第二次，讀者會以為是兩個人。
+                  上限是 `MAP_TOOLTIP_MAX_LEADERS`，多出來的收成「另有 N 位」：提示跟著游標
+                  走，列太多會蓋住地圖本身。
+
+                  Leaders are listed **by name with their own troops**, not as a bare count. The
+                  administrator and the ruler are in this list too (flagged 👤 / 👑) — printing
+                  one of them separately above and again in the list makes the reader think
+                  they are two people. Capped at `MAP_TOOLTIP_MAX_LEADERS`, with the remainder
+                  collapsed into "+N more": the tooltip follows the cursor, so an unbounded
+                  list ends up covering the map it is describing. */}
+              {tooltip.leaders.length > 0 && (
+                <div className="mt-1.5 pt-1.5 border-t border-gray-800/60">
+                  <div className="text-gray-400 text-sm mb-0.5">
+                    👥 {t('map.leaders')}:
+                  </div>
+                  {tooltip.leaders.slice(0, CONFIG.MAP_TOOLTIP_MAX_LEADERS).map((l) => (
+                    <div
+                      key={l.id}
+                      className="text-gray-400 text-sm pl-3 flex items-baseline gap-1.5"
+                    >
+                      <span className="text-gray-500 shrink-0" aria-hidden="true">
+                        {l.isKing ? '👑' : l.isAdministrator ? '👤' : '·'}
+                      </span>
+                      <span className="truncate" title={l.name}>
+                        {l.name}
+                      </span>
+                      <span className="text-cyan-400 font-display tabular-nums shrink-0 ml-auto">
+                        {l.troops}
+                      </span>
+                    </div>
+                  ))}
+                  {tooltip.leaders.length > CONFIG.MAP_TOOLTIP_MAX_LEADERS && (
+                    <div className="text-gray-500 text-[11px] pl-3">
+                      {t('map.moreLeaders', {
+                        n: tooltip.leaders.length - CONFIG.MAP_TOOLTIP_MAX_LEADERS,
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               {tooltip.linkedPlaces.length > 0 && (
                 <div className="mt-1.5 pt-1.5 border-t border-gray-800/60 text-gray-400 text-sm">
-                  🛣️ {tooltip.linkedPlaces.join('、')}
+                  🛣️ {t('map.linkedPlaces')}: {tooltip.linkedPlaces.join('、')}
                 </div>
               )}
             </>

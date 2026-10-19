@@ -135,6 +135,7 @@ autonomous-world/
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
 │   ├── battleReport.ts           # Pure battle-report builder (no DB, so it is testable)
+│   ├── battle.eventOrder.test.ts  # Guards that PLACE_CAPTURED is written before grantAdmin
 │   ├── adminAssign.ts             # grantAdmin/revokeAdmin — shared admin assignment rules (ambition + cooldown)
 │   ├── graph/
 │   │   └── layout.ts              # ForceAtlas2 layout calculation
@@ -222,8 +223,19 @@ The game features an interactive force-directed graph map using Sigma.js:
   by Sigma and the glow by the overlay, and one stored value is what keeps the two in step instead
   of two separate draws that happen to match. Planets within one system never share a colour
   (the palette is shuffled once, then taken in order), and each moon draws its own. Nothing is
-  stored in the database. Deliberately no deep red or deep blue: the **orbits** are the faction
-  channel, and the sun is the largest block of colour in the system
+  stored in the database.
+- **The disc itself carries the class — that is what makes the colours readable.** The six `core`
+  values used to be *all white* (0–37 from pure white; closest pair 7.2 apart in RGB), so the disc
+  held no class information and every sun rendered as the same white dot, with the only variation in
+  a 16px glow *behind* it. A star is identified by its **body**, not by the halo behind it, so it
+  read as identical white suns wearing slightly different jackets. The cores now take the class hue
+  (closest pair 56.6). The old "no deep red, no deep blue" rule survives as **"bright, not pale"**:
+  the real conflict is with the faction-coloured **orbits**, and it is *darkness* that competes,
+  not hue. Every core sits at luminance 152–255, the sun is an 11px disc and the orbits are thin
+  rings, so the body glows and the faction colour stays on the rings. A test asserts the palette has
+  colour (at least half the cores ≥ 50 units from white), that every pair is ≥ 55 apart, and that
+  every core stays at luminance ≥ 140 — verified to fail on the old palette with
+  `expected 0 to be greater than or equal to 3`
 - Node labels follow one **pure zoom** rule: shown only while the camera ratio is at or below `LABEL_ZOOM_RATIO` (0.6), independent of garrison; labels always paint above the spotlight overlay. The hovered place, the selected place, and the hovered place's connected neighbours are the one exception — they keep their names at any zoom, so you can read what a place links to
 - **A place's hover target includes its own name label.** Sigma draws the name to the right of the
   disc, so the cursor routinely rests on a name while that name and its neighbours' names are being
@@ -233,6 +245,29 @@ The game features an interactive force-directed graph map using Sigma.js:
   and the name clears the place name, the linked names and the tooltip - the same effect as moving
   off the place. A name that is **not drawn** (zoomed out past `LABEL_ZOOM_RATIO`) is not a hit
   target either, so the cursor is never glued to a place with nothing on screen
+- **Hovering a place names its people.** The tooltip ends with the place's **administrator**
+  (`administratorId`), the **controlling faction's ruler** (`kingId`), and the **living leaders based
+  here with their own troops**, sorted by troops and capped at `MAP_TOOLTIP_MAX_LEADERS` (4) with the
+  remainder collapsed to "+N more". It used to print `👥 將領: 3`, which tells you three people are
+  there but not who — and "who holds this place right now" is the whole reason to hover a node. The
+  administrator and the ruler are **separate rows on purpose**: they are routinely different people,
+  and one row would read as though place and faction share a single head. Both also appear in the
+  leader list, flagged 👤/👑, rather than being excluded. The whole tooltip is localised — it used to
+  be entirely hardcoded Chinese, and half-localising it reads as broken in English.
+- **Hovering a faction's area answers "what holds it up"** — place count, **total troops**,
+  **leader count** and the **ruler's name**. Troops use `garrison + leader troops`, the same basis
+  as the place tooltip and the node size, so no two panels disagree about the same number; the
+  leader count is by `factionId` rather than by where someone stands, which is what the faction
+  ranking also uses. The ruler row is omitted when a faction has none rather than printed as "none".
+- **The map never unmounts when the round changes.** The world-state query uses
+  `placeholderData: keepPreviousData`, so switching rounds keeps the previous round on screen until
+  the new one arrives. Without it the `queryKey` change set `worldState` to `undefined`, the
+  page-wide `if ((isLoading || worldInfoPending) && !worldState)` skeleton fired, and `SigmaMap`
+  went with it — rebuilding sigma, both overlays and every rAF loop from scratch and dropping the
+  camera back to its default view. It read as "the screen refreshed", on both Next Round and the
+  round timeline, because both go through `setSelectedRound`. Verified by marking the container
+  element and watching a `MutationObserver` across four round switches: 1 unmount before, 0 after,
+  camera zoom unchanged throughout.
 - **Zoom controls** — a slider between the zoom-out and zoom-in buttons scrubs the camera ratio directly and shows the level as a percentage (`MAP_ZOOM_MIN_RATIO` 0.05 – `MAP_ZOOM_MAX_RATIO` 3). The **ratio** is bounded, so the world can never be zoomed to a speck; **panning is deliberately unbounded**, because the space is infinite — the reset (↺) button brings the view back
 - **Drag tracks the cursor 1:1 at any zoom** — panning is sigma's own maths (both the pixel positions converted to *framed* coordinates, then `previous − current` added to the camera), which matters most when zoomed out: an earlier version clamped the camera centre to `[0, 1]`, and since the framed world is a unit square, anything below ~75% zoom needs to leave that range to be dragged across the screen — so every move hit the limit and the map stuck and jittered instead of following the pointer
 - **Territory view** — zoom out past `TERRITORY_ZOOM_RATIO` and every place projects an equal
@@ -297,6 +332,29 @@ The game features an interactive force-directed graph map using Sigma.js:
 - **Clicking the already-active tab closes its panel** — a toggle, not open-only, so the rail can always dismiss its own panel
 - **Nothing is a layout column any more** — 選擇回合 (the round timeline) is overlaid on the map's **left** edge and 勢力排行 (faction ranking) lives in the 統計 tab, so the map keeps the whole viewport at any width
 - **Event log filters** — three independent filters compose by AND: a faction dropdown, a multi-select of six event categories, and 人物 / 地點 / 其他 info-kind toggles. The info kind is not just a display filter: it decides whether a name in the log becomes a clickable button that focuses that place or opens that leader
+- **The log reads oldest to newest, and that order is causal** — earn income → buy soldiers → move →
+  capture → be appointed → upgrade. Three separate defects had to be fixed, because the display alone
+  would have *hidden* the other two rather than repairing them:
+  - `EventLog.tsx` reversed the array on a false premise. Its comment claimed the API returns
+    newest-first, but it has always sorted within a round by `createdAt: 'asc'`; only the all-rounds
+    branch ever wrote `round: 'desc'`, and that is the order *between* rounds. The log therefore read
+    "upgrade → capture → appointed → moved → bought → income" — the money earned last. It also made
+    the rest of the file self-contradictory: `shown` deliberately takes the **tail** so the reader
+    lands on the newest slice, and the auto-scroll pins to the bottom, which only hold oldest-first.
+  - One endpoint returned **opposite orders depending on the query**. Both branches are now
+    `[{ round: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }]`. The `id` tiebreak is load-bearing:
+    Postgres compares timestamps at millisecond resolution and events written back to back routinely
+    land in the same millisecond, leaving their order *undefined* without it — which is what makes an
+    ordering bug look intermittent instead of consistently wrong.
+  - The simulation wrote the appointment *before* the capture (`grantAdmin()` ran before the
+    `PLACE_CAPTURED` create), so the log read "appointed administrator of X" before "captured X".
+    Both are sequential `await`s with no race, so the database order was decided entirely by statement
+    order. Swapping them changes no gameplay — the administrator still arrives before the build
+    phase, so "captured this round, upgraded this round" still holds.
+    `server/battle.eventOrder.test.ts` guards it by reading the source (there is no database in the
+    `node` test environment, so "which statement comes first" is the only checkable invariant).
+  - **Existing rounds keep their stored order.** The log is append-only; back-dating rows to make a
+    story read better would destroy what makes it trustworthy.
 - **Battle report** — a 佔領 row carries a **戰報 / Report** button opening the arithmetic behind
   that engagement (attacker troops × wu × roll vs defenders garrison × fortress × roll). When the
   place had no garrison the report says so outright instead of showing a blank calculation, because

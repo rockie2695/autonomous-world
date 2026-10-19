@@ -23,6 +23,18 @@ import {
   transparent,
 } from './mapShared';
 
+/** 兩個色號的 RGB 歐氏距離 / Euclidean RGB distance between two hex colours */
+function rgbDistance(a: string, b: string): number {
+  const x = hexToRgb(a);
+  const y = hexToRgb(b);
+  return Math.sqrt(x.reduce((s, v, i) => s + (v - y[i]) ** 2, 0));
+}
+
+/** WCAG 相對亮度 / WCAG relative luminance */
+function relativeLuminance(rgb: [number, number, number]): number {
+  return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+}
+
 describe('brightenColor', () => {
   it('should mix toward white without changing the hue', () => {
     // hsl(0, 70%, 50%) is a saturated red; lifting it toward white must keep it red and
@@ -231,6 +243,56 @@ describe('starClassOf', () => {
         (k) => k.core === c.core && k.edge === c.edge
       );
       expect(match).toBeDefined();
+    }
+  });
+
+  it('should let the disc itself carry the class, not just the halo', () => {
+    // 這一條是為「看得見」而寫的，不是為正確性。太陽的**本體**是讀者認一顆星的依據，
+    // 光暈只是背後 16px 的襯托。舊的六個 `core` 全部是白的：離純白 0–37，最接近的一對只差
+    // 7.2（RGB 距離），於是每顆太陽看起來都是同一個白點，類別只存在於背後的光暈。
+    //
+    // This guards *visibility*, not correctness. A star is identified by its **body**; the
+    // halo is only a 16px backdrop behind it. The old six `core` values were all white —
+    // 0–37 from pure white, closest pair just 7.2 apart in RGB — so every sun rendered as the
+    // same white dot and the class lived entirely in the glow behind it. Anyone editing the
+    // palette toward "prettier, softer" would reintroduce that silently.
+    const cores = CONFIG.MAP_STAR_SUN_CLASSES.map((k) => k.core);
+    const fromWhite = (c: string) => {
+      const rgb = hexToRgb(c);
+      return Math.sqrt(rgb.reduce((s, v) => s + (v - 255) ** 2, 0));
+    };
+
+    // 1. 這一組顏色**必須真的有顏色**。不是「每一類都要帶色」——白星本來就是白的，
+    //    而且在一堆帶色的圓盤之間，它反而是最容易認出來的那一個。要防的是退回到
+    //    「全部都接近白」，那正是舊的六個 `core`（離純白 0–37，0/6 達標）。
+    //
+    //    The palette must *have colour*. Not "every class is tinted" — a white star really is
+    //    white, and among tinted discs it is the easiest one to pick out. What has to be
+    //    prevented is the regression to "all of them near white", which is exactly what the
+    //    old six `core` values were (0–37 from pure white, 0 of 6 clearing the bar).
+    const tinted = cores.filter((c) => fromWhite(c) >= 50).length;
+    expect(
+      tinted,
+      'the sun palette has washed out — too few classes are distinguishable from white'
+    ).toBeGreaterThanOrEqual(cores.length / 2);
+
+    // 2. 任意兩個 `core` 都必須分得開（舊的最接近一對只有 7.2）/ Any two cores must be
+    //    separable. The old closest pair was 7.2, i.e. invisible on an 11px disc.
+    for (let i = 0; i < cores.length; i++) {
+      for (let j = i + 1; j < cores.length; j++) {
+        const d = rgbDistance(cores[i], cores[j]);
+        expect(
+          d,
+          `${cores[i]} and ${cores[j]} are too similar to tell apart at ${CONFIG.MAP_STAR_SUN_SCREEN_PX}px`
+        ).toBeGreaterThanOrEqual(55);
+      }
+    }
+
+    // 3. 但它們必須**亮**：勢力色留在軌道上，靠的是太陽不夠暗，而不是靠它沒有顏色 /
+    //    But they must stay **bright**: the faction colour keeps the orbits, and that
+    //    depends on the sun being bright rather than on it being colourless.
+    for (const core of cores) {
+      expect(relativeLuminance(hexToRgb(core))).toBeGreaterThanOrEqual(140);
     }
   });
 });

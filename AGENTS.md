@@ -389,6 +389,22 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
   reset sigma's camera state. Snapshot `x / y / ratio / angle` **before** the clear and `camera.setState(saved)`
   afterwards, or the map snaps to a default view on every "Next Round". Use `setState`, not an animation:
   the user adjusted the view by hand, so what is wanted is an immediate return, not a glide.
+- **The camera never gets the chance to break, because the map is never unmounted.** The
+  world-state query carries `placeholderData: keepPreviousData`. Without it, changing rounds
+  changes the `queryKey`, so `worldState` becomes `undefined`, so the guard
+  `if ((isLoading || worldInfoPending) && !worldState)` fires and **the entire page swaps to the
+  skeleton with `SigmaMap` inside it**. Sigma is then rebuilt from scratch — galaxy, both
+  overlays, every rAF loop — and the camera returns to its default view. It reads as "the screen
+  refreshed", which is exactly what the user reported for **both** Next Round and picking a round
+  from the timeline: both go through `setSelectedRound`, so they are one bug, not two.
+  `keepPreviousData` keeps the old round on screen until the new one arrives, so only the node set
+  changes. Verified by marking the container element and watching a `MutationObserver` across four
+  round switches: **1 unmount before, 0 after**, camera zoom unchanged at 68 throughout.
+  - This is why the skeleton's `&& !worldState` guard is load-bearing rather than cosmetic —
+    it is what turns "pending" into "unmounted" for the whole page.
+  - `StatsCharts` does *not* need this. It fetches with a manual `useEffect` and only calls
+    `setData` on success, so it holds the previous payload while refetching. Do not "fix" it by
+    clearing `data` first.
 - The header renders `TelemetryStrip inline`, merging 世界概況 into the header row and handing the height back to the map
 - **Autoplay floor is 5s**: `AUTOPLAY_MIN_MS: 5000`, `AUTOPLAY_MAX_MS: 15000`, `AUTOPLAY_DEFAULT_MS: 5000`. `CONFIG` is `as const`, so the slider state must be `useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS)` or it pins to the literal and rejects every other speed
 - **Loading skeletons** all use `GM_SKEL`: `MapSidePanel` shows `PanelSkeleton` while world state is pending, `EventLog` renders skeleton rows during its own fetch, and `StatsCharts` derives `statsPending = currentRound >= 1 && !data && !fetchFailed` so an unanswered request reads as *loading* rather than `game.noData`. `StatsCharts` fetches with a manual `useEffect`, not `useQuery`, so it has no `isLoading` to read
@@ -403,6 +419,46 @@ events survived, and says so when all of them were filtered out.
 - **Info kind** — 人物 / 地點 / 其他 toggles, derived by `eventInfoOf()` from what the event's `data` carries. This is not a display filter: it decides whether a name renders as a clickable button (`onFocusPlace` / `onOpenLeaderDetail`) or as plain text, which is what makes names in the log navigable
 - Filtering is derived (`filterKey` + `useMemo`), never applied by mutating the fetched list, so toggling filters back off restores the full set for free
 - Rows are paged at `CONFIG.EVENT_LOG_PAGE_SIZE` (60); the total can reach tens of thousands
+
+### Event Log ordering: oldest to newest, and why that is causal
+
+The log reads **oldest at the top**. Three separate defects produced a timeline that ran
+backwards, and all three had to be fixed — fixing the display alone would have hidden the
+other two rather than repairing them.
+
+- **`EventLog.tsx` had `[...filtered].reverse()`**, on a false premise. Its comment claimed "the
+  API returns newest-first", but `/api/world/events` has *always* ordered within a round by
+  `createdAt: 'asc'`. Only the all-rounds branch ever wrote `round: 'desc'`, and that is the order
+  *between* rounds, not within one. The reversal therefore flipped every round to newest-first, and
+  the log read "upgrade → capture → appointed → moved → bought → income": the money earned last,
+  the upgrade first.
+  - It also made the rest of the file contradict itself. `shown` deliberately takes the **tail** so
+    the reader lands on the newest slice, and the auto-scroll pins to the bottom for the same
+    reason — both only hold oldest-to-newest. With the reversal in place the tail became the
+    *oldest* slice and `hasOlder` answered wrong. **Do not reintroduce it.**
+- **One endpoint returned opposite orders depending on the query.** The single-round branch had
+  `{ createdAt: 'asc' }` and the all-rounds branch `[{ round: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }]`.
+  Both are now `[{ round: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }]` — one order, no reversal on
+  either side.
+  - **The `id` tiebreak is load-bearing, not decorative.** Postgres compares timestamps at
+    millisecond resolution and events written back to back within a round routinely land in the same
+    millisecond, leaving their order *undefined* without it. That is what makes an ordering bug look
+    intermittent instead of consistently wrong.
+- **The simulation wrote the appointment before the capture.** In `battle.ts`, `grantAdmin()` ran
+  *before* the `PLACE_CAPTURED` create, so the log read "appointed administrator of X" **before**
+  "captured X" — appointed first, captured second. Both are sequential `await`s with no race, so the
+  database order was decided entirely by the order of the statements. Swapping them fixes it;
+  gameplay is untouched, because the administrator still arrives before the build phase (11), so
+  "captured this round, upgraded this round" still holds. Only the log's ordering changes.
+  - `server/battle.eventOrder.test.ts` guards it. It reads the **source** rather than testing
+    behaviour: the test environment is `node` with no database, and the only checkable invariant is
+    which statement comes first — the same approach as `territoryLabelPlacement.test.ts`, which
+    guards a CSS declaration. Verified in both directions: it fails on the old order with
+    `expected 13395 to be less than 13102`. A second case checks `grantAdmin` stays **inside** the
+    `if (captured)` block, which the relative-position check alone cannot catch.
+- **Existing rounds keep their stored order.** The log is append-only and nothing rewrites rows;
+  back-dating entries to make a story read better would destroy the thing that makes it
+  trustworthy. Only rounds run after the fix show capture-before-admin.
 
 ### Map Node Border, Shadow & Camera
 
@@ -490,9 +546,26 @@ zoom there are no systems at all** — do not go looking for a bug when a defaul
   - **`core` and `edge` travel together.** Split them and a sun wears another star's halo.
   - **`createRng(placeId)`, never `id.charCodeAt(0) % n`.** The latter only sees the first
     character, and ids often share a prefix, which would hand a whole batch of places one sun.
-  - **No deep red, no deep blue.** The *orbits* are the faction channel, and the sun is the
-    largest block of colour in the system; if suns could be any colour, a dark faction's orbits
-    would read as "a star".
+  - **`core` must carry the class itself — this is the load-bearing rule.** The six `core`
+    values used to be **all white** (0–37 from pure white; closest pair 7.2 apart in RGB), so
+    the disc carried *no* class information at all and every sun rendered as the same white
+    dot. The only variation sat in the 16px, 0.5-alpha glow *behind* the disc — and a star is
+    identified by its **body**, not by the halo behind it. So it read as "identical white suns
+    wearing slightly different jackets", which is not the Stellaris behaviour the reference
+    has. The cores now take the class hue (closest pair 56.6).
+    - The palette must *have colour*, **not** "every class is tinted": a white star really is
+      white, and among tinted discs it is the easiest one to pick out. The regression to guard
+      is *all six near white*, so `mapShared.test.ts` asserts **at least half** the cores clear
+      a 50-unit distance from pure white, that every pair is ≥ 55 apart, and that every core
+      stays at luminance ≥ 140. Verified: the wash-out assertion fails on the old palette with
+      `expected 0 to be greater than or equal to 3`.
+  - **"No deep red, no deep blue" became "bright, not pale."** The original reason stands — the
+    *orbits* are the faction channel, and the sun is the largest block of colour in the system —
+    but the actual conflict is **darkness**, not hue. Every `core` now sits at luminance 152–255,
+    which is how real bright stars look, while the sun is an 11px disc and the orbits are thin
+    rings: the body glows and the faction colour stays on the rings. Do not "fix" a future
+    complaint that suns are coloured by flattening them back toward white — that is the exact
+    failure described above.
   - **The glow's outer stop is `transparent(edge)` (`#rrggbb00`), not a hardcoded rgba.** It used
     to be `rgba(255, 154, 46, 0)` — one sun's colour, which stops matching the moment a sun
     changes, and no config value governed it.
@@ -550,6 +623,32 @@ zoom there are no systems at all** — do not go looking for a bug when a defaul
 
 ### Map Place Tooltip
 
+- **It prints names, not just a count.** It used to end at `👥 將領: 3` — the reader learns that
+  three people are there but not *who*, and "who holds this place right now" is the whole reason
+  to hover a node. Three blocks now sit below the buildings, and each can legitimately be absent:
+  - `👤 行政官` — the place's `administratorId`, omitted when unowned or unassigned.
+  - `👑 勢力君主` — the **controlling faction's** `kingId`, omitted when there is no ruler. This is
+    a *different row on purpose*: the administrator is the appointed governor and the king is the
+    faction's highest authority, and they are routinely not the same person. One row would read as
+    though place and faction shared a single head. On the king's own seat both rows print the same
+    name — which is exactly why merging them would have been misleading.
+  - `👥 將領` — the living leaders based here with **their own troops**, sorted by troops desc and
+    capped at `MAP_TOOLTIP_MAX_LEADERS` (4), remainder as "另有 N 位" / "+N more". The tooltip
+    follows the cursor, so an unbounded list ends up covering the map it is describing.
+  - The administrator and the ruler are **also in that list**, flagged 👤/👑, rather than being
+    excluded. With both role rows present, printing one of them separately above *and* below is
+    unavoidable; the flags make it one person shown twice instead of two different people.
+- **Names are resolved once, at graph-build time, and stored on the node** (`administratorName`,
+  `factionRulerName`, `leaders`), so both hover paths read one value — same reason `leaderTroops`
+  already worked that way. Deriving them in both places would not be *wrong*, but it is two
+  implementations, and one missed update shows the reader two different tooltips for one place.
+- **`characterCount` and the `charsPerPlace` map were deleted.** The named list *is* the count
+  (`leaders.length`), so they were written on every node and read by nothing. Dead data on a node
+  invites the next reader to think it drives something. The two loops over `characters` merged
+  into one pass at the same time.
+- **The whole tooltip is localised.** It used to be entirely hardcoded Chinese (`⚔️ 駐軍:`), and
+  the new rows landed in the middle of it — a half-localised panel reads as broken in English.
+  `t('map.*')` now covers every label in both branches.
 - **There are two hover paths, and they used to disagree.** `sigma.on('enterNode')` fires from
   sigma's own container listener; the territory layer's `onMove` fires from the **wrapper** that
   contains the container, so it runs on the bubble phase — *after* sigma's. Both wrote a place
@@ -602,6 +701,25 @@ Zoomed out past `TERRITORY_ZOOM_RATIO`, each place projects a **claim** and the 
 those claims cover — the CK3 map-mode / Stellaris galaxy-map idea. The territory is a *translucent
 tint over the map*, not a replacement for it: the graph and roads stay fully opaque, so you
 read territory and topography at the same time.
+
+- **The faction tooltip answers "whose ground is this, and what holds it up"** — place count,
+  **total troops**, **leader count**, and the **ruler's name**. It carried only a place count
+  before, so the faction ranking and the radar were showing numbers the map never displayed and
+  three panels disagreed about the same faction.
+  - **Troops use `garrison + leader troops`, the same basis as the place tooltip and the node
+    size.** A different basis here (garrison only) would show "this faction has 300 troops" beside
+    a place reading "leader troops 200", with no way to relate the two. Verified against the DB:
+    31 garrison + 81 leader troops = the 112 the tooltip printed.
+  - **Leader count is by `factionId`, not by where the person stands.** Someone still alive but no
+    longer standing on this faction's ground is still its person — and that is the same basis the
+    faction ranking uses, which is what keeps the two panels agreeing.
+  - The ruler comes from the controlling faction's `kingId`, resolved through a `characters` lookup.
+    It is **omitted** when there is none (the king just died, no heir yet) rather than printed as
+    "none", and it is deliberately a *separate row* from the place tooltip's administrator — see
+    "Map Place Tooltip" above for why those two must not be merged.
+  - `troopsAtPlace` is recomputed in the territory effect rather than shared with the graph-build
+    pass. Two independent caches means one of them goes stale, and the faction tooltip silently
+    under-reports its troops.
 
 - **It is a force field, not a Voronoi partition.** An earlier version assigned each grid cell to
   the nearest place. That was wrong twice over: it rendered as visible cell steps, and it drew a

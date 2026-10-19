@@ -308,20 +308,26 @@ export async function battle(
         data: { factionId: attacker.factionId, garrison: 0 },
       });
 
-      // 若無總督，佔領者成為總督（不受行政官冷卻限制：戰役奪取照常生效；
-      // 但仍會打上冷卻錨點，之後 AI 10 回合內不得再換）/
-      // Capturer becomes admin if none (not blocked by the admin cooldown:
-      // battle captures still apply, but they stamp the cooldown anchor)
-      if (!place.administratorId) {
-        await grantAdmin({
-          worldId,
-          round,
-          place: { id: place.id, name: place.name },
-          char: { id: attacker.id, name: attacker.name },
-        });
-      }
-
-      // 佔領事件 / Capture event
+      // 佔領事件 **先寫**，再任命 / The capture event is written FIRST, then the appointment
+      //
+      // 順序是因果的：先佔領，之後才可能成為該地行政官。這兩個 `await` 是循序的，沒有
+      // 競爭，所以寫進資料庫的先後完全由這裡的程式順序決定。寫反了的時候，日誌讀起來是
+      // 「覃雲 被任命為 炫灰濱 的行政官」**然後才**「覃雲 佔領了 炫灰濱」——先被任命、
+      // 後佔領，時間線是倒的，而且沒有任何機制會事後修正它。
+      //
+      // 這裡只調換兩段 `await`，不動遊戲行為：行政官仍然在 build 階段（第 11 階段）之前
+      // 到位，所以「佔領當回合就能升級建築」依然成立。改變的只有事件在日誌裡的先後。
+      //
+      // The order here is the causal one: the place is captured first, and only then can
+      // anyone be its administrator. The two `await`s are sequential with no race, so the
+      // order in the database is decided entirely by the order of these statements. Written
+      // the other way round, the log reads "appointed administrator of X" *before*
+      // "captured X" — appointed first, captured second, a backwards timeline that nothing
+      // downstream can repair.
+      //
+      // Only the two `await`s are swapped; gameplay is untouched. The administrator still
+      // arrives before the build phase (11), so "captured this round, upgraded this round"
+      // still holds. Only the log's ordering changes.
       await prisma.event.create({
         data: {
           worldId,
@@ -338,6 +344,19 @@ export async function battle(
           },
         },
       });
+
+      // 若無總督，佔領者成為總督（不受行政官冷卻限制：戰役奪取照常生效；
+      // 但仍會打上冷卻錨點，之後 AI 10 回合內不得再換）/
+      // Capturer becomes admin if none (not blocked by the admin cooldown:
+      // battle captures still apply, but they stamp the cooldown anchor)
+      if (!place.administratorId) {
+        await grantAdmin({
+          worldId,
+          round,
+          place: { id: place.id, name: place.name },
+          char: { id: attacker.id, name: attacker.name },
+        });
+      }
     }
   }
 
