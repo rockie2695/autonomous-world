@@ -89,6 +89,7 @@ const EVENT_CATEGORY: Record<string, EventCategory> = {
   FACTION_COLLAPSE: 'faction',
   FACTION_ELIMINATED: 'faction',
   KING_INHERITED: 'faction',
+  SIGNAL_ISSUED: 'faction',
   ADMIN_ASSIGNED: 'admin',
   ADMIN_REMOVED: 'admin',
   PLACE_CREATED: 'place',
@@ -529,11 +530,37 @@ export function EventLog({
           character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
-      case 'ESCAPE_SUCCESS':
-        return fillTemplate(t('events.escapeSuccessDesc'), {
+      // 「逃離」要說實話：有友方（或無主）鄰居可退才是真的逃離；無路可退時只是
+      // 撿回一命、留駐原地（troops 歸 0）。舊事件沒有 `escaped` 欄位，預設 true
+      // 維持原措辭。
+      // The wording has to tell the truth: escaping means a friendly (or unowned)
+      // neighbour actually took them in; with no way out they merely survived in
+      // place (troops zeroed). Legacy rows predate `escaped` and default to the
+      // original wording.
+      case 'ESCAPE_SUCCESS': {
+        const key =
+          p.escaped === false ? 'events.escapeSurvivedDesc' : 'events.escapeSuccessDesc';
+        return fillTemplate(t(key), {
           character: leaderNode(p.charId, p.charName),
           place: placeNode(p.placeId, p.placeName),
         });
+      }
+      case 'SIGNAL_ISSUED': {
+        // 號令是勢力層唯一的動員紀錄：誰下的令、令全軍去哪、是進攻還是馳援。
+        // 沒有這一行，君王在戰略上完全隱形。
+        // The call is the only faction-level mobilisation record: who commanded it,
+        // where the host is sent, and whether it is an assault or a relief. Without
+        // the row the king is strategically invisible.
+        const key =
+          p.intent === 'defend'
+            ? 'events.signalDefendDesc'
+            : 'events.signalAttackDesc';
+        return fillTemplate(t(key), {
+          character: leaderNode(p.charId, p.charName),
+          faction: factionNode(p.factionId, p.factionName),
+          place: placeNode(p.placeId, p.placeName),
+        });
+      }
       case 'DEFECTION': {
         // 叛離要說清楚三件事：**離開哪個勢力**、**人在哪個地方**、**加入了哪個勢力**
         // （加入既有勢力，或自己建立一個新的）。原本只寫「某某 叛離了原勢力」，等於
@@ -860,13 +887,18 @@ export function EventLog({
               {String(event.round).padStart(4, '0')}
             </span>
             <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
-            {event.type === 'PLACE_CAPTURED' && (
-              // 佔領有兩種經過：打了守軍，或走進空城。日誌一行看不出差別，所以給一個
-              // 入口打開算式；沒有守軍時戰報會明講。
+            {(event.type === 'PLACE_CAPTURED' || event.type === 'BATTLE_DEATH') && (
+              // 佔領與戰死都要能打開算式：佔領有兩種經過（打了守軍，或走進空城），
+              // 戰死也有兩種（攻方被擊退後逃脫失敗，或守方兵敗陣亡）——日誌一行
+              // 都看不出差別，而且以前失敗那場的報告**算完就丟了**，死在別人地盤上
+              // 的仗打沒打過無從查起。現在死亡事件自己帶著 `report`。
               //
-              // A capture has two histories — fought a garrison, or walked into an empty
-              // place — and a row cannot show the difference, so this opens the
-              // arithmetic. The report states the no-defender case explicitly.
+              // Both captures and deaths open the arithmetic: a capture has two
+              // histories (fought a garrison, or walked in), and a death has two
+              // (the attacker was repelled and failed to flee, or the defender fell).
+              // A row cannot show the difference — and the losing side's report used
+              // to be computed and thrown away, leaving a death on foreign ground
+              // with nothing to inspect. Death events now carry their own `report`.
               <button
                 type="button"
                 onClick={() => {

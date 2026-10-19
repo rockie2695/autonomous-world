@@ -192,12 +192,18 @@ export async function runRound(worldId: string): Promise<RoundResult> {
 
   // ── 回傳結果 / Return Results ─────────────────────────────────────────────
   const duration = Date.now() - startTime;
+  // 本回合實際寫入的事件數：占位 0 會讓呼叫端以為這一回合什麼都沒發生 /
+  // The real number of events written this round: a placeholder 0 reads as
+  // "nothing happened at all"
+  const eventCount = await prisma.event.count({
+    where: { worldId, round: currentRound },
+  });
 
   return {
     worldId,
     round: currentRound,
     duration,
-    events: 0, // TODO: 從 Event 表統計實際事件數 / Count actual events from Event table
+    events: eventCount,
     charactersSpawned,
     charactersDied,
     charactersBorn,

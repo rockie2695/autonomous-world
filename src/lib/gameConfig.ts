@@ -319,10 +319,49 @@ export const CONFIG = {
   BATTLE_DEF_TI_MULT: 1 / 30, // 體魄對防禦力的貢獻 / 體魄 contribution to defense power
   BATTLE_FORTRESS_DEF_MULT: 0.2, // 堡壘等級防禦加成（每級 20%）/ Fortress level defense bonus (20% per level)
 
+  // AI 開打前估量的勝算門檻：估計攻方戰力（兵力 × (1 + 武力/30)，骰取期望值 1.0）
+  // 必須 ≥ 估計守方防禦（駐軍 + 守軍將領兵力 × (1 + 體魄/30)，再乘堡壘倍率）的此倍數，
+  // aiMove 才會開打。係數與 battle.ts 的攻防式**同一組**——估量不得引用模擬沒用的數字。
+  // 打不過就原地等待（經濟階段購兵，下回合再評估），不再隨機衝進必輸的仗。
+  // 1.2 = 要求兩成優勢當安全邊際：骰值範圍 0.85–1.15，兩成的餘裕讓單次壞骰
+  // 不至於翻盤。調低 → 將領更敢打（送頭變多）；調高 → 更多等待與囤兵。
+  //
+  // The AI's pre-battle odds threshold: the estimated attack (troops × (1 + wu/30),
+  // rolls at their expected 1.0) must be at least this multiple of the estimated
+  // defence (garrison + defending leaders' troops × (1 + ti/30), times the fortress
+  // multiplier) before aiMove engages. The coefficients are the **same** as
+  // battle.ts's formulas — an estimate may not quote numbers the fight does not use.
+  // When nothing is winnable the leader waits in place (the economy phase re-arms
+  // him) instead of charging into a losing battle.
+  // 1.2 = demanding a 20% edge as a safety margin: the rolls span 0.85–1.15, so a
+  // 20% cushion survives one bad roll. Lower → bolder AI (more suicides); higher →
+  // more waiting and stockpiling.
+  AI_ATTACK_ADVANTAGE: 1.2,
+
+  // ── 消費性格的儲備率 ──
+  // 行政官買兵前留在口袋裡的比例（只有行政官有建築要蓋；非行政官不留儲備）。
+  // 武人 0：錢全部換成兵；守將／商人 0.5：一半留給堡壘／市場；均衡 0.25。
+  // 儲備不是帳戶，是**每回合**的比例——下回合收入進來，比例重算。
+  // ── Spending-posture reserve rates ──
+  // The share of gold an administrator keeps aside before buying troops (only
+  // administrators have a building to raise; anyone else keeps no reserve).
+  // Aggressive 0: every coin becomes soldiers; guardian/merchant 0.5: half saved
+  // for the fortress/market; balanced 0.25. The reserve is not an account — it is
+  // a **per-round** fraction, recomputed as income arrives.
+  SPEND_RESERVE_AGGRESSIVE: 0,
+  SPEND_RESERVE_BALANCED: 0.25,
+  SPEND_RESERVE_GUARDIAN: 0.5,
+  SPEND_RESERVE_MERCHANT: 0.5,
+
   // ── 信號 / Signals ───────────────────────────────────────────────────────
-  // 信號集結附近友軍到目標地點
-  // Signals rally nearby friendly troops to a target place
-  SIGNAL_RANGE: 2, // 信號發送者最大道路跳數 / Max road-hops from signal sender
+  // 君王號令：危急馳援、武人進攻（見 server/phases/signals.ts 與 kingSignal.ts）。
+  // 目標按**邊界**選（自家地方相鄰的敵地／最危急的自家地方），沒有跳數概念——
+  // 舊的 SIGNAL_RANGE（發送者最大道路跳數）從未被任何程式讀取，已刪除。
+  // The king's call: relieve the urgent, attack the weakest border (see
+  // server/phases/signals.ts and kingSignal.ts). Targets are chosen by the **border**
+  // (own places' hostile neighbours / the most urgent own place) with no hop-count
+  // notion — the old SIGNAL_RANGE (max road-hops from the sender) was read by no
+  // code and has been removed.
   SIGNAL_DURATION: 5, // 信號過期前的回合數 / Rounds before signal expires
   SIGNAL_COOLDOWN: 10, // 同一角色再次發送信號前的回合數 / Rounds before same character can signal again
 
@@ -1152,7 +1191,7 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
    * zooming in should let it grow large. The cap only stops an extreme zoom from
    * blowing the text across the whole viewport.
    */
-  TERRITORY_LABEL_FONT_MAX: 120,
+  TERRITORY_LABEL_FONT_MAX: 200,
   /**
    * 只在這個鏡頭比例**以上**顯示勢力名稱（sigma 的比例**越大＝越遠**）。
    *

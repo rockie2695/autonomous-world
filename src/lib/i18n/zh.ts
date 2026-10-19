@@ -298,6 +298,21 @@ export const zh = {
     noFriends: '尚無朋友',
     noDiscontents: '沒有不滿的人',
     sinceRound: '第 {round} 回合起',
+    // ── 屬性提示（將領詳情彈窗與統計 tab 的「將領屬性」雷達共用）／
+    //    Ability tooltips (shared by the leader detail popup and the stats tab's radar)
+    tipRuleWu: '武力決定攻擊力倍率（兵力 × 倍率）',
+    tipRuleTi: '體魄決定防禦力倍率（兵力 × 倍率）',
+    tipRuleTong: '統領決定單次購兵上限（基礎 {base} 名）',
+    tipRuleJing: '經濟決定收入分成的比例',
+    tipRuleSpeed: '速度決定戰敗時的逃脫機率',
+    tipRuleDefection: '野心是叛變值的基礎',
+    tipRuleAge: '年齡影響壽命與生育年齡',
+    tipAttack: '攻擊倍率 {value}',
+    tipDefence: '防禦倍率 {value}',
+    tipBuyTroops: '購兵倍率 {value}',
+    tipIncome: '分成倍率 {value}',
+    tipEscape: '速度相同 {base}，每 1 點速度差 +{per}',
+    tipDefectionRate: '僅此項時的叛變機率 {value}',
   },
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
@@ -387,6 +402,13 @@ connections: '連接道路',
     defeatDesc: '{character} 在 {place} 戰敗',
     escapeSuccess: '逃脫成功',
     escapeSuccessDesc: '{character} 成功逃離 {place}',
+    // 無路可退的「逃離」：撿回一命但留駐原地（troops 歸 0），不是真的離開 /
+    // The no-way-out "escape": survived but stayed put (troops zeroed), not a real escape
+    escapeSurvivedDesc: '{character} 在 {place} 撿回一命（無路可退，留駐原地）',
+    // 號令：君王按性格動員全軍——進攻或馳援 /
+    // The call: the king musters the host by posture — an assault or a relief
+    signalAttackDesc: '{faction} 的 {character} 號令全軍進攻 {place}',
+    signalDefendDesc: '{faction} 的 {character} 號令全軍馳援 {place}',
     escapeFail: '逃脫失敗',
     escapeFailDesc: '{character} 未能逃離 (速度差: {speedDiff})',
     defection: '叛變',

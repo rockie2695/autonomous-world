@@ -20,6 +20,11 @@
 
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
+import {
+  estimateAttack,
+  estimatePlaceDefence,
+  isThreatened,
+} from '@/lib/warEstimate';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
 
@@ -49,6 +54,10 @@ export async function aiMove(
       speed: true,
       factionId: true,
       troops: true,
+      // 開打前估量攻防需要武力與體魄（見下方 defenceEstimate）/
+      // wu and ti feed the pre-battle estimate (see defenceEstimate below)
+      wu: true,
+      ti: true,
     },
   });
 
@@ -100,6 +109,13 @@ export async function aiMove(
     select: {
       id: true,
       factionId: true,
+      // 開打前估量守方：駐軍與堡壘等級（見下方 defenceEstimate）/
+      // garrison and fortress feed the defender estimate (see defenceEstimate below)
+      garrison: true,
+      fortress: true,
+      // 行政官：受威脅的行政官留守不出征（見主迴圈）/
+      // administratorId: a threatened administrator stays home (see the main loop)
+      administratorId: true,
     },
   });
 
@@ -132,6 +148,29 @@ export async function aiMove(
     }
   }
 
+  // ── 開打前的估量（warEstimate.ts——攻守共用同一份，battle.ts 同一組係數）──
+  // 每個地方的**估計防禦**：駐軍 + 同陣營守軍將領（體魄加成）× 堡壘倍率。
+  // ── The pre-battle estimate (warEstimate.ts — both sides share it, and the
+  // coefficients are battle.ts's own) ──
+  // Each place's **estimated defence**: garrison plus same-faction defending leaders
+  // (physique scaled), times the fortress multiplier.
+  const residentsByPlace = new Map<string, typeof characters>();
+  for (const c of characters) {
+    const list = residentsByPlace.get(c.placeId) ?? [];
+    list.push(c);
+    residentsByPlace.set(c.placeId, list);
+  }
+  const administratorByPlace = new Map(
+    places.map((p) => [p.id, p.administratorId] as const)
+  );
+  const defenceEstimate = new Map<string, number>();
+  for (const place of places) {
+    const defenders = (residentsByPlace.get(place.id) ?? []).filter(
+      (c) => c.factionId !== null && c.factionId === place.factionId
+    );
+    defenceEstimate.set(place.id, estimatePlaceDefence(place, defenders));
+  }
+
   // 移動每個角色 / Move each character
   for (const char of sorted) {
     // 本回合出生的角色原地待命（出生回合不移動）/
@@ -146,20 +185,35 @@ export async function aiMove(
       // 朝號令目標移動 / Move toward signal target
       const neighbors = adjacent.get(char.placeId) ?? [];
       if (neighbors.includes(signalTarget)) {
-        // 可直接移至目標 / Can move directly to target
-        await prisma.character.update({
-          where: { id: char.id },
-          data: { placeId: signalTarget },
-        });
-        await recordMove({
-          worldId,
-          round,
-          charId: char.id,
-          charName: char.name,
-          factionId: char.factionId,
-          fromPlaceId: char.placeId,
-          toPlaceId: signalTarget,
-        });
+        // 可直接移至目標。但**敵地要先估量**：君王的號令不是送死令——打不贏
+        // （估計攻擊 < 估計防禦 × AI_ATTACK_ADVANTAGE，與自主進攻同一道門檻）
+        // 就原地等待，經濟階段購兵後再接令。馳援自家/無主地不需要門檻。
+        // Can move directly onto the target. But a **hostile target needs the
+        // estimate first**: the king's call is not a suicide order — if it is
+        // unwinnable (estimated attack < defence × AI_ATTACK_ADVANTAGE, the same
+        // bar as a self-chosen assault), wait in place and re-arm. Relieving an own
+        // or unowned place needs no bar.
+        const targetFaction = placeFactionMap.get(signalTarget);
+        const hostile = targetFaction !== char.factionId;
+        const winnable =
+          !hostile ||
+          estimateAttack(char) >=
+            (defenceEstimate.get(signalTarget) ?? 0) * CONFIG.AI_ATTACK_ADVANTAGE;
+        if (winnable) {
+          await prisma.character.update({
+            where: { id: char.id },
+            data: { placeId: signalTarget },
+          });
+          await recordMove({
+            worldId,
+            round,
+            charId: char.id,
+            charName: char.name,
+            factionId: char.factionId,
+            fromPlaceId: char.placeId,
+            toPlaceId: signalTarget,
+          });
+        }
         continue;
       }
 
@@ -186,6 +240,39 @@ export async function aiMove(
       continue;
     }
 
+    // ── 受威脅的行政官留守 ──
+    // 行政官被 aiMove 拉出去進攻，自己管的地方就空了——最能打的守軍不在。規則：
+    // 行政官所在地**受威脅**（warEstimate 的 isThreatened：在場或相鄰的敵將，
+    // 估計攻擊蓋得過本地估計防禦）就不出征——他的兵力與體魄本來就計入本地防禦，
+    // 人走了防禦直接掉一截。號令（君王明令）優先於留守：上面的分支已經 continue。
+    // 與攻方門檻（AI_ATTACK_ADVANTAGE）不同：防守要比進攻更早警覺。
+    //
+    // ── A threatened administrator stays home ──
+    // aiMove would march the administrator out to attack and leave their place
+    // empty — the strongest defender gone. Rule: when the administrator's place is
+    // **threatened** (warEstimate's isThreatened: some hostile leader present or
+    // adjacent whose estimated attack clears the local estimated defence), they do
+    // not march out — their troops and physique already count toward the local
+    // defence, and leaving drops it. A signal (the king's explicit order) outranks
+    // staying: that branch already continued above. Deliberately a lower bar than
+    // the attacking side's AI_ATTACK_ADVANTAGE: defence wakes before offence
+    // commits.
+    if (char.factionId && administratorByPlace.get(char.placeId) === char.id) {
+      let maxHostileAttack = 0;
+      const nearby = [char.placeId, ...(adjacent.get(char.placeId) ?? [])];
+      for (const pid of nearby) {
+        for (const resident of residentsByPlace.get(pid) ?? []) {
+          if (resident.factionId === null || resident.factionId === char.factionId) continue;
+          if (resident.id === char.id) continue;
+          maxHostileAttack = Math.max(maxHostileAttack, estimateAttack(resident));
+        }
+      }
+      if (isThreatened(defenceEstimate.get(char.placeId) ?? 0, maxHostileAttack)) {
+        // 留守：本回合完全不出征 / Stay: no movement at all this round
+        continue;
+      }
+    }
+
     // 2. 若無號令，檢查陣營附近是否有敵人 / If no signal, check if faction has enemies nearby
     if (char.factionId) {
       const neighbors = adjacent.get(char.placeId) ?? [];
@@ -197,8 +284,42 @@ export async function aiMove(
       });
 
       if (enemyPlaces.length > 0) {
-        // 朝隨機敵方地點移動 / Move toward random enemy place
-        const target = rng.pick(enemyPlaces);
+        // **開打前先估量**（原行為是 rng.pick 隨機撿一個敵鄰衝進去，兵力不足也衝，
+        // 結果就是「賈寶 在 靜霞堡 戰死」這種送頭）：
+        //
+        // - 攻方估計戰力 = 兵力 × (1 + 武力 × BATTLE_ATK_WU_MULT)——battle.ts 的
+        //   攻擊式去掉隨機骰（期望值 1.0）
+        // - 守方估計防禦 = defenceEstimate（駐軍 + 守軍將領，含堡壘倍率）
+        // - 只有**估計戰力 ≥ 估計防禦 × AI_ATTACK_ADVANTAGE** 才開打；幾個可打的
+        //   之中挑**最弱**的（不是隨機——會打仗就是要挑贏面最大的）
+        // - 沒有任何一個打得過：**原地等待**。經濟階段會用他的金幣購兵，
+        //   下回合再評估——等兵、等錢，而不是送死。
+        // - 兵力為 0 的（剛被擊退的倖存者）不衝敵陣：battle.ts 根本不會讓 0 兵的
+        //   人開戰，衝過去只是站在敵人地盤上，所以同樣原地等待。
+        //
+        // **Estimate before engaging** (the old behaviour `rng.pick`ed an enemy
+        // neighbour and charged in regardless of strength — the "died at the
+        // neighbouring strong place" kind of suicide):
+        //
+        // - Estimated attack = troops × (1 + wu × BATTLE_ATK_WU_MULT) — battle.ts's
+        //   attack formula with the roll at its expected 1.0
+        // - Estimated defence = defenceEstimate (garrison + defenders, fortress
+        //   multiplier included)
+        // - Engage only when **attack ≥ defence × AI_ATTACK_ADVANTAGE**; among the
+        //   viable ones pick the **weakest** (not random — if you must fight, fight
+        //   the most winnable)
+        // - If none is winnable: **wait in place**. The economy phase buys troops
+        //   with his gold and next round re-evaluates — wait and re-arm, not die.
+        // - A troops-0 survivor never charges in: battle.ts would not let him fight
+        //   anyway, so waiting is the only honest move.
+        // - 估計戰力用 estimateAttack（warEstimate.ts，與戰報同一組係數）/
+        //   estimated attack via estimateAttack (warEstimate.ts, the report's own coefficients)
+        const attackEstimate = estimateAttack(char);
+        const viable = enemyPlaces
+          .map((id) => ({ id, defence: defenceEstimate.get(id) ?? 0 }))
+          .filter((p) => attackEstimate >= p.defence * CONFIG.AI_ATTACK_ADVANTAGE)
+          .sort((a, b) => a.defence - b.defence);
+        const target = viable[0]?.id;
         if (target) {
           await prisma.character.update({
             where: { id: char.id },
@@ -214,6 +335,9 @@ export async function aiMove(
             toPlaceId: target,
           });
         }
+        // 沒有打得過的目標就原地不動（等待購兵），不再隨機送頭 /
+        // No winnable target: stay put and wait for the economy phase to re-arm,
+        // instead of charging into a losing fight
         continue;
       }
 

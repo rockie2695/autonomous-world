@@ -299,6 +299,20 @@ export const en = {
     noFriends: 'No friends yet',
     noDiscontents: 'Unhappy with no one',
     sinceRound: 'since R{round}',
+    // ── Ability tooltips (shared by the leader detail popup and the stats tab's radar)
+    tipRuleWu: 'Martial scales attack power (troops × multiplier)',
+    tipRuleTi: 'Physique scales defence (troops × multiplier)',
+    tipRuleTong: 'Leadership caps one troop purchase (base {base})',
+    tipRuleJing: 'Economy scales the income share',
+    tipRuleSpeed: 'Speed sets the escape chance when a fight is lost',
+    tipRuleDefection: 'Ambition is the base of the defection value',
+    tipRuleAge: 'Age governs lifespan and the childbirth window',
+    tipAttack: 'Attack multiplier {value}',
+    tipDefence: 'Defence multiplier {value}',
+    tipBuyTroops: 'Purchase multiplier {value}',
+    tipIncome: 'Income multiplier {value}',
+    tipEscape: 'Equal speed {base}; +{per} per point of difference',
+    tipDefectionRate: 'Defection chance from this alone {value}',
   },
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
@@ -387,6 +401,13 @@ export const en = {
     defeatDesc: '{character} defeated at {place}',
     escapeSuccess: 'Escape Success',
     escapeSuccessDesc: '{character} escaped from {place}',
+    // The no-way-out "escape": survived but stayed put (troops zeroed), not a real escape
+    escapeSurvivedDesc:
+      '{character} survived at {place} — no friendly place to flee to, holding in place',
+    // The call: the king musters the host by posture — an assault or a relief
+    signalAttackDesc: '{character} of {faction} commands the host to attack {place}',
+    signalDefendDesc:
+      '{character} of {faction} commands the host to relieve {place}',
     escapeFail: 'Escape Failed',
     escapeFailDesc: '{character} failed to escape (speed diff: {speedDiff})',
     defection: 'Defection',

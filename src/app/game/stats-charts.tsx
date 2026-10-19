@@ -22,6 +22,7 @@ import { apiFetch } from '@/lib/api';
 import type { WorldState } from './types';
 import { GM_BTN, GM_BTN_ACCENT, GM_PANEL, GM_SKEL, GM_TITLE } from './styles';
 import { DetailModal } from './leader-detail';
+import { abilityTipLines, useAbilityTip } from './tooltip';
 // ─── 統計圖表 / Stats Charts ─────────────────────────────────────────────────────
 
 /** 圖表類型 / Chart type */
@@ -1098,7 +1099,7 @@ function FactionTreemap({
   );
 }
 
-/** 雷達圖的六個軸：五項能力 + 年齡 / The radar's six axes: five abilities plus age */
+/** 雷達圖的七個軸：五項能力 + 野心 + 年齡 / The radar's seven axes: five abilities plus ambition and age */
 export const RADAR_AXES = [
   { key: 'wu', label: 'character.wu', max: CONFIG.CHAR_ABILITY_MAX },
   { key: 'tong', label: 'character.tong', max: CONFIG.CHAR_ABILITY_MAX },
@@ -1151,6 +1152,43 @@ function radarPoints(values: number[], size: number, radius: number): string {
     return ((raw % RADAR_AXES.length) + RADAR_AXES.length) % RADAR_AXES.length;
   }
 
+  /**
+   * 點是否在多邊形內（射線法）。`points` 是 {@link radarPoints} 的輸出字串。
+   * Whether a point lies inside a polygon (ray casting). `points` is what
+   * {@link radarPoints} produces.
+   */
+  function pointInPolygon(px: number, py: number, points: string): boolean {
+    const pts = points.split(' ').map((pair) => pair.split(',').map(Number));
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const xi = pts[i]![0]!;
+      const yi = pts[i]![1]!;
+      const xj = pts[j]![0]!;
+      const yj = pts[j]![1]!;
+      const crosses = yi > py !== yj > py;
+      if (crosses && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  /**
+   * 多邊形面積（鞋帶公式），用來在重疊命中裡挑**最內層**的那個——與區塊圖的
+   * 「最小包含矩形」同一條命中規則：游標同時落在幾個半透明多邊形裡時，
+   * 最小的那個才是讀者看到的底色。
+   * Polygon area (shoelace), used to pick the **innermost** of overlapping hits —
+   * the same rule as the treemap's smallest containing rect: when the cursor sits
+   * inside several translucent polygons, the smallest one is the fill the reader
+   * sees under it.
+   */
+  function polygonArea(points: string): number {
+    const pts = points.split(' ').map((pair) => pair.split(',').map(Number));
+    let sum = 0;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      sum += pts[j]![0]! * pts[i]![1]! - pts[i]![0]! * pts[j]![1]!;
+    }
+    return Math.abs(sum) / 2;
+  }
+
 /** 同心格線：四條軸線各畫四圈 / Concentric grid: four rings along each of the six axes */
 function RadarGrid({ size, radius }: { size: number; radius: number }) {
   const cx = size / 2;
@@ -1177,8 +1215,29 @@ function RadarGrid({ size, radius }: { size: number; radius: number }) {
   );
 }
 
-/** 軸標籤（沿用 character.* i18n 鍵）/ Axis labels, reusing the existing character.* keys */
-function RadarAxisLabels({ size, radius }: { size: number; radius: number }) {
+/**
+ * 軸標籤（沿用 character.* i18n 鍵）。
+ * `onAxisEnter` / `onAxisLeave` 是**選擇性**的：只有「將領屬性」放大彈窗傳入，
+ * 讓軸標籤可以 hover 出提示。側欄小雷達與將領表格的 hover 預覽不傳——側欄
+ * 已有自己的逐軸讀值提示，再開一個會兩種提示打架。
+ *
+ * Axis labels, reusing the existing character.* keys. `onAxisEnter` /
+ * `onAxisLeave` are **optional**: only the enlarged 「將領屬性」 modal passes
+ * them, letting the labels open an ability tooltip. The sidebar radar and the
+ * leader-table hover preview pass none — the sidebar already has its own
+ * per-axis readout, and a second tooltip there would fight the first.
+ */
+function RadarAxisLabels({
+  size,
+  radius,
+  onAxisEnter,
+  onAxisLeave,
+}: {
+  size: number;
+  radius: number;
+  onAxisEnter?: (index: number, el: SVGTextElement) => void;
+  onAxisLeave?: () => void;
+}) {
   const cx = size / 2;
   const cy = size / 2;
   return (
@@ -1195,6 +1254,8 @@ function RadarAxisLabels({ size, radius }: { size: number; radius: number }) {
             fontSize={9}
             fontFamily="monospace"
             style={{ fill: 'var(--color-ds-muted)' }}
+            onMouseEnter={onAxisEnter ? (e) => onAxisEnter(i, e.currentTarget) : undefined}
+            onMouseLeave={onAxisLeave}
           >
             {t(axis.label)}
           </text>
@@ -1274,6 +1335,12 @@ function CharacterRadar({
    */
   const [hoverAxis, setHoverAxis] = useState<number | null>(null);
   const [enlarged, setEnlarged] = useState(false);
+  // 放大彈窗裡的屬性提示：軸標籤與逐勢力數值 hover 時開。與將領詳情彈窗共用
+  // 同一個面板與同一份內容產生器（tooltip.tsx）。
+  // The ability tooltip inside the enlarged modal: opened by hovering an axis
+  // label or a per-faction value. Shares the panel and the content builder with
+  // the leader detail popup (tooltip.tsx).
+  const axisTip = useAbilityTip();
   /**
    * 游標位置（相對於雷達圖容器），提示就跟著它走。
    *
@@ -1488,6 +1555,55 @@ function CharacterRadar({
         className="w-full max-w-[420px] mx-auto"
         role="img"
         aria-label={t('stats.attributes')}
+        /* 圖**本體**也能 hover：游標最近的那條軸開提示。**命中哪個勢力**：游標落在
+            哪個勢力的多邊形內就顯示那個勢力（重疊時取最內層＝面積最小，與區塊圖的
+            最小包含矩形同一條規則），標題帶勢力名與勢力色；不在任何多邊形內才退回
+            世界平均（虛線參考環）。離圓心超出外圈 + 標籤餘量就收起——游標不在圖上。
+            viewBox 不等於像素寬，先轉成 viewBox 座標再求軸，否則指向錯的軸。
+            The chart **body** is hoverable too: the nearest spoke opens the tip. **Which
+            faction**: the one whose polygon contains the cursor — the innermost
+            (smallest-area) on overlap, the same rule as the treemap's smallest
+            containing rect — titled with the faction's name and colour; only when the
+            cursor is in no polygon does it fall back to the world average (the dashed
+            reference). Beyond the outer ring plus the label margin the tip closes — the
+            pointer is off the chart. The viewBox is not the pixel width, so convert into
+            viewBox space first or the readout names the wrong spoke. */
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const scale = RADAR_BIG_SIZE / Math.max(rect.width, 1);
+          const x = (e.clientX - rect.left) * scale;
+          const y = (e.clientY - rect.top) * scale;
+          const dx = x - RADAR_BIG_SIZE / 2;
+          const dy = y - RADAR_BIG_SIZE / 2;
+          if (Math.hypot(dx, dy) > RADAR_BIG_RADIUS + 25) {
+            axisTip.hide();
+            return;
+          }
+          const axis = nearestRadarAxis(dx, dy);
+          const hit = bySize
+            .map((entry) => ({
+              faction: entry.faction,
+              value: (entry.values ?? [])[axis] ?? 0,
+              points: radarPoints(entry.values ?? [], RADAR_BIG_SIZE, RADAR_BIG_RADIUS),
+            }))
+            .filter((p) => pointInPolygon(x, y, p.points))
+            .sort((a, b) => polygonArea(a.points) - polygonArea(b.points))[0];
+          if (hit) {
+            axisTip.showAt(
+              abilityTipLines(RADAR_AXES[axis].key, hit.value),
+              e.clientX,
+              e.clientY,
+              { title: hit.faction.name, titleColor: hit.faction.color }
+            );
+          } else {
+            axisTip.showAt(
+              abilityTipLines(RADAR_AXES[axis].key, worldAverage?.[axis] ?? 0),
+              e.clientX,
+              e.clientY
+            );
+          }
+        }}
+        onMouseLeave={axisTip.hide}
       >
         <RadarGrid size={RADAR_BIG_SIZE} radius={RADAR_BIG_RADIUS} />
         {bySize.map(({ faction, values }) => (
@@ -1510,11 +1626,31 @@ function CharacterRadar({
             strokeDasharray="3 2"
           />
         )}
-        <RadarAxisLabels size={RADAR_BIG_SIZE} radius={RADAR_BIG_RADIUS} />
+        <RadarAxisLabels
+          size={RADAR_BIG_SIZE}
+          radius={RADAR_BIG_RADIUS}
+          onAxisEnter={(i, el) =>
+            axisTip.show(
+              // 軸標籤上沒有單一勢力，數字取**世界平均**（圖上那條虛線參考）——
+              // 與多邊形呈現的是同一組數字 /
+              // An axis label has no single faction, so the number comes from the
+              // **world average** (the dashed reference on the chart) — the same
+              // series the polygon shows
+              abilityTipLines(RADAR_AXES[i].key, worldAverage?.[i] ?? 0),
+              el
+            )
+          }
+          onAxisLeave={axisTip.hide}
+        />
       </svg>
-      {/* 放大版把每條軸的數值都列出來：形狀在這個大小已經好讀，但「多少」仍然要文字 /
+      {/* 放大版把每條軸的數值都列出來：形狀在這個大小已經好讀，但「多少」仍然要文字。
+          每個數值可 hover：同一個提示（規則 + 該勢力平均算出的數字）。倍率對屬性是
+          線性的，所以用平均算出的數字恰好等於平均倍率——精確，不是近似。
           The enlarged copy lists every axis value: the shape is readable at this size,
-          but "how much" still needs text. */}
+          but "how much" still needs text. Each value is hoverable: the same tip (rule +
+          the number derived from that faction's mean). The multipliers are linear in the
+          ability, so a mean fed in yields exactly the mean multiplier — precise, not an
+          approximation. */}
       <ul className="mt-3 space-y-1">
         {bySize.map(({ faction, members, values }) => (
           <li key={faction.id} className="text-[13px] text-gray-300 font-mono">
@@ -1528,7 +1664,19 @@ function CharacterRadar({
             </span>
             <span className="block pl-3.5 text-gray-500">
               {RADAR_AXES.map((axis, i) => (
-                <span key={axis.key} className="mr-2 inline-block">
+                <span
+                  key={axis.key}
+                  className="mr-2 inline-block"
+                  {...axisTip.triggerProps(
+                    abilityTipLines(axis.key, (values ?? [])[i] ?? 0),
+                    // 標題帶勢力名與色：列表每一行都屬於某個勢力，提示不該讓讀者
+                    // 回頭去對行首的名字 /
+                    // Title carries the faction's name and colour: each row belongs to
+                    // a faction, and the tip should not make the reader look back up
+                    // at the row heading
+                    { title: faction.name, titleColor: faction.color }
+                  )}
+                >
                   {t(axis.label)}
                   <span className="text-gray-300">
                     {(values ?? [])[i]?.toFixed(1) ?? '0'}
@@ -1539,6 +1687,9 @@ function CharacterRadar({
           </li>
         ))}
       </ul>
+      {/* 與 LeaderDetail 同一個面板：closed 時 null，開啟時 portal 到 body。
+          The same panel as LeaderDetail: null while closed, portalled to body when open. */}
+      {axisTip.panel}
     </DetailModal>
     </>
   );
@@ -1684,6 +1835,30 @@ export function CharacterRadarHover({
           <div className="font-mono tabular-nums text-sm text-cyan-200">
             {values[hover.axis]}
           </div>
+          {/* 意義與模擬實際算出的倍率：與詳情彈窗屬性列**同一份**內容產生器
+              （tooltip.tsx 的 abilityTipLines），兩處不會各寫一份然後漂移。
+              數字由本人**基礎值**算出——多邊形畫的就是基礎值，面板內自洽；
+              有效值（含關係加減）由屬性列的提示負責。
+              Meaning and the multiplier the simulation actually derives: the **same**
+              content builder as the detail popup's ability rows (abilityTipLines in
+              tooltip.tsx), so the two cannot drift. The number comes from the
+              character's **base** value — the polygon draws base values, so the panel
+              is self-consistent; the effective value (with relation deltas) is the
+              stat rows' tooltip's job. */}
+          {abilityTipLines(RADAR_AXES[hover.axis].key, values[hover.axis]).map(
+            (line, i) => (
+              <div
+                key={i}
+                className={
+                  i === 0
+                    ? 'text-[11px] leading-snug text-gray-400'
+                    : 'font-display text-[11px] leading-snug text-cyan-300'
+                }
+              >
+                {line}
+              </div>
+            )
+          )}
           {referenceDiffers && factionAverage && (
             <div className="mt-0.5 font-mono tabular-nums text-[11px] text-gray-500">
               {t('stats.factionAverage')}{' '}

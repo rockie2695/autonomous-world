@@ -40,6 +40,7 @@ import { Ic, Crown } from './icons';
 import { EventLog } from './EventLog';
 import { StatsCharts, CharacterRadarHover, RADAR_AXES } from './stats-charts';
 import { DetailModal, FactionRanking, LeaderRelations } from './leader-detail';
+import { abilityTipLines, useAbilityTip } from './tooltip';
 import type { WorldInfo, WorldState } from './types';
 import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_CORNER_BR, GM_CORNER_TL, GM_CORNER_TR, GM_FRAME, GM_HUD_CONTROLS_CLOSED, GM_HUD_CONTROLS_OPEN, GM_HUD_LEGEND, GM_KPI, GM_KPI_FIRST, GM_KPI_LABEL, GM_KPI_VALUE, GM_LEGEND, GM_LEGEND_ITEM, GM_MODAL, GM_MODAL_PHOTO, GM_MODAL_VEIL, GM_PANEL, GM_PHOTO, GM_RAIL, GM_SKEL, GM_STAT, GM_STAT_LABEL, GM_STAT_VALUE, GM_STRIP, GM_STRIP_INLINE, GM_STRIP_PHOTO, GM_STRIP_VEIL, GM_TIMELINE, GM_TITLE, GM_VEIL, GM_VIGNETTE } from './styles';
 
@@ -1653,6 +1654,10 @@ function LeaderDetail({
   // The relations tab starts closed: most readers come for the numbers, and the relations
   // are there when they want them.
   const [detailTab, setDetailTab] = useState<'stats' | 'relations'>('stats');
+  // 屬性提示：一個共用面板（portal 到 body），五列各自把內容傳進觸發 props。
+  // The ability tooltip: one shared panel (portalled to body); the five rows each
+  // hand their content to the trigger props.
+  const abilityTip = useAbilityTip();
 
   // 人名查表**每次 render 重建一次**，而不是用 ref 或 memo：這裡只在「點名字」時被呼叫，
   // 重建的成本是幾個 entry，而 memo 化反而要處理 `characters` 陣列的參考identity——
@@ -1758,7 +1763,14 @@ function LeaderDetail({
     {
       title: t('character.groupBasic'),
       rows: [
-        { label: t('character.age'), value: char.age },
+        {
+          label: t('character.age'),
+          value: char.age,
+          // 雷達七軸的最後一軸也要有文字提示；年齡不進戰鬥算式，只有規則行 /
+          // The last of the radar's seven axes gets a text tip too; age feeds no
+          // combat arithmetic, so rule only
+          tip: abilityTipLines('age', char.age),
+        },
         {
           label: t('character.place'),
           // 位置可點：把鏡頭移過去，並且開啟「地點」分頁看那個地方的詳情。
@@ -1801,16 +1813,39 @@ function LeaderDetail({
         {
           label: t('character.wu'),
           value: abilityText(char.wu, effectiveWu),
-          note: modifiedNote(char.wu, effectiveWu),
+          // 提示 = 規則 + 模擬實際算出的數字（用**有效值**，與戰報同一個數字）；
+          // 被關係改動時再多一行原因 /
+          // Tip = rule + the number the simulation derives (from the **effective**
+          // value, the same one the battle report uses); when relations moved it,
+          // a reason line is appended
+          tip: withRelation(
+            abilityTipLines('wu', effectiveWu),
+            modifiedNote(char.wu, effectiveWu)
+          ),
         },
         {
           label: t('character.ti'),
           value: abilityText(char.ti, effectiveTi),
-          note: modifiedNote(char.ti, effectiveTi),
+          tip: withRelation(
+            abilityTipLines('ti', effectiveTi),
+            modifiedNote(char.ti, effectiveTi)
+          ),
         },
-        { label: t('character.tong'), value: char.tong },
-        { label: t('character.jing'), value: char.jing },
-        { label: t('character.speed'), value: char.speed },
+        {
+          label: t('character.tong'),
+          value: char.tong,
+          tip: abilityTipLines('tong', char.tong),
+        },
+        {
+          label: t('character.jing'),
+          value: char.jing,
+          tip: abilityTipLines('jing', char.jing),
+        },
+        {
+          label: t('character.speed'),
+          value: char.speed,
+          tip: abilityTipLines('speed', char.speed),
+        },
       ],
     },
     {
@@ -1822,7 +1857,7 @@ function LeaderDetail({
             `character.loyalty${char.loyalty.charAt(0)}${char.loyalty.slice(1).toLowerCase()}`
           ),
         },
-        { label: t('character.defectionBase'), value: char.defectionBase },
+        { label: t('character.defectionBase'), value: char.defectionBase, tip: abilityTipLines('defectionBase', char.defectionBase) },
         { label: t('character.defectionValue'), value: defection.toFixed(1) },
         { label: t('character.defectionChance'), value: `${(defectionRate * 100).toFixed(1)}%` },
       ],
@@ -1831,6 +1866,13 @@ function LeaderDetail({
 
   return (
     <div className="flex flex-col gap-4 sm:flex-row">
+      {/* 屬性提示面板：closed 時是 null；開啟時 portal 到 document.body（fixed 定位，
+          內文捲動容器裁不到它）。DOM 位置不影響顯示，放這裡只是讓它跟著元件卸載。
+          The ability tooltip panel: null while closed; when open it portals to
+          document.body (fixed, beyond the reach of the scrolling body's clip). Its
+          DOM position is irrelevant to where it shows; this spot just ties its
+          lifetime to this component. */}
+      {abilityTip.panel}
       <div className="shrink-0">
         {/* 呼吸只在詳情彈窗開：這裡是全頁唯一的單一大頭像，動得起來也值得動。
             列表列與 hover 預覽不開 —— 那兩處在 40–56px，動畫看不出來卻會持續重繪。
@@ -1942,6 +1984,9 @@ function LeaderDetail({
                   <div
                     key={row.label}
                     className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
+                    /* 有提示的列才是可聚焦的：hover 與 focus 都會開提示（見 tooltip.tsx）。
+                       Focusable only when there is a tip; both hover and focus open it. */
+                    {...(row.tip ? abilityTip.triggerProps(row.tip) : {})}
                   >
                     <dt className="text-xs text-gray-400">{row.label}</dt>
                     {/* 顯示字體放在**值**上，不放在 `dd` 上：「位置」那一列的值是個
@@ -1951,7 +1996,7 @@ function LeaderDetail({
                         row's value is a button, and a button inherits its parent's font —
                         putting it on the `dd` would silently switch the place name to the
                         display face, which is a typographic change nobody asked for. */}
-                    <dd className="min-w-0 text-xs text-gray-200" title={row.note}>
+                    <dd className="min-w-0 text-xs text-gray-200">
                       {typeof row.value === 'string' || typeof row.value === 'number' ? (
                         <span className="font-display">{row.value}</span>
                       ) : (
@@ -2640,9 +2685,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
               {shown.map((p) => {
               const owner = factions.find((f) => f.id === p.factionId);
               const adminId = p.administratorId;
-              const adminChar = (characters ?? []).find(
-                (c: any) => c.id === adminId
-              );
+              const adminChar = (characters ?? []).find((c) => c.id === adminId);
               return (
                 <li key={p.id}>
                   <button
@@ -3220,16 +3263,32 @@ function formatEffect(value: number, unit: 'percent' | 'gold' | 'troops'): strin
  * button** — it moves the camera and opens the place tab. Making it a string would mean a
  * second code path for that one row.
  *
- * `note` 是 tooltip，只有**被規則改動過**的數值才會有：括號裡已經寫了增減量，那是結果；
- * tooltip 說的是原因。
+ * `tip` 是提示行：第 1 行規則、第 2 行模擬實際算出的數字，其後是「關係改動」的
+ * 原因行。由 `useAbilityTip` 的觸發 props 掛到列上——hover 與 focus 都會開，
+ * 取代舊的原生 `title`（那只有被改動過的 wu/ti 才有，且樣式不受控）。
  *
- * `note` is the tooltip, and only a value **a rule has moved** carries one: the parenthetical
- * already shows the change, which is the result; the tooltip gives the reason.
+ * `tip` carries the tooltip lines: line 1 the rule, line 2 the number the
+ * simulation derives, then the "relations moved it" reason. Mounted through
+ * `useAbilityTip`'s trigger props — both hover and focus open it, replacing the
+ * old native `title` (which only existed for wu/ti when modified, in unstyled
+ * browser chrome).
  */
 interface StatRow {
   label: string;
   value: ReactNode;
-  note?: string;
+  tip?: readonly string[];
+}
+
+/**
+ * 把「關係改動」的原因行接在提示最後；沒有改動就原樣返回。
+ * Appends the "relations moved it" reason line to a tip; returns the lines as-is
+ * when there is no note.
+ */
+function withRelation(
+  lines: readonly string[],
+  note: string | undefined
+): readonly string[] {
+  return note ? [...lines, note] : lines;
 }
 
 /**

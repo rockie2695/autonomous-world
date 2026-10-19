@@ -137,6 +137,16 @@ export function EventGlyph({ type }: { type: string }) {
         </>
       );
       break;
+    case 'SIGNAL_ISSUED':
+      // 號令旗：一根旗桿與一面招展的旗——勢力層的動員 /
+      // A signal banner: pole and pennant — the faction mustering
+      body = (
+        <>
+          <path d="M7 21V4" />
+          <path d="M7 5h10l-2.5 3.5L17 12H7z" />
+        </>
+      );
+      break;
     case 'BUILDING_UPGRADE':
       body = (
         <>

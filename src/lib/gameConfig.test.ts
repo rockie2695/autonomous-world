@@ -38,8 +38,8 @@ describe('Game Configuration', () => {
       expect(CONFIG).toHaveProperty('BATTLE_RANDOM_MAX');
 
       // 號令 / Signals
-      expect(CONFIG).toHaveProperty('SIGNAL_RANGE');
       expect(CONFIG).toHaveProperty('SIGNAL_DURATION');
+      expect(CONFIG).toHaveProperty('SIGNAL_COOLDOWN');
     });
 
     it('should have numeric values for all numeric configs', () => {

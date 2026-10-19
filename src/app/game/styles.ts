@@ -159,6 +159,33 @@ export const GM_MODAL_PHOTO = 'absolute inset-0 size-full object-cover opacity-[
 export const GM_MODAL_VEIL =
   'absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.2)_0%,rgba(2,6,23,0.9)_76%,rgba(2,6,23,0.97)_100%)]';
 
+/**
+ * 屬性提示面板。表面沿用 LeaderAvatar 的 hover 提示（同一種圓角、邊框、模糊底），
+ * 但用 `fixed` 而不是 `absolute`：兩個宿主（將領詳情彈窗、統計 tab 的放大雷達）
+ * 的內文都是 `overflow-auto` 捲動容器，絕對定位的面板會被裁掉——與
+ * `CharacterRadarHover` 必須 portal 的理由相同。位置由事件處理器量 rect 後寫入。
+ *
+ * `z-[110]` 是**刻意的**：兩個宿主都是 `DetailModal`，它的外層背板是 `z-[100]`
+ * （`leader-detail.tsx`），面板 portal 到同一個 `document.body`，`z-50` 會整個
+ * 被彈窗壓住——實測症狀正是「提示開了卻什麼都看不到」。必須高於 100 才會浮在
+ * 彈窗之上。
+ *
+ * The ability tooltip panel. Same surface as LeaderAvatar's hover tooltip (same
+ * rounding, border, blurred backdrop), but `fixed` rather than `absolute`: both
+ * hosts (the leader detail modal, the stats tab's enlarged radar) scroll their
+ * body with `overflow-auto`, which would clip an absolutely positioned panel —
+ * the same reason `CharacterRadarHover` must portal. Position is written from
+ * the event handler after measuring the trigger's rect.
+ *
+ * `z-[110]` is **deliberate**: both hosts are a `DetailModal` whose backdrop is
+ * `z-[100]` (leader-detail.tsx). The panel portals to the same
+ * `document.body`, so `z-50` left it entirely underneath the modal — the exact
+ * reported symptom of "the tip opens but nothing is visible". It has to clear
+ * 100 to sit above the modal.
+ */
+export const GM_TIP =
+  'pointer-events-none fixed z-[110] w-max max-w-[17rem] rounded-lg border border-gray-700/60 bg-gray-900/95 px-2.5 py-2 shadow-xl shadow-black/50 backdrop-blur-md';
+
 /** 跳動的 LIVE 指示燈 / the pulsing LIVE dot。動畫時長沿用原本的 1.9s，
  *  不是 Tailwind animate-ping 預設的 1s。
  * The pulsing dot keeps the original 1.9s cycle, not Tailwind's animate-ping

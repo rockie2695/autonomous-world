@@ -16,6 +16,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { type Rng } from '@/lib/rng';
+import { processDeadLeaders } from '../afterDeath';
 
 /**
  * 使所有角色老化並檢查自然死亡。
@@ -81,61 +82,24 @@ export async function ageAndDeath(
     });
   }
 
-  // 若死亡者為君王，將其勢力標記為崩潰 / If any dead character was a king, mark their faction as collapsing
-  const deadKings = elderly.filter((c) => c.isKing);
-
-  for (const king of deadKings) {
-    if (!king.factionId) continue;
-
-    /**
-     * 王位繼承：有子女時由**最年長**的子女繼承，沒有子女才走原本的崩解流程。
-     *
-     * Throne inheritance: the OLDEST child takes the throne; with no child the faction
-     * collapses exactly as it always did. Ordering by age is the first-born test, because a
-     * child born in round 5 is older than one born in round 10 by the same number of rounds.
-     *
-     * 「沒有子女就走原本行為」是刻意的：繼承只**增加**一條路徑，不能改掉原本沒有繼承者
-     * 時的規則，否則舊的崩解機制會被悄悄吃掉。
-     * "No children keeps the original behaviour" is deliberate: inheritance only ADDS a path,
-     * so it cannot quietly swallow the collapse rule when there is no heir.
-     */
-    const heir = await prisma.character.findFirst({
-      where: { parentId: king.id, alive: true },
-      orderBy: { age: 'desc' },
-      select: { id: true, name: true },
-    });
-
-    if (heir) {
-      await prisma.character.update({
-        where: { id: heir.id },
-        data: { isKing: true },
-      });
-      await prisma.faction.update({
-        where: { id: king.factionId },
-        data: { kingId: heir.id },
-      });
-
-      await prisma.event.create({
-        data: {
-          worldId,
-          round,
-          type: 'KING_INHERITED',
-          data: {
-            charId: heir.id,
-            charName: heir.name,
-            fatherId: king.id,
-            fatherName: king.name,
-            factionId: king.factionId,
-          },
-        },
-      });
-    } else {
-      await prisma.faction.update({
-        where: { id: king.factionId },
-        data: { collapsing: true },
-      });
-    }
-  }
+  // 若死亡者為君王，處理王位繼承；行政官席位清空也在同一個善後模組裡。
+  // 自然死亡與戰死**必須**走同一條善後路（`server/afterDeath.ts`）——以前君王邏輯
+  // 在這裡 inline、行政官席位根本沒人清（死人佔著席位領分成），兩種死法各自為政。
+  // If any dead character was a king, run the succession; the administrator seats the
+  // dead held are cleared in the same aftermath module. Natural death and battle death
+  // **must** share one aftermath path (`server/afterDeath.ts`) — the king logic used to
+  // live inline here and nothing at all cleared administrator seats (a corpse held the
+  // seat and kept collecting its share), so the two kinds of death drifted.
+  await processDeadLeaders(
+    worldId,
+    round,
+    elderly.map((c) => ({
+      id: c.id,
+      name: c.name,
+      factionId: c.factionId,
+      isKing: c.isKing,
+    }))
+  );
 
   return elderly.length;
 }

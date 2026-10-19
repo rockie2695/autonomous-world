@@ -6,20 +6,32 @@
 // 需要客戶端 double confirmation。
 // Requires double confirmation from the client.
 //
+// 新世界的初始化與 `prisma/seed.ts` **共用同一份**（`server/initWorld.ts`）：
+// 完整地方集、地理 MST + 補邊道路、ForceAtlas2 佈局、君王 + 勢力 + 行政官。
+// 修復前這裡只建 10 個佔位地點（圓圈擺位）——沒有道路、沒有勢力、沒有君王，
+// 重置出的世界跑不起來（全是無主之地，沒有人會出生，經濟完全不轉）。
+//
+// The new world's initialisation is **shared** with `prisma/seed.ts`
+// (`server/initWorld.ts`): the full place set, geographic-MST roads, a ForceAtlas2
+// layout, king + faction + administrators. Before the fix this route created just
+// 10 placeholder places on a circle — no roads, no faction, no king — and the reset
+// world could not run (all land unowned, nobody would ever spawn, the economy never
+// turned).
+//
 // POST /api/admin/reset-world
 // 請求本體 / Body: { name: string, confirm: boolean }
-// 回應 / Response: { success: true, world: { id, name, seed } }
+// 回應 / Response: { success: true, world: { id, name, seed }, placesCreated, roadCount }
 // ============================================================================
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth, isAdmin } from '@/lib/auth';
 import { createRng } from '@/lib/rng';
-import { generatePlaceNames } from '@/lib/nameGenerator/place';
-import { generateFactionNames } from '@/lib/nameGenerator/faction';
-import { CONFIG } from '@/lib/gameConfig';
 import { ResetWorldBodySchema } from '@/lib/validations';
-import { createSnapshot } from '@/lib/snapshot';
+import {
+  initializeWorld,
+  finalizeWorldCreation,
+} from '../../../../../server/initWorld';
 
 export async function POST(request: Request) {
   // 檢查認證 / Check authentication
@@ -54,13 +66,14 @@ export async function POST(request: Request) {
 
   // 從時間戳記 + 隨機數產生唯一种子 / Generate a unique seed from timestamp + random
   const seed = `world-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const rng = createRng(seed);
 
   // 建立新世界 / Create the new world
   const world = await prisma.world.create({
     data: {
       name,
       seed,
-      rngState: createRng(seed).getState(),
+      rngState: rng.getState(),
       active: true,
     },
   });
@@ -74,44 +87,11 @@ export async function POST(request: Request) {
     data: { active: false },
   });
 
-  // 產生初始地點 / Generate initial places
-  const rng = createRng(seed);
-  const placeNames = generatePlaceNames(rng, CONFIG.PLACE_INITIAL_COUNT);
-
-  // 待辦：建立具有正確佈局的初始地點 / TODO: Create initial places with proper layout
-  // 目前只建立佔位資料 / For now, just create placeholder data
-  const places = await Promise.all(
-    placeNames.slice(0, 10).map((placeName, index) =>
-      prisma.place.create({
-        data: {
-          worldId: world.id,
-          name: placeName,
-          layoutX: Math.cos((index / 10) * Math.PI * 2) * 100,
-          layoutY: Math.sin((index / 10) * Math.PI * 2) * 100,
-          createdAtRound: 0,
-        },
-      })
-    )
-  );
-
-  // 初始快照 + 推進回合 / Initial snapshot + advance round
-  // 先建立 round 0 快照（內嵌 currentRound=0 = 初始狀態），再把 currentRound
-  // 設為 1：與 seed 相同，讓「下一回合」第一次點擊即回傳 1、RND 前進。
-  // Create the round-0 snapshot FIRST (embeds currentRound=0 = initial
-  // state), THEN set currentRound to 1 — same as seed: the first "Next
-  // Round" click returns 1 so the RND label advances.
-  const snapshotBuffer = await createSnapshot(world.id);
-  await prisma.roundSnapshot.create({
-    data: {
-      worldId: world.id,
-      round: 0,
-      data: Buffer.from(snapshotBuffer),
-    },
-  });
-  await prisma.world.update({
-    where: { id: world.id },
-    data: { currentRound: 1 },
-  });
+  // 完整初始化（與 seed 同一份）+ 收尾：round 0 快照 → 推進到 round 1 /
+  // Full initialisation (the same one seed uses) + finalisation: the round-0
+  // snapshot, then advancing to round 1
+  const result = await initializeWorld(world.id, rng);
+  await finalizeWorldCreation(world.id, rng);
 
   return NextResponse.json({
     success: true,
@@ -120,6 +100,7 @@ export async function POST(request: Request) {
       name: world.name,
       seed: world.seed,
     },
-    placesCreated: places.length,
+    placesCreated: result.placeCount,
+    roadCount: result.roadCount,
   });
 }

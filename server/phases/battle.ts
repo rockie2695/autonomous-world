@@ -35,9 +35,30 @@ import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
 import { fortressDefenceMult } from '@/lib/placeEffects';
+import { estimateAttack } from '@/lib/warEstimate';
 import { buildRelationCombatDeltas, effectiveAbility } from '@/lib/relationCombat';
 import { buildBattleReport } from '../battleReport';
+import { processDeadLeaders, type DeadLeader } from '../afterDeath';
 import { grantAdmin } from '../adminAssign';
+
+/**
+ * 潰敗或疲勞之後，**活著的將領至少保有 1 名士兵**。
+ * A living leader always keeps **at least 1 soldier** after a rout or fatigue.
+ *
+ * 潰敗與疲勞會解除武裝嗎？不會：歸零的將領什麼都做不了——aiMove 不會讓 0 兵的
+ * 人開戰或行軍，他只能站著等經濟階段。保底 1 名親兵讓他下一回合仍是一個「行動
+ * 中的單位」，經濟階段照常購兵補充。新生的將領同樣以 `CHAR_START_TROOPS`（1）
+ * 起步——全生命周期沒有任何一刻是 0 兵的活人。
+ *
+ * Does a rout or fatigue disarm? No: a zeroed leader can do nothing — aiMove will
+ * not march a 0-troop leader into battle or on the road, so they would only stand
+ * and wait for the economy phase. The 1-soldier floor keeps them an acting unit
+ * that the economy can top up. Newborn leaders likewise start at
+ * `CHAR_START_TROOPS` (1) — at no point in a leader's life are they a living 0.
+ */
+function survivorTroops(troops: number): number {
+  return Math.max(1, Math.floor(troops));
+}
 
 /**
  * 解決所有交戰地點的戰鬥。
@@ -107,14 +128,25 @@ export async function battle(
   // 取得所有地點及陣營資訊以決定逃跑目的地 / Get all places with faction info for escape destination
   const allPlaces = await prisma.place.findMany({
     where: { worldId },
-    select: { id: true, factionId: true },
+    select: { id: true, factionId: true, name: true },
   });
   const placeFactionMap = new Map<string, string | null>();
   for (const p of allPlaces) {
     placeFactionMap.set(p.id, p.factionId);
   }
+  // 逃亡目的地的**名字**：事件要能說「逃至哪裡」，只有 id 的話日誌寫不出人話 /
+  // The escape destination's **name**: the event has to say where they fled to —
+  // an id alone cannot be rendered as prose
+  const placeNameById = new Map(allPlaces.map((p) => [p.id, p.name] as const));
 
   let battleCount = 0;
+
+  // 本回合戰死的人：王位繼承／崩解與行政官席位清空在**收尾時一次處理**（見函式尾），
+  // 各死亡點只負責收集。不畫 RNG，亂數序列不變 /
+  // Everyone who died in battle this round: succession/collapse and seat clearing are
+  // processed **once at the end** (see the tail of this function); each death site only
+  // collects. No RNG draws, so the random sequence is untouched.
+  const deadLeaders: DeadLeader[] = [];
 
   // ── A. 無主之地進攻 / Assaults on unowned places ─────────────────────────
   // 將領抵達無主之地：駐軍 > 0 則與駐軍交戰，否則直接佔領 /
@@ -124,7 +156,9 @@ export async function battle(
     include: {
       characters: {
         where: { alive: true },
-        select: { id: true, factionId: true, wu: true, speed: true, troops: true, name: true },
+        // isKing：戰死的君王要觸發繼承／崩解（見 processDeadLeaders）/
+        // isKing: a battle-dead king must trigger succession/collapse (see processDeadLeaders)
+        select: { id: true, factionId: true, wu: true, speed: true, troops: true, name: true, isKing: true },
       },
     },
   });
@@ -193,7 +227,7 @@ export async function battle(
         battleReport = buildBattleReport('assault', reportParts);
         // 進攻成功：駐軍全滅，攻擊者疲勞後佔領 /
         // Assault succeeds: garrison wiped, attacker fatigues then captures
-        const fatiguedTroops = Math.floor(
+        const fatiguedTroops = survivorTroops(
           attacker.troops * CONFIG.CHAR_FATIGUE_PER_WIN
         );
         await prisma.character.update({
@@ -241,7 +275,7 @@ export async function battle(
           if (escapePlaceId) {
             await prisma.character.update({
               where: { id: attacker.id },
-              data: { troops: 0, placeId: escapePlaceId },
+              data: { troops: 1, placeId: escapePlaceId }, // survivorTroops：潰敗不解除武裝 / a rout does not disarm
             });
             await recordMove({
               worldId,
@@ -253,9 +287,14 @@ export async function battle(
               toPlaceId: escapePlaceId,
             });
           } else {
+            // 無路可退：撿回一命但**留駐原地**（troops 歸 0）。事件必須說實話——
+            // 這不是「逃離」，日誌的措辭由 `escaped` 決定 /
+            // No way out: survived but **stayed on the spot** (troops zeroed). The
+            // event has to tell the truth — this is not an escape; the log's wording
+            // keys off `escaped`
             await prisma.character.update({
               where: { id: attacker.id },
-              data: { troops: 0 },
+              data: { troops: 1 }, // survivorTroops：潰敗不解除武裝 / a rout does not disarm
             });
           }
 
@@ -270,6 +309,19 @@ export async function battle(
                 placeId: place.id,
                 placeName: place.name,
                 speedDiff,
+                // **真的離開了嗎**：有友方（或無主）鄰居可退才算逃離；否則只是原地
+                // 存活。附上這一場的算式（outcome='repelled'），日誌的 戰報 按鈕
+                // 才開得出來——以前這份報告算完就丟了。
+                //
+                // Did they **actually leave**? Only with a friendly (or unowned)
+                // neighbour to fall back to; otherwise they merely survived in place.
+                // The engagement's arithmetic (outcome='repelled') rides along so the
+                // log's 戰報 button opens — it used to be computed and thrown away.
+                escaped: escapePlaceId !== null,
+                toPlaceName: escapePlaceId
+                  ? placeNameById.get(escapePlaceId) ?? null
+                  : null,
+                report: battleReport,
               },
             },
           });
@@ -278,6 +330,13 @@ export async function battle(
           await prisma.character.update({
             where: { id: attacker.id },
             data: { alive: false, diedAtRound: round },
+          });
+          // 收集給收尾善後（王位／席位）/ Collected for the end-of-phase aftermath
+          deadLeaders.push({
+            id: attacker.id,
+            name: attacker.name,
+            factionId: attacker.factionId,
+            isKing: attacker.isKing,
           });
 
           await prisma.event.create({
@@ -291,6 +350,10 @@ export async function battle(
                 placeId: place.id,
                 placeName: place.name,
                 defenderName: `駐軍 ${place.garrison}`,
+                // 死亡的算式一樣附上：被擊退然後逃脫失敗，這場仗打過什麼要能查 /
+                // The death carries the arithmetic too: repelled, then the escape
+                // failed — the fight's numbers have to be inspectable
+                report: battleReport,
               },
             },
           });
@@ -368,7 +431,9 @@ export async function battle(
     include: {
       characters: {
         where: { alive: true },
-        select: { id: true, factionId: true, wu: true, tong: true, ti: true, speed: true, troops: true, name: true },
+        // isKing：戰死的君王要觸發繼承／崩解（見 processDeadLeaders）/
+        // isKing: a battle-dead king must trigger succession/collapse (see processDeadLeaders)
+        select: { id: true, factionId: true, wu: true, tong: true, ti: true, speed: true, troops: true, name: true, isKing: true },
       },
     },
   });
@@ -376,282 +441,342 @@ export async function battle(
   for (const place of places) {
     if (!place.factionId) continue;
 
-    // 分離守軍（同陣營）與攻擊者（不同陣營）/ Separate defenders (same faction) from attackers (different faction)
+    // ── 合戰（army vs army）──
+    // 以前是「車輪戰」：多攻方按速度輪流 1v1、多守方逐一接戰，兵力**完全不合并**
+    // ——三個 50 兵的將領輪流把命送給一個 100 兵守將（守將贏了不疲勞）。號令集結
+    // 來的大軍因此毫無合力優勢。現在**兩軍各擲一骰**：攻方全員戰力相加，守方駐軍
+    // + 全員將領相加，一次判定。
+    // 攻方**按勢力分組**——兩個敵對勢力的兵不會併成一家；本回合只有**總估計戰力
+    // 最大**的那一組開戰（多勢力同場很罕見，其餘的下一回合再打）。
+    //
+    // ── Combined engagement (army vs army) ──
+    // The old form was a relay of duels: attackers took turns 1v1 by speed and
+    // defenders stepped up one by one, with power **never combined** — three 50-troop
+    // leaders fed themselves one by one to a 100-troop defender who never fatigued on
+    // a win, so an army rallied by a signal had no combined weight at all. Now **each
+    // army rolls once**: the attackers' full power summed against the garrison plus
+    // every defending leader, one verdict. Attackers are **grouped by faction** — two
+    // hostile factions do not merge into one army; this round only the group with the
+    // **largest total estimated attack** engages (co-occupancy by several factions is
+    // rare; the rest fight next round).
     const defenders = place.characters.filter(
       (c) => c.factionId === place.factionId
     );
-    const attackers = place.characters.filter(
-      (c) => c.factionId !== place.factionId
-    );
+    if (defenders.length === 0) continue;
 
-    if (attackers.length === 0 || defenders.length === 0) continue;
+    // 攻方按勢力分組；0 兵的打不了，也沒資格代表勢力開戰 /
+    // Attackers grouped by faction; a 0-troop leader neither fights nor commits a
+    // faction to battle
+    const groups = new Map<string, typeof place.characters>();
+    for (const c of place.characters) {
+      if (c.factionId === null || c.factionId === place.factionId) continue;
+      if (c.troops <= 0) continue;
+      const list = groups.get(c.factionId) ?? [];
+      list.push(c);
+      groups.set(c.factionId, list);
+    }
+    if (groups.size === 0) continue;
 
-    // 攻擊者依速度降序排序（v1.1）/ Sort attackers by speed descending (v1.1)
-    const sortedAttackers = attackers.sort((a, b) => b.speed - a.speed);
-
-    for (const attacker of sortedAttackers) {
-      if (attacker.troops <= 0) continue;
-
-      // 逐一與守軍交戰 / Fight defenders one by one
-      let currentDefenders = [...defenders];
-
-      while (currentDefenders.length > 0 && attacker.troops > 0) {
-        // 挑選守軍：優先總督，再取兵力最高 / Pick defender: priority to admin, then highest troops
-        const defender =
-          currentDefenders.find(
-            (d) => place.administratorId === d.id
-          ) ?? currentDefenders.sort((a, b) => b.troops - a.troops)[0];
-
-        if (!defender) break;
-
-        // 計算攻擊力 / Calculate attack power
-        const atkRandom = rng.float(
-          CONFIG.BATTLE_RANDOM_MIN,
-          CONFIG.BATTLE_RANDOM_MAX
-        );
-        const attackerWu = effectiveWu(attacker);
-        const atk =
-          attacker.troops *
-          (1 + attackerWu * CONFIG.BATTLE_ATK_WU_MULT) *
-          atkRandom;
-
-        // 計算防禦力 / Calculate defense power
-        const defRandom = rng.float(
-          CONFIG.BATTLE_RANDOM_MIN,
-          CONFIG.BATTLE_RANDOM_MAX
-        );
-        const def =
-          defender.troops *
-          (1 + effectiveTi(defender) * CONFIG.BATTLE_DEF_TI_MULT) *
-          fortressDefenceMult(place.fortress) *
-          defRandom;
-
-        if (atk > def) {
-          // 攻擊者獲勝 / Attacker wins
-          battleCount++;
-
-          // 守軍嘗試逃跑 / Defender tries to escape
-          const speedDiff = defender.speed - attacker.speed;
-          const escapeChance = Math.max(
-            CONFIG.SPEED_ESCAPE_MIN,
-            Math.min(
-              CONFIG.SPEED_ESCAPE_MAX,
-              CONFIG.SPEED_ESCAPE_BASE + speedDiff * CONFIG.SPEED_ESCAPE_PER_DIFF
-            )
-          );
-
-          if (rng.chance(escapeChance)) {
-            // 逃跑成功 — 移至附近友方地點 / Escape successful — move to nearby friendly place
-            const neighbors = adjacent.get(place.id) ?? [];
-            const currentFaction = defender.factionId;
-
-            // 尋找友方地點（同陣營或無主）/ Find friendly place (same faction or unowned)
-            let escapePlaceId: string | null = null;
-            for (const neighbor of neighbors) {
-              const neighborFaction = placeFactionMap.get(neighbor);
-              if (neighborFaction === currentFaction || neighborFaction === null) {
-                escapePlaceId = neighbor;
-                break;
-              }
-            }
-
-            // 若無友方地點，留在原地（損失兵力）/ If no friendly place, just stay at current place (lose troops)
-            if (escapePlaceId) {
-              await prisma.character.update({
-                where: { id: defender.id },
-                data: { troops: 0, placeId: escapePlaceId },
-              });
-              await recordMove({
-                worldId,
-                round,
-                charId: defender.id,
-                charName: defender.name,
-                factionId: defender.factionId,
-                fromPlaceId: place.id,
-                toPlaceId: escapePlaceId,
-              });
-            } else {
-              await prisma.character.update({
-                where: { id: defender.id },
-                data: { troops: 0 },
-              });
-            }
-
-            // 記錄逃跑事件 / Log escape event
-            await prisma.event.create({
-              data: {
-                worldId,
-                round,
-                type: 'ESCAPE_SUCCESS',
-                data: {
-                  charId: defender.id,
-                  charName: defender.name,
-                  placeId: place.id,
-                  placeName: place.name,
-                  speedDiff,
-                },
-              },
-            });
-          } else {
-            // 逃跑失敗 — 死亡 / Escape failed — death
-            await prisma.character.update({
-              where: { id: defender.id },
-              data: {
-                alive: false,
-                diedAtRound: round,
-              },
-            });
-
-            // 記錄死亡事件 / Log death event
-            await prisma.event.create({
-              data: {
-                worldId,
-                round,
-                type: 'BATTLE_DEATH',
-                data: {
-                  charId: defender.id,
-                  charName: defender.name,
-                  placeId: place.id,
-                  placeName: place.name,
-                  attackerId: attacker.id,
-                  attackerName: attacker.name,
-                },
-              },
-            });
-          }
-
-          // 從當前名單移除守軍 / Remove defender from current list
-          currentDefenders = currentDefenders.filter(
-            (d) => d.id !== defender.id
-          );
-
-          // 攻擊者損失兵力（疲勞）/ Attacker loses troops (fatigue)
-          attacker.troops = Math.floor(
-            attacker.troops * CONFIG.CHAR_FATIGUE_PER_WIN
-          );
-        } else {
-          // 守軍獲勝 / Defender wins
-          battleCount++;
-
-          // 攻擊者嘗試逃跑 / Attacker tries to escape
-          const speedDiff = attacker.speed - defender.speed;
-          const escapeChance = Math.max(
-            CONFIG.SPEED_ESCAPE_MIN,
-            Math.min(
-              CONFIG.SPEED_ESCAPE_MAX,
-              CONFIG.SPEED_ESCAPE_BASE + speedDiff * CONFIG.SPEED_ESCAPE_PER_DIFF
-            )
-          );
-
-          if (rng.chance(escapeChance)) {
-            // 逃跑成功 — 移回友方地點 / Escape successful — move back to friendly place
-            const neighbors = adjacent.get(place.id) ?? [];
-            const currentFaction = attacker.factionId;
-
-            // 尋找友方地點（同陣營或無主）/ Find friendly place (same faction or unowned)
-            let escapePlaceId: string | null = null;
-            for (const neighbor of neighbors) {
-              const neighborFaction = placeFactionMap.get(neighbor);
-              if (neighborFaction === currentFaction || neighborFaction === null) {
-                escapePlaceId = neighbor;
-                break;
-              }
-            }
-
-            // 若無友方地點，留在原地（損失兵力）/ If no friendly place, just stay at current place (lose troops)
-            if (escapePlaceId) {
-              await prisma.character.update({
-                where: { id: attacker.id },
-                data: { troops: 0, placeId: escapePlaceId },
-              });
-              await recordMove({
-                worldId,
-                round,
-                charId: attacker.id,
-                charName: attacker.name,
-                factionId: attacker.factionId,
-                fromPlaceId: place.id,
-                toPlaceId: escapePlaceId,
-              });
-            } else {
-              await prisma.character.update({
-                where: { id: attacker.id },
-                data: { troops: 0 },
-              });
-            }
-
-            // 記錄逃跑事件 / Log escape event
-            await prisma.event.create({
-              data: {
-                worldId,
-                round,
-                type: 'ESCAPE_SUCCESS',
-                data: {
-                  charId: attacker.id,
-                  charName: attacker.name,
-                  placeId: place.id,
-                  placeName: place.name,
-                  speedDiff,
-                },
-              },
-            });
-          } else {
-            // 逃跑失敗 — 死亡 / Escape failed — death
-            await prisma.character.update({
-              where: { id: attacker.id },
-              data: {
-                alive: false,
-                diedAtRound: round,
-              },
-            });
-
-            // 記錄死亡事件 / Log death event
-            await prisma.event.create({
-              data: {
-                worldId,
-                round,
-                type: 'BATTLE_DEATH',
-                data: {
-                  charId: attacker.id,
-                  charName: attacker.name,
-                  placeId: place.id,
-                  placeName: place.name,
-                  defenderId: defender.id,
-                  defenderName: defender.name,
-                },
-              },
-            });
-          }
-
-          // 攻擊者被擊敗，停止戰鬥 / Attacker is defeated, stop fighting
-          break;
-        }
+    // 開戰的組：總估計攻擊最大者；平手用 factionId 裁決（必須確定性）/
+    // The engaging group: the largest total estimated attack; ties break by factionId
+    // (the choice must be deterministic)
+    let attackingGroup: typeof place.characters = [];
+    let attackingFactionId = '';
+    let bestGroupPower = -1;
+    for (const [groupFactionId, members] of groups) {
+      const power = members.reduce((s, m) => s + estimateAttack(m), 0);
+      if (
+        power > bestGroupPower ||
+        (power === bestGroupPower &&
+          groupFactionId.localeCompare(attackingFactionId) < 0)
+      ) {
+        bestGroupPower = power;
+        attackingGroup = members;
+        attackingFactionId = groupFactionId;
       }
+    }
 
-      // 若守軍全滅，地點易主 / If all defenders are dead, place changes owner
-      if (currentDefenders.length === 0 && attacker.troops > 0) {
-        await prisma.place.update({
-          where: { id: place.id },
-          data: { factionId: attacker.factionId },
-        });
+    // 速度降序：誰代表這場攻勢（佔領者、追擊速度）/ Speed descending: who leads the
+    // assault (the capturer, the pursuit speed)
+    const sortedAttackers = [...attackingGroup].sort((a, b) => b.speed - a.speed);
+    const leadAttacker = sortedAttackers[0]!;
+    // 守方代表：行政官優先（守方的臉面），再取兵力最高 / The defence's leader: the
+    // administrator first (the face of the defence), then the strongest
+    const sortedDefenders = [...defenders].sort((a, b) => b.troops - a.troops);
+    const leadDefender =
+      defenders.find((d) => place.administratorId === d.id) ?? sortedDefenders[0]!;
 
-        // 若無總督，攻擊者成為總督（不受行政官冷卻限制）/
-        // Attacker becomes admin if no admin (not blocked by the admin cooldown)
-        if (!place.administratorId) {
-          // grantAdmin 會先清除攻擊者在其他地點的總督職，避免
-          // Place.administratorId 唯一約束衝突 /
-          // grantAdmin clears the attacker's admin role at other places first
-          // to avoid the Place.administratorId unique constraint conflict
-          await grantAdmin({
-            worldId,
-            round,
-            place: { id: place.id, name: place.name },
-            char: { id: attacker.id, name: attacker.name },
+    type Combatant = (typeof place.characters)[number];
+
+    /**
+     * 潰敗方的每一員各自逃亡（追擊者 = 對方最快／最強的一員——大軍追擊更難逃）。
+     * 逃跑目的地、事件形狀與 A 區**同一套**；這裡收攏舊寫法裡重複的潰敗處理。
+     * Every member of the routed side flees individually (the pursuer is the other
+     * side's fastest/strongest — an army's pursuit is harder to outrun). Destination
+     * and event shape identical to section A; this folds the duplicated rout blocks
+     * of the old relay form.
+     */
+    const resolveRout = async (
+      routed: readonly Combatant[],
+      pursuerSpeed: number,
+      side: 'defender' | 'attacker',
+      counterpart: { id: string; name: string }
+    ): Promise<void> => {
+      for (const member of routed) {
+        const speedDiff = member.speed - pursuerSpeed;
+        const escapeChance = Math.max(
+          CONFIG.SPEED_ESCAPE_MIN,
+          Math.min(
+            CONFIG.SPEED_ESCAPE_MAX,
+            CONFIG.SPEED_ESCAPE_BASE + speedDiff * CONFIG.SPEED_ESCAPE_PER_DIFF
+          )
+        );
+
+        if (rng.chance(escapeChance)) {
+          // 逃跑成功 — 移至附近友方地點 / Escape successful — move to a nearby friendly place
+          const neighbors = adjacent.get(place.id) ?? [];
+          let escapePlaceId: string | null = null;
+          for (const neighbor of neighbors) {
+            const neighborFaction = placeFactionMap.get(neighbor);
+            if (neighborFaction === member.factionId || neighborFaction === null) {
+              escapePlaceId = neighbor;
+              break;
+            }
+          }
+
+          if (escapePlaceId) {
+            await prisma.character.update({
+              where: { id: member.id },
+              data: { troops: 1, placeId: escapePlaceId }, // survivorTroops：潰敗不解除武裝 / a rout does not disarm
+            });
+            await recordMove({
+              worldId,
+              round,
+              charId: member.id,
+              charName: member.name,
+              factionId: member.factionId,
+              fromPlaceId: place.id,
+              toPlaceId: escapePlaceId,
+            });
+          } else {
+            // 無路可退：撿回一命但留駐原地（與 A 區同一條誠實規則）/
+            // No way out: survived but stayed put (the same honesty rule as section A)
+            await prisma.character.update({
+              where: { id: member.id },
+              data: { troops: 1 }, // survivorTroops：潰敗不解除武裝 / a rout does not disarm
+            });
+          }
+
+          await prisma.event.create({
+            data: {
+              worldId,
+              round,
+              type: 'ESCAPE_SUCCESS',
+              data: {
+                charId: member.id,
+                charName: member.name,
+                placeId: place.id,
+                placeName: place.name,
+                speedDiff,
+                escaped: escapePlaceId !== null,
+                toPlaceName: escapePlaceId
+                  ? placeNameById.get(escapePlaceId) ?? null
+                  : null,
+                report: engagementReport,
+              },
+            },
+          });
+        } else {
+          // 逃跑失敗 — 死亡 / Escape failed — death
+          await prisma.character.update({
+            where: { id: member.id },
+            data: { alive: false, diedAtRound: round },
+          });
+          deadLeaders.push({
+            id: member.id,
+            name: member.name,
+            factionId: member.factionId,
+            isKing: member.isKing,
+          });
+
+          await prisma.event.create({
+            data: {
+              worldId,
+              round,
+              type: 'BATTLE_DEATH',
+              data: {
+                charId: member.id,
+                charName: member.name,
+                placeId: place.id,
+                placeName: place.name,
+                // 對手是誰：守方戰死記攻方代表，攻方戰死記守方代表——合戰是群體的，
+                // 但日誌要點得到一個人 /
+                // The counterpart: a dead defender records the assault's leader, a
+                // dead attacker the defence's leader — the engagement is collective,
+                // but the log row still links to one person
+                attackerId: side === 'defender' ? counterpart.id : null,
+                attackerName: side === 'defender' ? counterpart.name : null,
+                defenderId: side === 'attacker' ? counterpart.id : null,
+                defenderName: side === 'attacker' ? counterpart.name : null,
+                report: engagementReport,
+              },
+            },
           });
         }
       }
-    }
+    };
+
+    // ── 兩軍各擲一骰 ──
+    // 攻方戰力 = Σ 兵力 × (1 + 有效武力/30)。報告的 `attackerWu` 是**兵力加權平均**
+    // ——線性保證 `總兵力 × (1 + 平均武力/30) × 骰` 與逐人相加**完全相等**，戰報的
+    // 算式因此仍然對得上。
+    // ── Each army rolls once ──
+    // Attack power = Σ troops × (1 + effective wu/30). The report's `attackerWu` is
+    // the **troop-weighted mean** — linearity guarantees `total troops × (1 + mean
+    // wu/30) × roll` equals the per-leader sum **exactly**, so the report's
+    // arithmetic still adds up.
+    const atkRandom = rng.float(CONFIG.BATTLE_RANDOM_MIN, CONFIG.BATTLE_RANDOM_MAX);
+    const totalTroops = attackingGroup.reduce((s, m) => s + m.troops, 0);
+    const meanWu =
+      attackingGroup.reduce((s, m) => s + m.troops * effectiveWu(m), 0) / totalTroops;
+    const attackPower =
+      totalTroops * (1 + meanWu * CONFIG.BATTLE_ATK_WU_MULT) * atkRandom;
+
+    const defRandom = rng.float(CONFIG.BATTLE_RANDOM_MIN, CONFIG.BATTLE_RANDOM_MAX);
+    const defenderTroops = defenders.reduce((s, d) => s + d.troops, 0);
+    const meanTi =
+      defenderTroops > 0
+        ? defenders.reduce((s, d) => s + d.troops * effectiveTi(d), 0) /
+          defenderTroops
+        : 0;
+    // 守方基數 = 駐軍 + 守將兵力；**都**乘同一個堡壘倍率（與 estimatePlaceDefence
+    // 同一條式——aiMove 的估量因此與實戰一致）/
+    // Defence base = garrison + defending leaders' troops; **both** carry the one
+    // fortress multiplier (the same formula as estimatePlaceDefence — so aiMove's
+    // estimate matches the real fight)
+    const defenceBase =
+      place.garrison + defenderTroops * (1 + meanTi * CONFIG.BATTLE_DEF_TI_MULT);
+    const defencePower =
+      defenceBase * fortressDefenceMult(place.fortress) * defRandom;
+
+    // 這一場（兩軍）的算式，供戰報顯示。`defenderGarrison` 放的是**合流守方基數**
+    // （駐軍 + 守將兵力），`defenderFortress` 是該地的堡壘等級。
+    // The arithmetic of this (army vs army) engagement, for the report.
+    // `defenderGarrison` carries the **combined defence base** (garrison + defending
+    // leaders' troops) and `defenderFortress` the place's fortress level.
+    const engagementReport = buildBattleReport(
+      attackPower > defencePower ? 'assault' : 'repelled',
+      {
+        attackerTroops: totalTroops,
+        attackerWu: meanWu,
+        attackRoll: atkRandom,
+        attackPower,
+        defenderGarrison: defenceBase,
+        defenderFortress: place.fortress,
+        defenceRoll: defRandom,
+        defencePower,
+      }
+    );
+
+        battleCount++;
+
+        if (attackPower > defencePower) {
+          // 攻方大捷：守軍全體潰敗——每人各自逃亡（追擊者 = 最快攻方，大軍追擊
+          // 更難逃）或戰死。
+          // A decisive assault: the whole defence routs — each member flees
+          // individually (pursued by the fastest attacker) or dies.
+          await resolveRout(defenders, leadAttacker.speed, 'defender', {
+            id: leadAttacker.id,
+            name: leadAttacker.name,
+          });
+
+          // 攻方全體疲勞（合戰人人有份，與舊制每次獲勝 ×疲勞同一個係數）/
+          // The whole assaulting force fatigues — everyone took part (the same
+          // per-win factor as the old duels)
+          for (const member of sortedAttackers) {
+            const fatigued = survivorTroops(
+              member.troops * CONFIG.CHAR_FATIGUE_PER_WIN
+            );
+            member.troops = fatigued;
+            await prisma.character.update({
+              where: { id: member.id },
+              data: { troops: fatigued },
+            });
+          }
+
+          // 佔領：地點易主。駐軍隨守方一起敗，**歸零**——與 A 區同一條規則（以前
+          // B 區佔領不洗駐軍，新主人憑空繼承剛被打垮的守軍）。PLACE_CAPTURED
+          // **先寫**再任命，順序是因果的：先佔領，之後才可能成為行政官。
+          // Capture: the place changes hands. The garrison fell with the defence and
+          // **resets to 0** — the same rule as section A (the old section-B capture
+          // left the garrison intact, handing the new owner the defenders it had just
+          // beaten). PLACE_CAPTURED is written **before** the appointment — the
+          // causal order: captured first, only then can anyone be its administrator.
+          await prisma.place.update({
+            where: { id: place.id },
+            data: { factionId: attackingFactionId, garrison: 0 },
+          });
+
+          await prisma.event.create({
+            data: {
+              worldId,
+              round,
+              type: 'PLACE_CAPTURED',
+              data: {
+                charId: leadAttacker.id,
+                charName: leadAttacker.name,
+                placeId: place.id,
+                placeName: place.name,
+                factionId: attackingFactionId,
+                garrisonFought: place.garrison,
+                report: engagementReport,
+              },
+            },
+          });
+
+          // 若無總督，攻勢領袖成為總督（不受行政官冷卻限制）/
+          // If no administrator, the assault's leader takes the seat (not blocked by
+          // the admin cooldown)
+          if (!place.administratorId) {
+            // grantAdmin 會先清除他在其他地點的總督職，避免唯一約束衝突 /
+            // grantAdmin clears the leader's admin role at other places first to
+            // avoid the Place.administratorId unique constraint conflict
+            await grantAdmin({
+              worldId,
+              round,
+              place: { id: place.id, name: place.name },
+              char: { id: leadAttacker.id, name: leadAttacker.name },
+            });
+          }
+        } else {
+          // 守軍守住：攻方潰敗——每人各自逃亡（追擊者 = 最強守將）或戰死。
+          // 守方不疲勞：守成了就是守成了 /
+          // The defence holds: the attackers rout — each flees individually
+          // (pursued by the strongest defender) or dies. The defence does not
+          // fatigue: holding is holding.
+          await resolveRout(sortedAttackers, leadDefender.speed, 'attacker', {
+            id: leadDefender.id,
+            name: leadDefender.name,
+          });
+        }
   }
+
+  // ── 死亡善後：王位繼承／崩解 + 清空死者佔用的行政官席位 ──
+  // 修復前戰死什麼都不觸發：君王戰死 → faction.kingId 永遠指向死人、勢力永不崩解
+  // 也永不繼承；行政官戰死 → 席位被死人佔著（指派階段只補 NULL 席），而且經濟階段
+  // 抓君王／行政官的 jing 不過濾 alive，死人每回合照領 40% 分成。
+  // 收尾時**一次**處理：指派階段（12）與崩解階段（13）都在戰鬥之後，所以繼承的新王
+  // 與清空的席位同一回合就被下游看見。
+  //
+  // ── Death aftermath: succession/collapse + clearing seats the dead held ──
+  // Before the fix a battle death triggered nothing: a dead king left
+  // faction.kingId on a corpse with neither succession nor collapse ever firing, and
+  // a dead administrator kept the seat (the assignment phase only fills NULL seats)
+  // while the economy fetched the king/admin's jing with no aliveness filter — a
+  // corpse collecting the 40% share every round. Processed **once at the end**: the
+  // assignment (12) and collapse (13) phases both run after battle, so the new heir
+  // and the cleared seats are visible downstream in the same round.
+  await processDeadLeaders(worldId, round, deadLeaders);
 
   return battleCount;
 }
