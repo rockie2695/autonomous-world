@@ -23,6 +23,7 @@ import type { WorldState } from './types';
 import { GM_BTN, GM_BTN_ACCENT, GM_PANEL, GM_SKEL, GM_TITLE } from './styles';
 import { DetailModal } from './leader-detail';
 import { abilityTipLines, useAbilityTip } from './tooltip';
+import { placeTooltip } from '@/lib/tooltipPlacement';
 // ─── 統計圖表 / Stats Charts ─────────────────────────────────────────────────────
 
 /** 圖表類型 / Chart type */
@@ -1735,6 +1736,10 @@ export function CharacterRadarHover({
   interactive?: boolean;
 }) {
   const values = characterRadarValues(character);
+  // 容器 ref：讀值面板定位在容器座標，placeTooltip 用視窗座標決定位置後要轉回來 /
+  // Container ref: the readout panel is positioned in container coordinates, so
+  // placeTooltip's viewport-space result has to be converted back
+  const panelHostRef = useRef<HTMLDivElement | null>(null);
 
   /**
    * 游標指向的輪。在 render 期間算，不放 effect：在 effect 裡同步 setState 會觸發
@@ -1754,7 +1759,10 @@ export function CharacterRadarHover({
     factionAverage.some((value, i) => Math.abs(value - values[i]) > 1e-6);
 
   return (
-    <div className={`relative w-[196px] ${interactive ? 'pointer-events-auto' : 'pointer-events-none'}`}>
+    <div
+      ref={panelHostRef}
+      className={`relative w-[196px] ${interactive ? 'pointer-events-auto' : 'pointer-events-none'}`}
+    >
       <div className="text-xs text-gray-200 font-medium truncate">{character.name}</div>
       <svg
         viewBox={`0 0 ${HOVER_RADAR_SIZE} ${HOVER_RADAR_SIZE}`}
@@ -1769,13 +1777,32 @@ export function CharacterRadarHover({
                 // width, so convert into viewBox space or the readout names the wrong axis.
                 const rect = e.currentTarget.getBoundingClientRect();
                 const scale = HOVER_RADAR_SIZE / Math.max(rect.width, 1);
+                // 定位用 placeTooltip 統一決定（視窗座標）：**預設在光標下方**、
+                // 面板左上角貼近光標，只有下方放不下才翻上——上半部不再翻上去。
+                // Placement goes through placeTooltip (viewport coordinates):
+                // **below the cursor by default**, its top-left hugging the cursor,
+                // flipping above only when below does not fit — no more flipping up
+                // in the top half.
+                const host = panelHostRef.current;
+                const p = placeTooltip({
+                  ax: e.clientX,
+                  ay: e.clientY,
+                  panelW: 170,
+                  panelH: 140,
+                  boxW: window.innerWidth,
+                  boxH: window.innerHeight,
+                  gap: 10,
+                  anchor: 'cursor',
+                });
                 setHover({
                   axis: nearestRadarAxis(
                     (e.clientX - rect.left) * scale - HOVER_RADAR_SIZE / 2,
                     (e.clientY - rect.top) * scale - HOVER_RADAR_SIZE / 2
                   ),
-                  x: e.clientX - rect.left,
-                  y: e.clientY - rect.top,
+                  // 轉回容器座標（面板 absolute 於容器）/
+                  // Converted back into container coordinates (the panel is absolute within it)
+                  x: host ? p.x - host.getBoundingClientRect().left : p.x,
+                  y: host ? p.y - host.getBoundingClientRect().top : p.y,
                 });
               }
             : undefined
@@ -1818,14 +1845,11 @@ export function CharacterRadarHover({
         <div
           className="pointer-events-none absolute z-20 min-w-[8rem] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
           style={{
+            // placeTooltip 已算好**左上角**（視窗座標轉容器座標），不再用 transform 翻轉 /
+            // placeTooltip has already produced the **top-left** (viewport space,
+            // converted to container space) — no transform-based flipping any more
             left: hover.x,
             top: hover.y,
-            // 游標在上半部就贴在上方，否則面板會有一半裁掉 /
-            // Above the pointer when it is in the top half, or half the panel is clipped
-            transform:
-              hover.y < 60
-                ? 'translate(-50%, calc(-100% - 10px))'
-                : 'translate(-50%, 10px)',
           }}
           role="tooltip"
         >

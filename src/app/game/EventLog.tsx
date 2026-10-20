@@ -17,7 +17,8 @@
 import { useState, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { t } from '@/lib/i18n';
-import { BattleReport, type BattleReportData } from './BattleReport';
+import { BattleReport } from './BattleReport';
+import { hslToHex } from '@/components/mapShared';
 import { CONFIG } from '@/lib/gameConfig';
 import { apiFetch } from '@/lib/api';
 import { EventGlyph } from './icons';
@@ -171,10 +172,19 @@ export function EventLog({
   // ── 篩選狀態 ──/ Filter state
   const [factionFilter, setFactionFilter] = useState<string>('all');
   // 目前打開的戰報；null = 沒開 / the report currently open; null means none
+  const factionColours = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const faction of factions) {
+      map[faction.id] = hslToHex(faction.color);
+    }
+    return map;
+  }, [factions]);
   const [openReport, setOpenReport] = useState<{
-    charName: string;
+    placeId: string;
     placeName: string;
-    report: BattleReportData | null;
+    round: number;
+    kind: 'captured' | 'death' | 'escape';
+    charName: string;
   } | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<Set<EventCategory>>(
     () => new Set(EVENT_CATEGORIES)
@@ -887,7 +897,11 @@ export function EventLog({
               {String(event.round).padStart(4, '0')}
             </span>
             <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
-            {(event.type === 'PLACE_CAPTURED' || event.type === 'BATTLE_DEATH') && (
+            {(
+              event.type === 'PLACE_CAPTURED' ||
+              event.type === 'BATTLE_DEATH' ||
+              event.type === 'ESCAPE_SUCCESS'
+            ) && (
               // 佔領與戰死都要能打開算式：佔領有兩種經過（打了守軍，或走進空城），
               // 戰死也有兩種（攻方被擊退後逃脫失敗，或守方兵敗陣亡）——日誌一行
               // 都看不出差別，而且以前失敗那場的報告**算完就丟了**，死在別人地盤上
@@ -904,9 +918,16 @@ export function EventLog({
                 onClick={() => {
                   const data = (event.data ?? {}) as Record<string, unknown>;
                   setOpenReport({
-                    charName: typeof data.charName === 'string' ? data.charName : '?',
+                    placeId: typeof data.placeId === 'string' ? data.placeId : '',
                     placeName: typeof data.placeName === 'string' ? data.placeName : '?',
-                    report: (data.report ?? null) as BattleReportData | null,
+                    round: event.round,
+                    kind:
+                      event.type === 'PLACE_CAPTURED'
+                        ? 'captured'
+                        : event.type === 'ESCAPE_SUCCESS'
+                          ? 'escape'
+                          : 'death',
+                    charName: typeof data.charName === 'string' ? data.charName : '?',
                   });
                 }}
                 className="shrink-0 mt-0.5 rounded-full border border-cyan-400/30 px-1.5 py-0.5 text-[10px] font-display tracking-wider text-cyan-300 hover:bg-cyan-500/10"
@@ -938,9 +959,12 @@ export function EventLog({
       )}
       {openReport && (
         <BattleReport
-          charName={openReport.charName}
+          placeId={openReport.placeId}
           placeName={openReport.placeName}
-          report={openReport.report}
+          round={openReport.round}
+          kind={openReport.kind}
+          charName={openReport.charName}
+          factionColours={factionColours}
           onClose={() => setOpenReport(null)}
         />
       )}

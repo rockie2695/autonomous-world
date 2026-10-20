@@ -30,21 +30,22 @@ describe('battle event write order', () => {
     // The bug a reader reported: the log read "appointed administrator of X" *before*
     // "captured X". Appointed first, captured second — a backwards timeline, and nothing
     // downstream can repair the order already stored.
-    const branch = source.indexOf('if (captured)');
-    expect(branch, 'the capture branch should still exist').toBeGreaterThan(-1);
-
-    const capture = source.indexOf("type: 'PLACE_CAPTURED'", branch);
-    const grant = source.indexOf('await grantAdmin({', branch);
-
-    expect(capture, 'PLACE_CAPTURED should be written inside the capture branch').toBeGreaterThan(-1);
-    expect(grant, 'the capture branch should still grant the administrator').toBeGreaterThan(-1);
-
-    // 核心不變量 / The load-bearing invariant
-    expect(
-      capture,
-      'PLACE_CAPTURED must be written BEFORE grantAdmin — the place is captured first, ' +
-        'and only then can its capturer be appointed administrator of it'
-    ).toBeLessThan(grant);
+    // 新結構有**兩個**佔領點（圍攻與戰爭輪），不變量對每一個都要成立：
+    // 每個 grantAdmin 之前都必須有 PLACE_CAPTURED（先佔領、後任命）。
+    // The new structure has **two** capture sites (the siege and the war round); the
+    // invariant holds for each: every grantAdmin must be preceded by a PLACE_CAPTURED
+    // (captured first, appointed after).
+    const captures = [...source.matchAll(/type: 'PLACE_CAPTURED'/g)].map((m) => m.index!);
+    const grants = [...source.matchAll(/await grantAdmin\(/g)].map((m) => m.index!);
+    expect(captures.length, 'captures should exist').toBeGreaterThan(0);
+    expect(grants.length, 'appointments should exist').toBeGreaterThan(0);
+    for (const grant of grants) {
+      const covering = captures.filter((cp) => cp < grant);
+      expect(
+        covering.length,
+        'every grantAdmin must be preceded by a PLACE_CAPTURED — the place is captured first, and only then can its capturer be appointed'
+      ).toBeGreaterThan(0);
+    }
   });
 
   it('should keep the appointment inside the capture branch', () => {
@@ -54,13 +55,19 @@ describe('battle event write order', () => {
     // Defensive: if someone moves `grantAdmin` out of the `if (captured)` block, the
     // capturer could hold the administrator seat of a place they do not yet own. The test
     // above compares relative positions and cannot catch that, so this one checks scope.
-    const branch = source.indexOf('if (captured)');
-    // 這個分支以 `captured` 區塊結束；用下一個頂層註解分隔線當終點 /
-    // This block ends at the next top-level section divider
-    const branchEnd = source.indexOf('// ── B.', branch);
-    expect(branchEnd, 'the capture branch should end before section B').toBeGreaterThan(branch);
-
-    const grant = source.indexOf('await grantAdmin({', branch);
-    expect(grant).toBeLessThan(branchEnd);
+    // 防禦性：每個 grantAdmin 的**前一個** PLACE_CAPTURED 必須離它夠近（同一段
+    // 佔領邏輯內），而不是檔案裡隨便某場舊戰爭的佔領。取每個 grant 往回找最近的
+    // 佔領，距離必須在 600 字內——佔領與任命是同一段程式的相鄰語句。
+    // Defensive: each grantAdmin's nearest preceding PLACE_CAPTURED must be close
+    // (the same capture logic), not some unrelated earlier capture. The capture and
+    // the appointment are adjacent statements of the same block.
+    const captures = [...source.matchAll(/type: 'PLACE_CAPTURED'/g)].map((m) => m.index!);
+    const grants = [...source.matchAll(/await grantAdmin\(/g)].map((m) => m.index!);
+    for (const grant of grants) {
+      const before = captures.filter((cp) => cp < grant);
+      expect(before.length, 'grantAdmin must be preceded by a capture').toBeGreaterThan(0);
+      const nearest = before[before.length - 1]!;
+      expect(grant - nearest, 'the appointment must sit right after its capture').toBeLessThan(600);
+    }
   });
 });

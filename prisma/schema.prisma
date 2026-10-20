@@ -234,6 +234,39 @@ model Signal {
   target Place  @relation(fields: [targetPlaceId], references: [id])
 }
 
+// ─── BattleStrike ───────────────────────────────────────────────────────────
+// 多回合戰爭的每次出手紀錄（**不進事件日誌**——一場戰爭幾十擊，日誌會被灌水）。
+// 戰報彈窗的戰爭回放由此表讀取；歷史回合也能回放（不依賴快照）。
+// **刻意不設外鍵**：戰報必須活得比它的參與者久（角色／地方刪除後戰史仍在）。
+//
+// One strike record per swing of a multi-round war (**never in the event log** — a
+// war is dozens of swings and would flood it). The battle report's war replay reads
+// this table; historical rounds replay from it too (no snapshot dependency).
+// **Deliberately no foreign keys**: a battle log must outlive its participants
+// (deleting a character or place must not break the war history).
+model BattleStrike {
+  id                String  @id @default(cuid())
+  worldId           String
+  round             Int
+  seq               Int                       // strike order within the round
+  warRound          Int                       // the war's round index (1-based)
+  placeId           String
+  attackerId        String
+  attackerName      String
+  attackerFactionId String?
+  defenderId        String                    // struck side: a defender's id, or "garrison" (the pool)
+  defenderName      String
+  defenderFactionId String?
+  attackPower       Float
+  defencePower      Float
+  roll              Float
+  damage            Int
+  outcome           String                    // 'hit' | 'killed' | 'fled'
+
+  @@index([worldId, round])
+  @@index([worldId, placeId, round])
+}
+
 // ─── RoundSnapshot ─────────────────────────────────────────────────────────
 // Compressed game state for a specific round. Used for replay/history.
 // 特定回合的壓縮遊戲狀態。用於重播/歷史。

@@ -1,20 +1,26 @@
 // ============================================================================
 // 收入分配測試 / Income split tests
 // ----------------------------------------------------------------------------
-// 這些測試把三條規則釘死：30/40/30 的比例、沒有行政官就誰都不拿、以及 jing 對份額的
-// 放大作用。tong 的購兵倍率也住在同一個模組，所以一起測。
+// 這些測試把規則釘死：30/40/30 的比例、沒有行政官就誰都不拿、**一個地方的收入只受
+// 行政官的 jing 影響**（呼叫端用它放大整塊餅），以及君王與其他人的份額是變大後的餅
+// 的固定比例。tong 的購兵倍率也住在同一個模組，所以一起測。
 //
-// These pin three rules: the 30/40/30 shares, nobody being paid without an
-// administrator, and jing's effect on a share. tong's purchase multiplier lives in the
-// same module, so it is covered here too.
+// These pin the rules: the 30/40/30 shares, nobody being paid without an
+// administrator, **a place's income being shaped by the administrator's jing alone**
+// (the caller scales the whole pie with it), and the king's and the others' shares
+// being flat ratios of that grown pie. tong's purchase multiplier lives in the same
+// module, so it is covered here too.
 // ============================================================================
 
 import { describe, it, expect } from 'vitest';
 import {
   splitIncome,
   jingIncomeMultiplier,
+  placeOutput,
+  purchaseBatch,
   tongPurchaseMultiplier,
 } from './income';
+import { placeIncome } from '@/lib/placeEffects';
 import { CONFIG } from '@/lib/gameConfig';
 
 const MID = CONFIG.INCOME_JING_MIDPOINT;
@@ -49,7 +55,7 @@ describe('Income split', () => {
     });
 
     it('should use exactly the same shape as the jing multiplier', () => {
-      // 兩個公式刻意長得一樣，所以同一個輸入必須得到同一個答案 ——
+      // 兩個公式刻意長得一樣，所以同一個輸入必須得到同一個答案——
       // 這是「tong 的效果像 jing」最直接的證明 /
       // The two formulas are deliberately identical, so the same input must give the same
       // answer — the most direct proof that "tong behaves like jing"
@@ -61,6 +67,29 @@ describe('Income split', () => {
     it('should never go negative, even for dirty data', () => {
       expect(tongPurchaseMultiplier(-10)).toBe(tongPurchaseMultiplier(0));
       expect(tongPurchaseMultiplier(-10)).toBeGreaterThanOrEqual(0);
+    });
+  });
+
+  describe('placeOutput', () => {
+    it('floors the pie: gold is always whole', () => {
+      // 倍率乘在**整塊餅**上後必須取整——金幣是 Int 欄位，事件的「收益」也要印得出人話
+      // The multiplier scales the **whole pie** and then floors — gold is an Int column
+      // and the event's income figure has to read as prose
+      const out = placeOutput(1, 24);
+      expect(Number.isInteger(out)).toBe(true);
+      expect(out).toBe(Math.floor(placeIncome(1) * jingIncomeMultiplier(24)));
+    });
+
+    it('without an administrator the output is the base', () => {
+      // 沒有行政官：地方照樣生產基礎產出（只是一分不發）/
+      // No administrator: the place still produces its base output (it just pays nobody)
+      expect(placeOutput(10, null)).toBe(placeIncome(10));
+    });
+
+    it('a higher-jing administrator makes the place richer', () => {
+      const rich = placeOutput(10, 30);
+      const poor = placeOutput(10, 5);
+      expect(rich).toBeGreaterThan(poor);
     });
   });
 
@@ -110,10 +139,36 @@ describe('Income split', () => {
     });
   });
 
+  describe('purchaseBatch', () => {
+    it('jitter 0 lands exactly on the base batch', () => {
+      // 基準批量 = 30 乘 tong 倍率：tong 30 -> round(30 x 1.4167) = 43
+      // Base batch = 30 x the tong multiplier: tong 30 -> round(30 x 1.4167) = 43
+      expect(purchaseBatch(30, 200, 0)).toBe(43);
+      expect(purchaseBatch(17.5, 200, 0)).toBe(30);
+      expect(purchaseBatch(5, 200, 0)).toBe(Math.round(30 * jingIncomeMultiplier(5)));
+    });
+
+    it('gold is the hard limit', () => {
+      // 買不起基準批量就買到買得起為止，絕不超過 maxBuyable /
+      // Below the base batch it buys what it can afford — never past maxBuyable
+      expect(purchaseBatch(30, 15, 0)).toBe(15);
+      expect(purchaseBatch(30, 12, 0.5)).toBe(12);
+    });
+
+    it('the spec cap (100) and the batch minimum (10) both clamp', () => {
+      // 高 tong 的基準批量超過 100 -> 夾回規格上限 /
+      // A high-tong base batch exceeds 100 -> clamped to the spec cap
+      expect(purchaseBatch(30, 500, 1)).toBeLessThanOrEqual(100);
+      // 抖動到最低也不低於批次下限 /
+      // Even jittered to the bottom, never below the batch minimum
+      expect(purchaseBatch(5, 200, -1)).toBeGreaterThanOrEqual(10);
+    });
+  });
+
   describe('splitIncome invariants', () => {
     it('should never distribute more than the place earns', () => {
-      // 兩位高 jing 領導者加總可能超過收入，必須按比例縮回 /
-      // Two high-jing leaders can add up to more than the income, so scale back
+      // 份額是結構性的（≤ 100%），任何 jing 值都不能讓總額超過收入 /
+      // The shares are structural (≤ 100%): no jing value can push the total past the income
       for (let income = 10; income <= 400; income += 7) {
         for (const kingJing of [0, 5, 17, 30]) {
           for (const adminJing of [0, 5, 17, 30]) {
@@ -144,32 +199,59 @@ describe('Income split', () => {
       }
     });
 
-    it('should treat jing 0 as a real leader, not a vacant seat', () => {
-      // 0 與 null 意義不同：0 是「有這個人但 jing 低」/ 0 and null differ in meaning
-      const split = splitIncome(100, 0, 0, 2);
-      expect(split.king).toBeGreaterThan(0);
-      expect(split.admin).toBeGreaterThan(0);
-      expect(split.king).toBeLessThan(30);
-      expect(split.admin).toBeLessThan(40);
+    it('should never return a fractional share, even for a fractional income', () => {
+      // 金幣永遠是整數：收入帶小數時（呼叫端忘了取整）每一份仍必須是整數——
+      // `!hasOthers` 分支曾經吐出 9.166666666666668 /
+      // Gold is always whole: with a fractional income (a caller forgot to floor) every
+      // share must still be an integer — the `!hasOthers` branch once produced
+      // 9.166666666666668
+      const split = splitIncome(12.166666666666666, 30, 24, 0);
+      expect(Number.isInteger(split.king)).toBe(true);
+      expect(Number.isInteger(split.admin)).toBe(true);
+      expect(Number.isInteger(split.others)).toBe(true);
     });
 
-    it('should reward economic power with a bigger pocket', () => {
-      // 同一份額比例下，jing 高的那位一定拿得更多 /
-      // At the same share, the higher-jing leader always pockets more
-      const rich = splitIncome(100, MID, 30, 2);
-      const poor = splitIncome(100, MID, 5, 2);
+    it('should treat jing 0 as a real leader, not a vacant seat', () => {
+      // 0 與 null 意義不同：0 是「有這個人」。jing 的**值**不影響 split——一個地方
+      // 的收入只受行政官的 jing 影響（呼叫端放大整塊餅），君王與其他人的份額是
+      // 變大後的餅的固定比例。
+      // 0 and null differ in meaning: 0 is "a real leader". The jing **value** does not
+      // affect the split — a place's income is shaped by the administrator's jing alone
+      // (the caller scales the whole pie); the king's and the others' shares are flat
+      // ratios of that grown pie.
+      const split = splitIncome(100, 0, 0, 2);
+      expect(split.king).toBe(30);
+      expect(split.admin).toBe(40);
+      expect(split.others).toBe(30);
+    });
+
+    it('should reward economic power with a bigger pocket — through the pie, not the split', () => {
+      // 行政官的 jing 在**呼叫端**放大整塊餅（economy 的做法），split 本身對行政官
+      // 不再乘倍率——在 split 裡再乘會是 ×jing²。組合起來（餅 × 倍率 → split），
+      // 高 jing 的行政官仍然一定拿得更多。
+      // The administrator's jing scales the **whole pie at the caller** (what economy
+      // does), and the split no longer multiplies him — multiplying there too would be
+      // ×jing². Composed (pie × multiplier → split), the higher-jing administrator
+      // still always pockets more.
+      const rich = splitIncome(100 * jingIncomeMultiplier(30), MID, 30, 2);
+      const poor = splitIncome(100 * jingIncomeMultiplier(5), MID, 5, 2);
       expect(rich.admin).toBeGreaterThan(40);
       expect(poor.admin).toBeLessThan(40);
       expect(rich.admin).toBeGreaterThan(poor.admin);
     });
 
-    it('should let a strong leader out-earn a weak one, ratio preserved', () => {
-      // 比例縮放要保留兩人的相對高低，而不是把弱的砍成 0 /
-      // The proportional scale-back must preserve which of the two is richer
-      const high = splitIncome(100, 30, 5, 2);
-      const low = splitIncome(100, 5, 30, 2);
-      expect(high.king).toBeGreaterThan(high.admin);
-      expect(low.admin).toBeGreaterThan(low.king);
+    it('should keep the king\u2019s share flat whatever his jing', () => {
+      // 君王的 30% 是變大後的餅的**固定抽成**：他的 jing 值不影響自己的份額——
+      // jing 的收入效果只有一條（行政官放大整塊餅），同一個人的 jing 作用兩次
+      // （開國君王通常自己就是行政官）會是 ×jing²。
+      // The king's 30% is a **flat cut** of the grown pie: his jing value does not
+      // touch his own share — jing's only income effect is the administrator scaling
+      // the whole pie, and the same person's jing acting twice (the founding king is
+      // usually the administrator himself) would be ×jing².
+      const low = splitIncome(100, 0, MID, 2);
+      const high = splitIncome(100, 30, MID, 2);
+      expect(low.king).toBe(30);
+      expect(high.king).toBe(30);
     });
 
     it('should hand a strong administrator the largest share by default', () => {

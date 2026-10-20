@@ -331,9 +331,11 @@ body {
   /* ── 陰影 / Shadow ───────────────────────────────────────────────────── */
   --shadow-ds-glow: 0 0 28px rgba(34, 211, 238, 0.25);
   --shadow-ds-hero: 0 24px 70px rgba(2, 6, 23, 0.8);
-  /* 地圖四周的內陰影，讓注視焦點落在世界中央 / the map's inner vignette, which
-     frames the world and pulls the eye toward the centre */
-  --shadow-ds-map-vignette: inset 0 0 170px 34px rgba(2, 6, 23, 0.66);
+  /* 地圖暗角已移除：GM_VIGNETTE 與 shadow-ds-map-vignette 會把邊緣的地點與道路
+     壓暗，讀起來像渲染 bug（2026-10 移除）。
+     The map vignette is removed: GM_VIGNETTE and shadow-ds-map-vignette darkened
+     the places and roads near the edges, which read as a rendering bug (removed
+     Oct 2026). */
 
 /* 深空底色：兩團極淡的星雲 + 一道垂直漸層。純裝飾，所以住在 @theme static 當
      token，再由 Tailify utility 引用——不另開一個 .space-bg class。
@@ -389,7 +391,6 @@ body {
   --ds-muted: var(--color-ds-muted);
   --ds-ease: var(--ease-ds);
   --ds-glow-cyan: var(--shadow-ds-glow);
-  --ds-map-vignette: var(--shadow-ds-map-vignette);
   /* 底色與星雲疊成單一 utility；`space` 是底，`space-nebula` 疊在它上面 /
      The base and the nebula compose into one utility pair: `space` underneath,
      `space-nebula` layered on top of it */

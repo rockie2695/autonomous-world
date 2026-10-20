@@ -15,7 +15,7 @@ import {
   hslToHex,
   linkedPlaceNames,
   placeLabelRect,
-  pointInRect,
+  pointInRotatedRect,
   solveLabelFontSize,
   starClassOf,
   starScaleAt,
@@ -36,6 +36,8 @@ import { useReducedMotion } from 'motion/react';
 import { CONFIG } from '@/lib/gameConfig';
 import { t } from '@/lib/i18n';
 import { createRng } from '@/lib/rng';
+import { placeTooltip } from '@/lib/tooltipPlacement';
+import { useCoarsePointer } from '../app/game/tooltip';
 import {
   buildTerritoryField,
   factionAt,
@@ -134,6 +136,24 @@ export function SigmaMap({
    * zoomed in past the point where the territory layer should be inert?".
    */
   const cameraRatioRef = useRef(1);
+  /**
+   * 觸摸設備鏡像：effect 裡的穩定閉包讀不到 hook 的最新值，比照 `cameraRatioRef`
+   * 鏡像成 ref。觸摸設備上 hover 提示不提供——點擊本來就會開地點詳情面板。
+   *
+   * A coarse-pointer mirror for the **stable closures**: the effect-bound handlers
+   * cannot read the hook's latest value, so it is mirrored like `cameraRatioRef`.
+   * Touch devices get no hover tooltip — a tap already opens the place detail panel.
+   */
+  const coarseRef = useRef(false);
+  // 觸摸設備：hover 提示不提供（點擊走地點詳情面板）。ref 鏡像不能在 render 寫
+  // （react-hooks 規則），放進 effect——設備切換極罕見，慢一拍無妨 /
+  // Touch devices: no hover tooltip (taps go through the place detail panel). The
+  // ref mirror cannot be written during render (react-hooks rule), so it lands in
+  // an effect — device switches are rare, a one-tick lag is fine.
+  const coarse = useCoarsePointer();
+  useEffect(() => {
+    coarseRef.current = coarse;
+  }, [coarse]);
   /**
    * 是否已放大到星系層（圓盤變成太陽）。`nodeReducer` 與自訂的標籤繪製都需要讀它，
    * 而兩者都不能直接抓到 sigma 實例，所以鏡像成 ref。
@@ -381,10 +401,29 @@ export function SigmaMap({
         y: attrs.y,
       });
 
+      // 觸摸設備不提供 hover 提示（點擊走詳情面板）/
+      // No hover tooltip on touch (taps go through the detail panel)
+      if (coarseRef.current) return;
+
+      // 定位交給 placeTooltip：**預設在下方**、左上角貼近節點、夾在容器內——
+      // 不再恆定於上方（上半部會被裁掉）。
+      // Placement goes through placeTooltip: **below by default**, its top-left near
+      // the node, clamped inside the container — no longer always above (which the
+      // top half clipped).
+      const placed = placeTooltip({
+        ax: viewportPos.x,
+        ay: viewportPos.y,
+        panelW: 260,
+        panelH: 240,
+        boxW: containerRef.current?.clientWidth ?? window.innerWidth,
+        boxH: containerRef.current?.clientHeight ?? window.innerHeight,
+        gap: 12,
+        anchor: 'cursor',
+      });
       setTooltip({
         kind: 'place',
-        x: viewportPos.x,
-        y: viewportPos.y,
+        x: placed.x,
+        y: placed.y,
         place: attrs.placeData,
         faction: attrs.factionData,
         leaderTroops: attrs.leaderTroops,
@@ -448,7 +487,10 @@ export function SigmaMap({
           x: display.x,
           y: display.y,
           ratio: Math.min(camera.ratio, focusRatio),
-          angle: 0,
+          // 聚焦**保留當前角度**：使用者轉過的地圖不該被一次點擊擺正（重置 ↺ 才回 0）/
+          // Focusing **keeps the current angle**: a map the user rotated should not be
+          // straightened by one click (only the reset ↺ returns to 0)
+          angle: camera.angle,
         },
         { duration: animMs() }
       );
@@ -1107,16 +1149,26 @@ useEffect(() => {
       return;
     }
 
-    // 把格子範圍對應到 viewport。這裡假設 camera angle 為 0（本專案兩處鏡頭
-    // 動畫都明確傳了 angle: 0），因此圖→viewport 只是縮放加平移。
-    // Map the grid extent onto the viewport. This assumes camera angle 0 — both
-    // camera animations here pass angle: 0 explicitly — so graph→viewport is a
-    // scale plus a translation.
+    // 把格子範圍對應到 viewport：取**三點**（左上、右、下）過 `sigma.graphToViewport`
+    // 解出完整的 2×3 仿射。鏡頭**旋轉**時圖→viewport 是旋轉加縮放平移，舊的
+    // 「兩角算 sx/sy」只能表達軸對齊縮放，領地色塊會不跟著地圖轉。angle = 0 時
+    // b、c 為 0，退化成與舊式完全相同的數值。
+    // Map the grid extent onto the viewport through **three** points (top-left,
+    // right, bottom) passed through `sigma.graphToViewport`, solving the full 2×3
+    // affine. With a rotated camera, graph→viewport is rotate + scale + translate,
+    // and the old two-corner sx/sy could only express axis-aligned scaling — the
+    // territory would stop following the map. At angle 0, b and c are 0 and this
+    // degenerates to exactly the old numbers.
     const litIndexForBorder = lit === null ? -1 : field.factions.indexOf(lit);
-    const topLeft = sigma.graphToViewport({ x: field.minX, y: field.minY });
-    const bottomRight = sigma.graphToViewport({ x: field.maxX, y: field.maxY });
-    const sx = (bottomRight.x - topLeft.x) / (field.maxX - field.minX);
-    const sy = (bottomRight.y - topLeft.y) / (field.maxY - field.minY);
+    const spanX = field.maxX - field.minX;
+    const spanY = field.maxY - field.minY;
+    const p00 = sigma.graphToViewport({ x: field.minX, y: field.minY });
+    const pX = sigma.graphToViewport({ x: field.maxX, y: field.minY });
+    const pY = sigma.graphToViewport({ x: field.minX, y: field.maxY });
+    const matA = (pX.x - p00.x) / spanX;
+    const matB = (pX.y - p00.y) / spanX;
+    const matC = (pY.x - p00.x) / spanY;
+    const matD = (pY.y - p00.y) / spanY;
 
     // 邊界要清楚，所以**關閉**平滑：開著會把 Voronoi 的格子糊成一片漸層，
     // 那正是「不像 Stellaris」的原因。rim light 也只有在硬邊下才看得見。
@@ -1141,7 +1193,14 @@ useEffect(() => {
     // the same colour and the same alpha, so the interior is uniform, and the staircase
     // at the rim is covered by the vector border stroked on top, so it does not turn
     // into a mosaic.
-    ctx.transform(sx, 0, 0, sy, topLeft.x - field.minX * sx, topLeft.y - field.minY * sy);
+    ctx.transform(
+      matA,
+      matB,
+      matC,
+      matD,
+      p00.x - field.minX * matA - field.minY * matC,
+      p00.y - field.minX * matB - field.minY * matD
+    );
 
     // 填色：直接把同一組平滑曲線填滿。這是**平塗**（單一顏色、單一 alpha），所以不會
     // 有霧；而它的邊緣就是那條曲線，與邊界完全重合。
@@ -1169,7 +1228,12 @@ useEffect(() => {
     // The border is stroked under the **same transform**, so its width and resolution
     // track the screen rather than the grid. The width is in screen pixels, so divide out
     // the transform's average scale.
-    const borderScale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
+    // 邊框線寬補償：仿射的**平均軸長度**（向量的模）——angle 0 時與舊的
+    // (|sx|+|sy|)/2 相同 /
+    // Border width compensation: the affine's **mean axis length** (vector norms) —
+    // identical to the old (|sx|+|sy|)/2 at angle 0
+    const borderScale =
+      (Math.hypot(matA, matB) + Math.hypot(matC, matD)) / 2 || 1;
     ctx.lineWidth = CONFIG.TERRITORY_BORDER_PX / borderScale;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -1230,9 +1294,11 @@ useEffect(() => {
       // four corners landed outside.
       const anchor = sigma.graphToViewport({ x: region.labelX, y: region.labelY });
 
-      // 這個 transform 的平均縮放：把圖座標的半徑換成螢幕像素 /
-      // the transform's average scale, to turn a graph-space radius into screen pixels
-      const scale = (Math.abs(sx) + Math.abs(sy)) / 2 || 1;
+      // 這個 transform 的平均軸長度：把圖座標的半徑換成螢幕像素（旋轉安全——
+      // 用向量的模而不是假設軸對齊的 |sx|+|sy|）/
+      // The transform's mean axis length: graph-space radii to screen pixels
+      // (rotation-safe — vector norms, not the axis-aligned |sx|+|sy|)
+      const scale = (Math.hypot(matA, matB) + Math.hypot(matC, matD)) / 2 || 1;
 
       // 先量「100px 時文字多大」再解字級，兩邊都必須是實測值 /
       // Measure the text at 100px first, then solve; both inputs are real measurements
@@ -1265,10 +1331,27 @@ useEffect(() => {
       }
       el.style.fontSize = `${fontSize.toFixed(1)}px`;
 
-      // 旋轉與角度都是 `territoryRegions` 算好的，這裡只讀不推 —— 見上面的說明 /
-      // The rotation and its angle were both decided in `territoryRegions`; read them, do
-      // not re-derive them — see the note above
-      const deg = region.labelAngleDeg;
+      // 旋轉**與否**是 `territoryRegions` 算好的，這裡只讀不推。角度則由**兩點過
+      // sigma** 實測：把區域軸向的單位向量兩端點過 `graphToViewport` 後取 atan2
+      // ——鏡頭旋轉時軸向跟著地圖轉，名字才會沿著地勢畫。angle = 0 時退化成舊的
+      // `labelAngleDeg`（y 翻轉即 −α，正規化到 ±90° 字不顛倒）。
+      // Whether to rotate at all was decided in `territoryRegions` — read it, do
+      // not re-derive. The angle, though, is **measured through sigma**: map the
+      // region axis's unit vector through `graphToViewport` and take the atan2 —
+      // under a rotated camera the axis turns with the map, so the name stays along
+      // the land (at angle 0 this degenerates to the old `labelAngleDeg`: the y flip
+      // negates α, normalised to ±90°).
+      let deg = 0;
+      if (region.labelRotated) {
+        const c0 = sigma.graphToViewport({ x: region.labelX, y: region.labelY });
+        const c1 = sigma.graphToViewport({
+          x: region.labelX + Math.cos(region.angle),
+          y: region.labelY + Math.sin(region.angle),
+        });
+        deg = (Math.atan2(c1.y - c0.y, c1.x - c0.x) * 180) / Math.PI;
+        while (deg > 90) deg -= 180;
+        while (deg < -90) deg += 180;
+      }
 
       // `origin-top-left` 是**必要**的，旋轉時尤其。`transform-origin` 預設 `50% 50%`，
       // 於是整條變換鏈（含 `translate(-50%,-50%)`）都會繞元素自己的中心旋轉：名字被推開
@@ -1471,7 +1554,11 @@ useEffect(() => {
         textWidth: measureLabelWidth(site.id, attrs.label, attrs.size),
         labelSize: labelSizeOf(attrs.size),
       });
-      if (pointInRect(vx, vy, rect2)) {
+      // sigma 把標籤跟著鏡頭**一起轉**（camera.angle），命中測試也要轉——
+      // 角度 0 時退化成水平測試 /
+      // sigma rotates the label **with the camera** (camera.angle), so the hit test
+      // rotates too — degenerating to the horizontal test at angle 0
+      if (pointInRotatedRect(vx, vy, rect2, sigma.getCamera().angle)) {
         // 標籤命中算「零距離」：它比圓盤命中更貼近意圖，必須贏過任何圓盤 /
         // A label hit counts as distance zero: it is closer to the reader's intent than any
         // disc hit, so it must win.
@@ -1500,6 +1587,9 @@ useEffect(() => {
     // the density field would permanently mask the place's own tooltip.
     const site = placeUnderCursor(vx, vy);
     if (site) {
+      // 觸摸設備不提供 hover 提示（點擊走詳情面板）/
+      // No hover tooltip on touch (taps go through the detail panel)
+      if (coarseRef.current) return;
       const attrs = graph.getNodeAttributes(site.id) as {
         placeData: Place;
         factionData: Faction | null;
@@ -1508,10 +1598,23 @@ useEffect(() => {
         factionRulerName: string | null;
         leaders: PlaceLeader[];
       };
+      // placeTooltip 統一定位（容器座標、預設在光標下方）/
+      // placeTooltip decides the placement (container coordinates, below the cursor
+      // by default)
+      const placed = placeTooltip({
+        ax: vx,
+        ay: vy,
+        panelW: 260,
+        panelH: 240,
+        boxW: rect.width,
+        boxH: rect.height,
+        gap: 12,
+        anchor: 'cursor',
+      });
       setTooltip({
         kind: 'place',
-        x: vx,
-        y: vy,
+        x: placed.x,
+        y: placed.y,
         place: attrs.placeData,
         faction: attrs.factionData,
         leaderTroops: attrs.leaderTroops,
@@ -1636,10 +1739,24 @@ useEffect(() => {
     }
 
     const owner = factionInfo.get(key);
+    // 觸摸設備不提供 hover 提示 / No hover tooltip on touch
+    if (coarseRef.current) return;
+    // placeTooltip 統一定位（預設在光標下方，不再恆定上方）/
+    // placeTooltip decides (below the cursor by default — no longer always above)
+    const placed = placeTooltip({
+      ax: vx,
+      ay: vy,
+      panelW: 240,
+      panelH: 160,
+      boxW: rect.width,
+      boxH: rect.height,
+      gap: 12,
+      anchor: 'cursor',
+    });
     setTooltip({
       kind: 'faction',
-      x: vx,
-      y: vy,
+      x: placed.x,
+      y: placed.y,
       name: owner?.name ?? key,
       color: owner?.color ?? CONFIG.MAP_TERRITORY_FALLBACK,
       placeCount: owner?.placeCount ?? 0,
@@ -1721,8 +1838,23 @@ useEffect(() => {
   /** 一次影格只重畫一次覆蓋層 / one overlay repaint per animation frame */
   let overlayFrame = 0;
   const gestureStart = { px: 0, py: 0 };
+  // ── 旋轉手勢（桌面）──右鍵拖或 Shift+左鍵拖轉動鏡頭；手機用 sigma 內建的雙指旋轉
+  // ── Rotate gesture (desktop): right-drag or Shift+drag turns the camera; touch
+  // keeps sigma's built-in two-finger rotate
+  let rotating = false;
+  let rotateStartX = 0;
+  let rotateStartAngle = 0;
 
   const onSurfaceDown = (event: MouseEvent) => {
+    // 右鍵或 Shift+左鍵 → 旋轉（不進入拖曳／點選流程）/
+    // Right button or Shift+left → rotate (not the drag / select flow)
+    if (event.button === 2 || (event.button === 0 && event.shiftKey)) {
+      rotating = true;
+      rotateStartX = event.clientX;
+      rotateStartAngle = sigmaRef.current?.getCamera().angle ?? 0;
+      event.preventDefault();
+      return;
+    }
     if (event.button !== 0) return;
     dragging = true;
     draggedFar = false;
@@ -1731,6 +1863,21 @@ useEffect(() => {
   };
 
   const onSurfaceMove = (event: MouseEvent) => {
+    if (rotating) {
+      // 水平位移 → 鏡頭角。0.005 rad/px：全寬拖一圈約 60°，手感與地圖平移同級。
+      // `camera.setState` 不排程 render，必須自己 `refresh()`。
+      // Horizontal movement → camera angle. 0.005 rad/px: a full-width drag is
+      // roughly 60°. `camera.setState` does not schedule a render — `refresh()`
+      // is required.
+      const sigma = sigmaRef.current;
+      if (sigma) {
+        sigma.getCamera().setState({
+          angle: rotateStartAngle + (event.clientX - rotateStartX) * 0.005,
+        });
+        sigma.refresh();
+      }
+      return;
+    }
     if (dragging) {
       // 拖曳中不做 hover：`onMove` 每一次 mousemove 都會掃過全部據點，並且
       // `setTooltip` 會觸發一次 React render。拖曳時游標每秒能送幾十次
@@ -1752,6 +1899,7 @@ useEffect(() => {
 
   const onSurfaceUp = () => {
     dragging = false;
+    rotating = false;
   };
 
   const onClick = () => {
@@ -1776,6 +1924,11 @@ useEffect(() => {
   surface.addEventListener('click', onClick);
   surface.addEventListener('mousedown', onSurfaceDown);
   window.addEventListener('mouseup', onSurfaceUp);
+  // 右鍵旋轉：壓掉瀏覽器的右鍵選單，否則旋轉手勢一放開就彈選單 /
+  // Right-drag rotate: suppress the browser's context menu, or the gesture pops it
+  // on release
+  const onContextMenu = (event: Event) => event.preventDefault();
+  surface.addEventListener('contextmenu', onContextMenu);
   sigma.on('afterRender', draw);
   // 領地層的投影完全取決於鏡頭，所以**任何**改到鏡頭的來源都必須重畫它。綁在
   // afterRender 上不可靠 —— 實測拖曳時 afterRender 不一定叫得到這裡，領地層就變成
@@ -1822,6 +1975,7 @@ useEffect(() => {
     surface.removeEventListener('mouseleave', onLeave);
     surface.removeEventListener('click', onClick);
     surface.removeEventListener('mousedown', onSurfaceDown);
+    surface.removeEventListener('contextmenu', onContextMenu);
     window.removeEventListener('mouseup', onSurfaceUp);
     sigma.off('afterRender', draw);
     // 重畫掛在鏡頭上，所以監聽也必須一起拆掉；沒排队的影格也要取消，否則
@@ -1937,15 +2091,29 @@ useEffect(() => {
       // would read as a sticker.
       const starView = sigma.getCamera().ratio <= CONFIG.MAP_STAR_ZOOM_RATIO;
 
-      // 只畫視窗內的節點：2000 個節點時世界大半都在視窗外，畫它們只是浪費 /
+      // 只畫視窗內的節點：2000 個節點時世界大半都在視窗外，畫它們只是浪費。
+      // **旋轉時必須取四個角**：鏡頭轉動後，視窗在圖座標裡是**歪的矩形**，只取
+      // 對角兩點算出的軸對齊盒子會太小，地圖四角的節點／道路就被裁出 overlay——
+      // 白邊與道路白殼消失，看起來就是「暗的地點和道路」。四個角都過
+      // `viewportToGraph` 再取 min/max，angle = 0 時與舊式完全相同（另外兩角落在
+      // 對角盒子內）。
       // Only nodes inside the viewport: at 2000 nodes most of the world is off-screen.
-      const tl = sigma.viewportToGraph({ x: 0, y: 0 });
-      const br = sigma.viewportToGraph({ x: rect.width, y: rect.height });
+      // **Under rotation all FOUR corners are required**: with the camera turned, the
+      // viewport is a *skewed* rectangle in graph space, and a box built from just the
+      // two diagonal corners is too small — places and roads near the map's corners get
+      // culled out of the overlay, losing their white borders and casings, which reads
+      // as "dark places and roads". Mapping all four corners and taking min/max is
+      // identical to the old form at angle 0 (the extra corners lie inside the diagonal
+      // box).
+      const c0 = sigma.viewportToGraph({ x: 0, y: 0 });
+      const c1 = sigma.viewportToGraph({ x: rect.width, y: 0 });
+      const c2 = sigma.viewportToGraph({ x: 0, y: rect.height });
+      const c3 = sigma.viewportToGraph({ x: rect.width, y: rect.height });
       const pad = CONFIG.MAP_NODE_SHADOW_SPREAD + CONFIG.MAP_NODE_BORDER_WIDTH;
-      const minX = Math.min(tl.x, br.x) - pad;
-      const maxX = Math.max(tl.x, br.x) + pad;
-      const minY = Math.min(tl.y, br.y) - pad;
-      const maxY = Math.max(tl.y, br.y) + pad;
+      const minX = Math.min(c0.x, c1.x, c2.x, c3.x) - pad;
+      const maxX = Math.max(c0.x, c1.x, c2.x, c3.x) + pad;
+      const minY = Math.min(c0.y, c1.y, c2.y, c3.y) - pad;
+      const maxY = Math.max(c0.y, c1.y, c2.y, c3.y) + pad;
 
       // ── 道路白邊 / Road casing ──────────────────────────────────────────────
       // 和節點白邊**完全同一個理由**：星雲與近黑的底會吃掉邊界，`MAP_ROAD_COLOR`
@@ -2486,7 +2654,17 @@ useEffect(() => {
     //
     // No backdrop at this level: the deep-space base comes from `bg-ds-space`
     // above, and an opaque fill here would hide the space dust underneath.
-    <div ref={surfaceRef} className="w-full h-full relative shadow-ds-map-vignette">
+    <div ref={surfaceRef} className="w-full h-full relative overflow-hidden">
+      {/* **overflow-hidden 是必要的**：領地勢力名靠上緣時會整個溢出地圖、畫到頁眉上
+          （實測「蛇雨朝」蓋住觀測帶）——標籤屬於地圖，畫出去就是錯的。
+          **overflow-hidden is load-bearing**: a territory faction name near the top
+          edge overflowed the map and painted over the header (蛇雨朝 over the
+          telemetry strip, measured) — a label belongs to the map. */}
+      {/* 暗角已移除（GM_VIGNETTE 與 shadow-ds-map-vignette）：它會把邊緣的地點與道路
+          壓暗，讀起來像渲染 bug。四個 HUD 框角（GM_FRAME）保留。
+          The vignette is gone (GM_VIGNETTE and shadow-ds-map-vignette): it darkened
+          the places and roads near the edges, which read as a rendering bug. The four
+          HUD corner brackets (GM_FRAME) stay. */}
       {/* 領地圖的勢力名字（DOM 而非 canvas：字體與 i18n 直接沿用現有設定，
           每幀只改 transform）/ Faction names on the territory map. Rendered as DOM
           rather than on the canvas so they inherit the app's fonts and i18n, and
@@ -2544,11 +2722,14 @@ useEffect(() => {
       {/* 工具提示 / Tooltip */}
       {tooltip && (
         <div
-          className="absolute pointer-events-none z-50 bg-gray-900/95 backdrop-blur-md rounded-xl p-3.5 text-base shadow-2xl shadow-black/50 border border-gray-700/60"
+          className="absolute pointer-events-none z-50 max-w-[min(20rem,calc(100%-1.5rem))] bg-gray-900/95 backdrop-blur-md rounded-xl p-3.5 text-base shadow-2xl shadow-black/50 border border-gray-700/60"
           style={{
-            left: tooltip.x + 15,
-            top: tooltip.y - 10,
-            transform: 'translateY(-100%)',
+            // placeTooltip 已算好**左上角**（容器座標、預設在光標下方、已夾邊），
+            // 不再 translate 翻轉 /
+            // placeTooltip has already produced the **top-left** (container space,
+            // below the cursor by default, clamped) — no translate-based flipping
+            left: tooltip.x,
+            top: tooltip.y,
           }}
         >
           {/* 頂部發光線 / Top glow line */}

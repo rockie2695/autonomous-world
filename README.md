@@ -182,15 +182,25 @@ autonomous-world/
   completely empty on arrival
 - Characters only spawn at faction-controlled places (unowned places never generate generals), and a spawned general immediately joins that place's faction
 - Characters spawned in a round never move in that round (they stay put until the next round)
-- On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removed admin's ambition **increases** by `DEFECTION_ADMIN_REPLACED_DELTA` (1), logged as an `ADMIN_REMOVED` event + a `DefectionEvent`
+- On spawn, the faction's king assigns the new leader as administrator of the spawn place: if the seat is vacant (or held by a dead admin) the new leader takes it directly; if the king himself holds it, he keeps it; otherwise they compare total ability (wu+tong+jing) and a strictly higher score wins the seat — the removal is logged as an `ADMIN_REMOVED` event plus a `DefectionEvent` of `+1` (ambition itself is a fixed initial stat; what moves is the ledger)
 - Every administrator assignment — spawn, auto-assign, battle capture, or manual API — writes a `DefectionEvent` of `DEFECTION_ADMIN_ASSIGNED_DELTA` (−1) to the ledger. It is **permanent**: the old temporary reduction and its automatic +1 revert are gone (`adminAmbitionRevertRound` was dropped, and `AMBITION_RECOVERED` was never emitted by anything)
 - After any leader change, that place cannot change leader again for `ADMIN_CHANGE_COOLDOWN_ROUNDS` (10) rounds — but this blocks **AI paths only**: battle captures and manual assignment still work
 
 ### Factions
 - Characters can belong to a faction (kingdom/nation)
 - Each faction has a king, color, and set of territories
-- When a king dies, the faction enters "collapsing" state and dissolves
+- When a king dies — of old age **or in battle** — the oldest child inherits the throne; with no
+  heir the faction enters "collapsing" state and dissolves. Dead administrators' seats are cleared by
+  the same aftermath, so a corpse never holds a place or keeps collecting its share
 - Only faction-controlled places can be assigned an administrator (auto-assign skips unowned places; the admin API returns 400 for them)
+- **Signals**: the king commands the faction by posture — a place about to fall is always relieved first;
+  with nothing urgent an aggressive king attacks the weakest border, guardian/merchant kings stand down.
+  Followers march to the call through friendly territory, and a hostile target must still pass the same
+  win-estimate gate as a self-chosen assault
+- **Signals**: the king commands the faction by posture — a place about to fall is always relieved first;
+  with nothing urgent an aggressive king attacks the weakest border, guardian/merchant kings stand down.
+  Followers march to the call through friendly territory, and a hostile target must still pass the same
+  win-estimate gate as a self-chosen assault
 - The place popup shows who manages the place (administrator name, 👑 if the king), or "No Administrator"
 
 ### Map Visualization
@@ -437,19 +447,29 @@ view of faction power rather than another rendering of one metric.
 
 ### Battles
 - Characters move 1 territory per turn
-- When enemy characters meet, they battle
-- Battle outcome depends on troops, martial/leadership stats, and fortress level
-- Losers may escape to a nearby friendly place (based on speed difference) or die
+- When enemy leaders occupy the same place they fight a **multi-round war**: every round each
+  combatant strikes in speed order with their own dice, costing the target troops (troops are HP) —
+  a war can take several rounds before one side breaks
+- The defence fights behind walls: garrison damage first, the defending leaders after, and the fortress
+  mitigates every strike; everyone fatigues per round, so the attacker loses long wars
+- The war ends when the defence is gone (capture), the attackers are gone (hold), the attackers fall
+  below half the defence (rout), or the round cap is reached (retreat)
+- **The battle report replays the war**: open the 戰報 panel on any casualty and watch the rounds —
+  leaders lunging at each other, per-strike arithmetic, the fallen fading
 
 ### Economy
 - Each territory generates income based on market level
 - Income is split: **30% king, 40% administrator, 30% shared among everyone else**. A vacant king or an empty "everyone else" bucket has its share absorbed by whoever is present, because the total is fixed and gold cannot vanish 
 - **No administrator means nobody is paid.** The administrator is the person actually running the place, so without one the place is ungoverned, and quietly routing the money to a distant king would pay someone who is not there
-- **Economy (jing)** scales what a leader pockets: a leader's cut is multiplied by
-  `1 + (jing − 17.5) / 30`, so an average leader is unchanged, a high-`jing` one takes more
-  and a low-`jing` one less. A lone leader (no king *or* no admin) already receives the whole
-  income, so no multiplier applies — the total distributed can never exceed the place's income
-- Characters buy troops with personal gold: 2 gold per troop, in batches of 10-100. The **cap on one purchase is scaled by 統領 (tong)** with the same average-centred formula jing uses for income, so leadership decides how many soldiers one purchase can buy 
+- **Economy (jing)** scales the place's whole output through the **administrator**: the pie is
+  `placeIncome(market) × (1 + (admin jing − 17.5) / 30)` (floored to whole gold), so a high-`jing`
+  administrator genuinely makes the place richer. The king's 30% and the others' shares are **flat
+  ratios of that grown pie** — no personal multiplier acts on them, and every jing applies at most once
+  (the founding king is usually the administrator himself; scaling the pie *and* his share would square it)
+- Characters buy troops with personal gold: 2 gold per troop. **統領 (tong) decides how big one
+  purchase is** — the base batch is 30 troops scaled by the same average-centred formula, jittered ±25%,
+  hard-capped by gold and the spec's 100. (The old rule scaled a cap of 100, which a leader's per-round
+  gold rarely reached, so tong was effectively decorative.) 
 - **統領 (tong) only does that.** It does not affect defection at all, and it does not defend — that is **體魄 (ti)**. Removing the defection link took two passes: the multiplier went first, then a delta that was still quietly feeding the defection value through the ledger. Leadership is not loyalty.
 - **Ambition (ambition)** is an integer 5-30, drawn from a normal distribution (mean 17, sigma 5) via
   `Rng.gaussianInt`. Both the stat and the ledger deltas are `Int` columns; they were `Float`

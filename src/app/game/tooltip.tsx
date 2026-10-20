@@ -16,22 +16,36 @@
  * ---------------------------------------------------------------------------
  * 兩個宿主的內文都是 `overflow-auto` 捲動容器（彈窗外框還是 `overflow-hidden`），
  * 所以面板**必須** `position: fixed` + portal 到 `document.body`——絕對定位會被
- * 裁掉，這與 `CharacterRadarHover` 必須 portal 是同一個理由。位置在**事件處理器**
- * 裡量 rect（render 不碰 `window`），下方空間不足就翻到上方，左右夾在視窗內。
+ * 裁掉。位置由 `placeTooltip`（`src/lib/tooltipPlacement.ts`）統一決定：
+ * **預設在錨點下方**（光標錨點的左上角貼近光標）、只有下方真的放不下才翻到上方、
+ * 左右夾在視窗內——光標在屏幕上半部時**永遠在下方**。
  *
  * Both hosts scroll their body with `overflow-auto` (the modal shell is even
  * `overflow-hidden`), so the panel **must** be `position: fixed` + portalled to
- * `document.body` — absolute positioning gets clipped, the same reason
- * `CharacterRadarHover` portals. The position is measured in the **event
- * handler** (render never touches `window`), the panel flips above when there
- * is no room below, and the horizontal centre is clamped to the viewport.
+ * `document.body` — absolute positioning gets clipped. Placement is decided by
+ * `placeTooltip` (`src/lib/tooltipPlacement.ts`): **below the anchor by default**
+ * (a cursor anchor hugs the cursor with its top-left), flipping above only when
+ * below genuinely does not fit, clamped inside the viewport — a cursor in the top
+ * half is **always** served from below.
  *
- * 捲動即收起 / Dismissed by scrolling
+ * 觸摸設備：底部卡片 / Touch devices: a bottom sheet
  * ---------------------------------------------------------------------------
- * 面板是 fixed，內文一捲動它就停在舊位置——所以開啟時捕獲任何捲動並收起。
- * The panel is fixed, so one scroll of the host would strand it at the old
- * position — while open, any scroll (captured, so nested containers count)
- * dismisses it.
+ * 觸摸設備沒有 hover——點一下抬起手就觸發 mouseleave，浮動提示根本讀不到。
+ * `(pointer: coarse)` 時改走**底部卡片**：點擊開啟、✕／遮罩／Esc 關閉，內容
+ * 同一份。滑鼠設備維持原 hover 提示。
+ * Touch has no hover — a tap lifts the finger, mouseleave fires, and a floating
+ * tooltip is gone before it can be read. On `(pointer: coarse)` the tip becomes a
+ * **bottom sheet**: tap to open, ✕ / backdrop / Esc to close, same content. Mouse
+ * devices keep the hover tooltip unchanged.
+ *
+ * 捲動即收起（僅浮動提示） / Dismissed by scrolling (floating panel only)
+ * ---------------------------------------------------------------------------
+ * 浮動面板是 fixed，內文一捲動它就停在舊位置——開啟時捕獲任何捲動並收起。
+ * 底部卡片有遮罩擋住底下內容，捲動不會讓它失位，不套用此規則。
+ * The floating panel is fixed, so one scroll of the host would strand it at the
+ * old position — while open, any scroll (captured, so nested containers count)
+ * dismisses it. The sheet sits over a backdrop and cannot be stranded, so the
+ * rule does not apply there.
  *
  * 鍵盤 / Keyboard
  * ---------------------------------------------------------------------------
@@ -40,7 +54,7 @@
  * it — hover alone is not enough.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import type { FocusEvent as ReactFocusEvent, MouseEvent as ReactMouseEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { t } from '@/lib/i18n';
@@ -52,6 +66,7 @@ import {
   jingIncomeMultiplier,
   tongPurchaseMultiplier,
 } from '@/lib/abilityEffects';
+import { placeTooltip } from '@/lib/tooltipPlacement';
 import { GM_TIP } from './styles';
 
 /** 有提示內容的軸 / The axes that carry tip content */
@@ -64,15 +79,33 @@ export type AbilityTipKey =
   | 'defectionBase'
   | 'age';
 
-/** 面板與觸發元素之間的間距 / Gap between the panel and the trigger */
+/** 面板與錨點之間的間距 / Gap between the panel and the anchor */
 const TIP_GAP = 8;
-/** 最多三行的保守高度估計，用來決定翻不翻到上方 / A conservative height estimate for ≤3 lines, deciding the flip */
+/** 面板寬度估計（max-w 17rem = 272px）/ Panel width estimate (max-w 17rem = 272px) */
+const TIP_ESTIMATED_WIDTH = 272;
+/** 最多三行的高度保守估計，供 placeTooltip 決定翻不翻 / A conservative height estimate for ≤3 lines, feeding placeTooltip's flip */
 const TIP_ESTIMATED_HEIGHT = 96;
-/** 面板半寬的保守值（max-w 17rem = 272px），左右夾邊用 / A conservative half-width (max-w 17rem = 272px) for the horizontal clamp */
-const TIP_HALF_WIDTH = 140;
 
 const fmtMult = (m: number): string => `×${m.toFixed(2)}`;
 const fmtPct = (p: number): string => `${(p * 100).toFixed(1)}%`;
+
+/**
+ * 觸摸設備偵測：`(pointer: coarse)`。用 `useSyncExternalStore` 訂閱，與
+ * page.tsx 的 `NARROW_MQ` 同一個形狀——伺服器端與首次渲染回 false，避免水合
+ * 不一致（桌面為主）。
+ * Touch detection: `(pointer: coarse)`, subscribed with `useSyncExternalStore` in
+ * the same shape as page.tsx's `NARROW_MQ` — the server and the first render
+ * report false to avoid a hydration mismatch (desktop is the default).
+ */
+export function useCoarsePointer(): boolean {
+  const subscribe = useCallback((onChange: () => void) => {
+    const mql = window.matchMedia('(pointer: coarse)');
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+  const get = useCallback(() => window.matchMedia('(pointer: coarse)').matches, []);
+  return useSyncExternalStore(subscribe, get, () => false);
+}
 
 /**
  * 一條軸的提示行：第 1 行是規則，第 2 行是模擬實際算出的數字（年齡沒有）。
@@ -98,7 +131,7 @@ export function abilityTipLines(key: AbilityTipKey, value: number): readonly str
       ];
     case 'tong':
       return [
-        t('character.tipRuleTong', { base: CONFIG.CHAR_BUY_TROOP_MAX }),
+        t('character.tipRuleTong', { base: CONFIG.CHAR_BUY_TROOP_BASE }),
         t('character.tipBuyTroops', { value: fmtMult(tongPurchaseMultiplier(value)) }),
       ];
     case 'jing':
@@ -129,7 +162,8 @@ export function abilityTipLines(key: AbilityTipKey, value: number): readonly str
   }
 }
 
-/** 提示的開啟狀態 / The open tip's state */
+/** 提示的開啟狀態。x/y 只在浮動面板（滑鼠）有值；底部卡片只要內容 /
+ * The open tip's state. x/y exist only for the floating panel (mouse); the sheet needs content only */
 export interface TipState {
   lines: readonly string[];
   /** 選擇性標題（例：勢力名）。顏色是執行期資料，走 inline style（專案唯一的例外）/
@@ -137,20 +171,76 @@ export interface TipState {
    * the project's one documented exception */
   title?: string;
   titleColor?: string;
-  x: number;
-  y: number;
-  above: boolean;
+  /** 面板**左上角**的視窗座標（placeTooltip 已夾邊）/ The panel's **top-left** in viewport coordinates (already clamped by placeTooltip) */
+  x?: number;
+  y?: number;
+}
+
+/** 提示內容（底部卡片只需要內容，不需要座標）/ Tip content (the sheet needs no coordinates) */
+interface TipContent {
+  lines: readonly string[];
+  title?: string;
+  titleColor?: string;
+}
+
+/**
+ * 提示內容本體：底部卡片與浮動面板**共用同一份**行渲染，兩種形態才不會漂移。
+ * The tip's body: the sheet and the floating panel share **one** line renderer so
+ * the two forms cannot drift.
+ */
+function TipBody({ tip }: { tip: TipContent }) {
+  return (
+    <>
+      {/* 標題（勢力名）先行，之後才是規則／數字／原因行。勢力色是執行期資料，
+          走 inline style——專案唯一允許 inline style 的地方 /
+          The title (faction name) comes first, then the rule / number / reason
+          lines. Faction colour is runtime data on an inline style — the project's
+          one documented exception */}
+      {tip.title !== undefined && (
+        <p
+          className="text-[13px] font-medium leading-relaxed"
+          style={tip.titleColor ? { color: tip.titleColor } : undefined}
+        >
+          {tip.title}
+        </p>
+      )}
+      {/* 行樣式按位置：第 1 行規則（灰）、第 2 行數字（顯示字體 + 青）、其後
+          是「關係改動」的原因行（琥珀）。三種行色讓規則與數字一眼分開 /
+          Line style by position: line 1 the rule (grey), line 2 the derived
+          number (display face + cyan), the rest the "relations moved it"
+          reason (amber). Three tones separate rule from number at a glance */}
+      {tip.lines.map((line, i) => (
+        <p
+          key={i}
+          className={
+            i === 0
+              ? 'text-[13px] leading-relaxed text-gray-400'
+              : i === 1
+                ? 'font-display text-[13px] leading-relaxed text-cyan-300'
+                : 'text-[13px] leading-relaxed text-amber-300'
+          }
+        >
+          {line}
+        </p>
+      ))}
+    </>
+  );
 }
 
 /**
  * `useAbilityTip`：回傳觸發元素的 props 與要渲染的面板。掛在**擁有提示的元件**
  * 裡（`LeaderDetail`、統計 tab 的雷達面板），面板 portal 到 `document.body`。
+ * 觸摸設備上改開**底部卡片**（見上方說明）。
  *
  * `useAbilityTip`: returns trigger props and the panel to render. Mounted in the
  * component that owns the tips (`LeaderDetail`, the stats radar panel); the
- * panel portals to `document.body`.
+ * panel portals to `document.body`. On touch devices it opens a **bottom sheet**
+ * instead (see above).
  */
 export function useAbilityTip() {
+  const coarse = useCoarsePointer();
+  // 座標只對**浮動面板**有意義；底部卡片只需要內容 /
+  // Coordinates only matter for the floating panel; the sheet needs content only
   const [tip, setTip] = useState<TipState | null>(null);
 
   const show = useCallback(
@@ -162,34 +252,39 @@ export function useAbilityTip() {
       // 位置在**處理器**裡量，render 不碰 `window`（與 `CharacterRadarHover` 同一條規則）/
       // Measured in the **handler**; render never touches `window` (the same rule as
       // `CharacterRadarHover`)
-      const rect = el.getBoundingClientRect();
-      const above =
-        window.innerHeight - rect.bottom < TIP_ESTIMATED_HEIGHT &&
-        rect.top > TIP_ESTIMATED_HEIGHT;
-      const x = Math.min(
-        Math.max(rect.left + rect.width / 2, TIP_HALF_WIDTH),
-        window.innerWidth - TIP_HALF_WIDTH
-      );
-      setTip({
+      const content: TipContent = {
         lines,
         title: opts?.title,
         titleColor: opts?.titleColor,
-        x,
-        y: above ? rect.top - TIP_GAP : rect.bottom + TIP_GAP,
-        above,
+      };
+      if (coarse) {
+        setTip(content);
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const p = placeTooltip({
+        ax: rect.left + rect.width / 2,
+        ay: rect.bottom,
+        panelW: TIP_ESTIMATED_WIDTH,
+        panelH: TIP_ESTIMATED_HEIGHT,
+        boxW: window.innerWidth,
+        boxH: window.innerHeight,
+        gap: TIP_GAP,
+        anchor: 'element',
       });
+      setTip({ ...content, x: p.x, y: p.y });
     },
-    []
+    [coarse]
   );
 
   const hide = useCallback(() => setTip(null), []);
 
   /**
    * 以**游標座標**開啟提示：雷達圖的 hover 是「圖上哪一格」，定位跟著游標走，
-   * 而不是以整張 SVG 為中心。翻轉與夾邊規則與 `show` 相同 /
+   * 面板**左上角貼近游標**、預設在下方（屏幕上半部不翻上去）/
    * Open the tip at **cursor coordinates**: a radar's hover is "which spoke am I
-   * on", so the panel follows the pointer rather than centring on the whole SVG.
-   * The flip and clamp rules match `show`.
+   * on", so the panel follows the pointer — its **top-left hugs the cursor**,
+   * below by default (never flipped up in the top half).
    */
   const showAt = useCallback(
     (
@@ -198,105 +293,129 @@ export function useAbilityTip() {
       clientY: number,
       opts?: { title?: string; titleColor?: string }
     ) => {
-      const above =
-        window.innerHeight - clientY < TIP_ESTIMATED_HEIGHT &&
-        clientY > TIP_ESTIMATED_HEIGHT;
-      const x = Math.min(Math.max(clientX, TIP_HALF_WIDTH), window.innerWidth - TIP_HALF_WIDTH);
-      setTip({
+      const content: TipContent = {
         lines,
         title: opts?.title,
         titleColor: opts?.titleColor,
-        x,
-        y: above ? clientY - TIP_GAP : clientY + TIP_GAP,
-        above,
+      };
+      if (coarse) {
+        setTip(content);
+        return;
+      }
+      const p = placeTooltip({
+        ax: clientX,
+        ay: clientY,
+        panelW: TIP_ESTIMATED_WIDTH,
+        panelH: TIP_ESTIMATED_HEIGHT,
+        boxW: window.innerWidth,
+        boxH: window.innerHeight,
+        gap: TIP_GAP,
+        anchor: 'cursor',
       });
+      setTip({ ...content, x: p.x, y: p.y });
     },
-    []
+    [coarse]
   );
 
   /**
-   * 觸發元素的 props：hover 與 focus 都開。`lines` 每次渲染都是同一個陣列實例
-   * （呼叫端用常量或 useMemo），這裡不做深度比較 /
-   * Trigger props: both hover and focus open the tip. `lines` is expected to be a
-   * stable array per render (the caller passes literals or memoised values); no
-   * deep comparison is done here.
+   * 觸發元素的 props：滑鼠 = hover + focus 開；觸摸 = **click** 開（hover 在
+   * 觸摸上不存在，點擊抬起即 mouseleave，浮動面板讀不到）。
+   * Trigger props: mouse = hover + focus opens; touch = **click** opens (hover
+   * does not exist there — the finger lifts, mouseleave fires, a floating panel
+   * is unreadable).
    */
   const triggerProps = useCallback(
     (
       lines: readonly string[],
       opts?: { title?: string; titleColor?: string }
-    ) => ({
-      tabIndex: 0 as const,
-      onMouseEnter: (e: ReactMouseEvent<HTMLElement>) =>
-        show(lines, e.currentTarget, opts),
-      onMouseLeave: hide,
-      onFocus: (e: ReactFocusEvent<HTMLElement>) => show(lines, e.currentTarget, opts),
-      onBlur: hide,
-    }),
-    [show, hide]
+    ) =>
+      coarse
+        ? {
+            onClick: (e: ReactMouseEvent<HTMLElement>) => {
+              e.stopPropagation();
+              show(lines, e.currentTarget, opts);
+            },
+          }
+        : {
+            tabIndex: 0 as const,
+            onMouseEnter: (e: ReactMouseEvent<HTMLElement>) =>
+              show(lines, e.currentTarget, opts),
+            onMouseLeave: hide,
+            onFocus: (e: ReactFocusEvent<HTMLElement>) =>
+              show(lines, e.currentTarget, opts),
+            onBlur: hide,
+          },
+    [coarse, show, hide]
   );
 
-  // 開啟時捕獲**任何**捲動（capture 連內層捲動容器都算得到）並收起，否則 fixed
-  // 面板會停在舊位置，與內容對不上 /
-  // While open, capture **any** scroll (capture reaches nested scroll containers
-  // too) and dismiss — otherwise the fixed panel strands at its old position,
-  // no longer matching the content
+  // 浮動面板開啟時捕獲**任何**捲動（capture 連內層捲動容器都算得到）並收起，
+  // 否則 fixed 面板會停在舊位置。底部卡片有遮罩，不套用 /
+  // While the floating panel is open, capture **any** scroll (capture reaches
+  // nested scroll containers too) and dismiss — otherwise the fixed panel strands
+  // at its old position. The sheet sits over a backdrop and is exempt.
   const open = tip !== null;
   useEffect(() => {
-    if (!open) return;
+    if (!open || coarse) return;
     const onScroll = () => setTip(null);
     window.addEventListener('scroll', onScroll, { capture: true, passive: true });
     return () => window.removeEventListener('scroll', onScroll, { capture: true });
-  }, [open]);
+  }, [open, coarse]);
+
+  // 底部卡片：Esc 關閉 / Sheet: Esc closes
+  useEffect(() => {
+    if (!open || !coarse) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setTip(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, coarse]);
 
   const panel =
-    tip !== null ? (
-      createPortal(
-        <div
-          role="tooltip"
-          className={GM_TIP}
-          style={{
-            left: tip.x,
-            top: tip.y,
-            transform: tip.above ? 'translate(-50%, -100%)' : 'translate(-50%, 0)',
-          }}
-        >
-          {/* 標題（勢力名）先行，之後才是規則／數字／原因行。勢力色是執行期資料，
-              走 inline style——專案唯一允許 inline style 的地方 /
-              The title (faction name) comes first, then the rule / number / reason
-              lines. Faction colour is runtime data on an inline style — the project's
-              one documented exception */}
-          {tip.title !== undefined && (
-            <p
-              className="text-[13px] font-medium leading-relaxed"
-              style={tip.titleColor ? { color: tip.titleColor } : undefined}
+    tip === null
+      ? null
+      : coarse
+        ? createPortal(
+            <>
+              {/* 遮罩：點外面關閉 / Backdrop: tap outside to close */}
+              <div
+                className="fixed inset-0 z-[109] bg-black/40"
+                onClick={hide}
+                aria-hidden
+              />
+              <div
+                role="dialog"
+                aria-modal="true"
+                className="fixed inset-x-0 bottom-0 z-[110] max-h-[70vh] overflow-y-auto rounded-t-2xl border-t border-gray-700/60 bg-gray-900/95 px-4 pb-6 pt-3 shadow-2xl shadow-black/60 backdrop-blur-md"
+              >
+                <div className="mb-1 flex items-start justify-between gap-3">
+                  <span className="font-display text-xs tracking-wider text-cyan-300">
+                    {t('character.abilityTipTitle')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={hide}
+                    aria-label="關閉"
+                    className="text-gray-400 hover:text-gray-200"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <TipBody tip={tip} />
+              </div>
+            </>,
+            document.body
+          )
+        : createPortal(
+            <div
+              role="tooltip"
+              className={GM_TIP}
+              style={{ left: tip.x ?? 0, top: tip.y ?? 0 }}
             >
-              {tip.title}
-            </p>
-          )}
-          {/* 行樣式按位置：第 1 行規則（灰）、第 2 行數字（顯示字體 + 青）、其後
-              是「關係改動」的原因行（琥珀）。三種行色讓規則與數字一眼分開 /
-              Line style by position: line 1 the rule (grey), line 2 the derived
-              number (display face + cyan), the rest the "relations moved it"
-              reason (amber). Three tones separate rule from number at a glance */}
-          {tip.lines.map((line, i) => (
-            <p
-              key={i}
-              className={
-                i === 0
-                  ? 'text-[13px] leading-relaxed text-gray-400'
-                  : i === 1
-                    ? 'font-display text-[13px] leading-relaxed text-cyan-300'
-                    : 'text-[13px] leading-relaxed text-amber-300'
-              }
-            >
-              {line}
-            </p>
-          ))}
-        </div>,
-        document.body
-      )
-    ) : null;
+              <TipBody tip={tip} />
+            </div>,
+            document.body
+          );
 
-  return { triggerProps, panel, show, showAt, hide };
+  return { triggerProps, panel, show, showAt, hide, coarse };
 }

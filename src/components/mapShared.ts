@@ -657,3 +657,33 @@ export function pointInRect(
 ): boolean {
   return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
 }
+
+/**
+ * 螢幕點是否落在**旋轉過的**矩形內。
+ * Whether a screen point is inside a **rotated** rect.
+ *
+ * 為什麼需要：sigma 會把地名跟著鏡頭一起轉（`camera.angle`），而矩形是按「未旋轉
+ * 的水平文字」算的。把光標繞矩形**中心反向旋轉 −angle** 之後，就是原本的水平矩形
+ * 測試——angle = 0 時與 `pointInRect` 完全相同。純幾何，無 DOM，可測。
+ *
+ * Why: sigma rotates place labels together with the camera (`camera.angle`), while
+ * the rect is computed for unrotated horizontal text. Rotating the cursor by
+ * **−angle about the rect's centre** reduces this to the plain horizontal test —
+ * identical to `pointInRect` at angle 0. Pure geometry, no DOM, testable.
+ */
+export function pointInRotatedRect(
+  px: number,
+  py: number,
+  r: { x: number; y: number; w: number; h: number },
+  angleRad: number
+): boolean {
+  if (angleRad === 0) return pointInRect(px, py, r);
+  // 中心與旋轉前的相對座標 / the centre, and the cursor relative to it
+  const cx = r.x + r.w / 2;
+  const cy = r.y + r.h / 2;
+  const dx = px - cx;
+  const dy = py - cy;
+  const cos = Math.cos(-angleRad);
+  const sin = Math.sin(-angleRad);
+  return pointInRect(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos, r);
+}

@@ -380,7 +380,7 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - The 將領 / 事件 / 統計 tabs are **absolutely positioned over the map's right edge** (`MapSidePanel`, `z-[8]`), not a layout column — the map keeps the full width. The vertical tab rail is always visible; only the 19rem content panel collapses (its own ✕), and content enters and exits with a right-to-left fade (`AnimatePresence`, `x: 28`)
 - **Clicking the already-active tab closes its panel.** `onTabChange` checks `rightTab === tab` first and, on a match, does `setRightTab(null)` + `setRightPanelOpen(false)` — a toggle, not open-only, so the rail can always dismiss its own panel
 - **Nothing is a layout column any more.** 選擇回合 (`RoundTimeline`, `GM_TIMELINE`) is absolutely positioned over the map's **left** edge (`absolute left-12 top-12 z-[7] w-60 hidden md:block`), and 勢力排行 (`FactionRanking`) moved into the **統計** tab above the charts. Both used to be a left sidebar; a sidebar column is what forced the map to share width with chrome. The mobile overlay drawer is unaffected — it still stacks timeline, leader list and event log
-- `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `26rem` so they clear the open panel, and **only from `lg` up** — a fixed offset would push them off-screen on narrow viewports, so narrow keeps `right-4`
+- `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `31rem` so they clear the open panel, and **from `md` up** (Oct 2026: was `lg`/`26rem`, which left the 768-1023px tablet band with the controls underneath the open panel) — below md the panel is an overlay drawer and the controls keep `right-4`
 - The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 3`
 - **The percentage is an `<input type="number">` plus a literal `%` label**, not a display. It reads `0` = furthest, `100` = closest, and typing a value jumps the camera there (`Enter` commits, and so does blur — Enter alone would leave the text unapplied for someone who tabs away). The draft is a **string**, never a number: a numeric value would reformat `15` to `1` on the first keystroke and throw the caret to the end. Dragging the slider clears the draft so the field follows the zoom again. The `%` is a separate `<span>` beside the input so the number stays the editable body and `%` is only its unit
 - Controls are held in **both a ref and state**: `onControlsReady` sets `mapControlsRef` (imperative calls) *and* `mapControls` state (rendering). Reading `ref.current` during render is a lint error ("Cannot access refs during render")
@@ -501,7 +501,7 @@ other two rather than repairing them.
   - **The casing width is the road's own width plus the border on each side**, with the road's
     width converted through the *same* `sigma.scaleSize(1)` the nodes use, so the casing keeps its
     proportion to the road at every zoom.
-  - **Cull on "either endpoint inside the padded viewport"**, not a proper segment-vs-AABB test.
+  - **Cull on "either endpoint inside the padded viewport"**, not a proper segment-vs-AABB test. **The padded viewport box must be built from ALL FOUR viewport corners** — under a rotated camera the viewport is a *skewed* rectangle in graph space, and a box from just the two diagonal corners is too small, culling the decorations near the map's corners (white borders/casings vanish → "dark places and roads", reported and fixed Oct 2026). At angle 0 the four-corner box is identical to the two-corner one
     Roads join neighbouring places (ForceAtlas2, at most `ROAD_MAX_PER_PLACE` each), so an edge
     crossing the frame with both ends far outside is vanishingly unlikely, and a real segment test
     costs arithmetic per edge per frame.
@@ -513,7 +513,7 @@ other two rather than repairing them.
 - Camera timing lives in `gameConfig.ts`: `MAP_CAMERA_ANIM_MS`, `MAP_FOCUS_ZOOM`, `MAP_FIT_PADDING`
 - **Camera coordinates are FRAMED, not raw.** Sigma's `createNormalizationFunction` maps the whole graph into a unit square centred on `(0.5, 0.5)` whose larger axis is exactly `1`, and the camera operates in that space. `graph.getNodeAttributes()` returns **raw** pre-normalisation coordinates and `sigma.getBBox()` returns the **raw** extent — feeding either to `camera.animate()` parks the camera outside the world and renders a blank map. Use `sigma.getNodeDisplayData(node)` for anything the camera consumes
 - Because the framed world is a unit square, "fit everything" is the **constant** centre `(0.5, 0.5)` + ratio `1` — independent of world size, node count, and viewport aspect (verified across 936×766, 500×900, 1600×400, 400×1200, 1200×1200). `MAP_FIT_PADDING` adds margin; `MAP_FOCUS_ZOOM` (<1) is a multiplier on that same baseline for `focusNode`, so the two views stay consistent. `resetView` uses this, **not** `animatedReset()`/`sigma.getBBox()`
-- The map's inner vignette is a design token, not a bespoke class: `--shadow-ds-map-vignette` in `@theme static` (globals.css), applied as `shadow-ds-map-vignette`
+- The map's inner vignette was **removed** (Oct 2026): the `GM_VIGNETTE` radial-gradient overlay and the `shadow-ds-map-vignette` inset shadow darkened the places and roads near the viewport edges, which read as a rendering bug. Do not reintroduce either — the four HUD corner brackets (`GM_FRAME`) are the only edge furniture left
 - Camera animations run through `reducedMotionRef` (populated from `useReducedMotion`), giving `duration: 0`. It is a ref, not a direct closure, because the effect that builds the Sigma instance has an empty dependency array
 
 - **`camera.setState()` does not schedule a render — it only updates state and emits `updated`.**
@@ -623,6 +623,13 @@ zoom there are no systems at all** — do not go looking for a bug when a defaul
 
 ### Map Place Tooltip
 
+- **Placement goes through `placeTooltip`** (`src/lib/tooltipPlacement.ts`, pure): **below the anchor by
+  default** with the panel's top-left near it, flipping above only when below does not fit, clamped inside
+  the map container. The old panel was *always* above the cursor (`translateY(-100%)`), which the top
+  half clipped. The panel also has a width cap (`max-w-[min(20rem,calc(100%-1.5rem))]`) so it can never
+  be squeezed to slivers at the edges.
+- **Touch devices get no hover tooltip** — a tap already opens the place detail panel, and a hover card
+  vanishes the moment the finger lifts. Guarded by `coarseRef` (the `(pointer: coarse)` mirror).
 - **It prints names, not just a count.** It used to end at `👥 將領: 3` — the reader learns that
   three people are there but not *who*, and "who holds this place right now" is the whole reason
   to hover a node. Three blocks now sit below the buildings, and each can legitimately be absent:
@@ -975,8 +982,25 @@ read territory and topography at the same time.
   differ, the band between them shows *no* text at all — place names already gone, faction names not yet
   arrived — so equal values make the faction name take over at the exact ratio the place names vanish.
   The label layer is `z-[3]`, above sigma's container, so the text may overlap nodes and roads.
-- The fill bitmap is painted **once per data change** into an offscreen canvas and repainted only when
-  the hovered *faction* changes — never per frame.
+- The fill and border are **vector paths** (`Path2D` built once per data change from the smoothed
+  loops), not an offscreen bitmap — a bitmap's resolution is the grid's, so zoomed in its edge is always a
+  staircase. Stroking the same closed curve draws the border, so fill and border can never disagree.
+- **The projection is a full 2×3 affine solved from THREE mapped points** (top-left, right, bottom of the
+  field extent through `sigma.graphToViewport`) — the old two-corner sx/sy could only express
+  axis-aligned scaling, which broke the moment the camera rotated (the territory stopped following the
+  map). At angle 0 the affine degenerates to exactly the old numbers.
+- **The map rotates** (touch pinch on mobile; right-drag or Shift+drag on desktop, context menu
+  suppressed). Rotation is safe because every layer is rotation-aware: the territory affine above, the
+  faction-name angle **measured through sigma** (map the region axis's unit vector and take the atan2 —
+  at angle 0 it degenerates to the old `labelAngleDeg`), the place-label hit test
+  (`pointInRotatedRect` in `mapShared.ts` — the cursor is rotated by −angle about the label centre),
+  and the overlay's viewport-culling box built from **all four** viewport corners (a box from just the
+  two diagonal corners is too small under rotation, which used to strip the white borders/casings near
+  the map's corners — "dark places and roads").
+- **The map surface is `overflow-hidden`** — a territory faction name near the top edge used to
+  overflow the map and paint over the header. A label belongs to the map.
+- **The vignette is gone** (Oct 2026): `GM_VIGNETTE` and `shadow-ds-map-vignette` darkened the
+  places and roads near the edges, which read as a rendering bug. Do not reintroduce either.
 - **Sigma owns the camera. Do not hand-roll pan or zoom in this component.** The territory layer
   used to switch the container's `pointer-events` off so the canvas underneath could receive hover
   and click, and then implement its own `onWheel` / `onDrag` — which is what produced a shake that
@@ -1036,11 +1060,40 @@ was removed from both pages: it was derived from ownership, so it was permanentl
 two factions touched, which is ambient noise rather than information. It also competed with the thing
 that actually reports a battle.
 
-The one place a battle is shown is the **`PLACE_CAPTURED` report** (`BattleReport.tsx`, opened from
-the 戰報 / Report button in the event log): the arithmetic of that engagement plus the attack–defence
-replay. Its distinguishing case is the no-defenders report. The map keeps only the **spotlight ring**
-for the displayed round — red for attacked, cyan for created — which marks *when* and *where*, not an
-elaborated fight.
+The battle report (`BattleReport.tsx`) is now a **war replay** (Oct 2026): opened from the 戰報 / Report
+button on any casualty row (`PLACE_CAPTURED` / `BATTLE_DEATH`), it fetches the place's whole strike log
+(`GET /api/world/battles?placeId=…`, reading the `BattleStrike` table directly — no snapshot dependency,
+so historical wars replay) and animates the war round by round in a small in-modal arena: leaders lunging
+at each other, impact flashes scaled by the damage, the fallen fading. Controls: play/pause, previous/next
+strike, and the round indicator (第 n / total 輪); the per-strike arithmetic sits under the arena.
+`prefers-reduced-motion` renders a single static final frame (the project's animation rule). The map
+itself still shows only the **spotlight ring** — do not move the replay onto the map (see the ban above).
+
+### Battles are multi-round wars
+
+`server/phases/battle.ts` resolves a contested place as a **war spanning several simulation rounds**
+(Oct 2026 — it was one combined engagement per round before, and a relay of 1v1 duels before that; both
+ended every battle instantly, which made a signalled army worthless). **Troops are HP**: a strike costs
+the target `floor(attackPower / (defenceFactor × BATTLE_HITS_PER_KILL))` troops instead of removing it,
+and the war continues until one side breaks.
+
+Per war round (one phase-10 run): every combatant strikes **in speed order** — attackers hit the
+**walls first** (garrison damage, then the defending leaders once the walls fall), defenders hit the
+strongest attacker; each strike rolls its own dice and writes one `BattleStrike` row (**never an event**
+— a war is dozens of strikes and would flood the log). Everyone fatigues per round
+(`BATTLE_WAR_FATIGUE`); the fortress's damage reduction gives the defence the long-war edge. The war
+ends four ways: the defence gone → capture (the strongest remaining attacker takes the place); the
+attackers gone → hold; the attackers below `BATTLE_ROUT_RATIO` of the defence → rout; `BATTLE_MAX_ROUNDS`
+reached → the attackers retreat. **Stateless by design**: "hostile leaders keep standing on enemy ground"
+*is* the war — no Battle table; the round count is reconstructed from the BattleStrike log (a contiguous
+run of rounds). Reinforcements emerge naturally: leaders arriving next round simply join, which is what
+makes signals matter.
+
+### Every living leader keeps at least one soldier
+
+`survivorTroops` (`battle.ts`) floors every post-combat troop count at **1**: routs and fatigue never
+disarm a living leader (a 0-troop leader can neither march nor fight — `aiMove` would strand them). New
+leaders start at `CHAR_START_TROOPS` (1). Only death ends a leader's soldiers.
 
 If a map-level battle visual is ever wanted again, it must be scoped to the round being displayed and
 tied to a real `PLACE_CAPTURED` event, not derived from standing ownership.
@@ -1238,12 +1291,30 @@ instead of scattering.
   scale-back leaves a remainder and there is nobody else, that remainder goes to the administrator —
   returning `others: 0` there made gold **vanish**, which is exactly what the sum-equals-income test
   caught.
-- `jing` is **經濟 / Economy** and scales a leader's cut: `share × (1 + (jing − INCOME_JING_MIDPOINT)
-  / CHAR_ABILITY_MAX)`. It is not 智謀 and not intelligence.
+- `jing` is **經濟 / Economy** and its multiplier is `1 + (jing − INCOME_JING_MIDPOINT) / CHAR_ABILITY_MAX`,
+  and **a place's income is shaped by the administrator's jing alone**: the pie is
+  `placeIncome(market) × jingIncomeMultiplier(adminJing)` at the caller, before the split. The **king's
+  and the others' shares are flat ratios of that grown pie** — no personal jing multiplier acts on them.
+  This makes "every jing applies at most once" *structural*: the founding king is usually the administrator
+  himself, and the same person's jing acting on both the pie and his own share would be ×jing² (reported
+  and fixed Oct 2026 — the king's personal multiplier and the split's proportional scale-back were removed
+  with it; the scale-back was dead code once no multiplier remained inside the split). It is not 智謀 and
+  not intelligence.
+- **The pie is whole gold at the source**: `placeOutput(market, adminJing)` (`server/income.ts`) =
+  `floor(placeIncome(market) × the multiplier)` — `Character.gold` is an `Int` column, and an
+  unfloored pie once produced a fractional `9.166666666666668` administrator payout (reported and fixed
+  Oct 2026). `economy.ts` and the place popup both call it — one definition, so the preview cannot drift.
+- **The place popup lists everyone's take** (`本回合分成`): the king (`split.king`, tagged 在別處 when
+  he lives elsewhere — his gold still comes from this place), the administrator (`split.admin`), and
+  every other leader present at `floor(split.others / count)` each (the remainder stays with the place,
+  the same floor as the simulation). No administrator → 無人領取.
 - **`tong` is 統領 / Leadership and now does exactly one thing: it scales the size of a single troop
-  purchase**, with the *same* formula jing uses for income — `CHAR_BUY_TROOP_MAX × (1 + (tong −
-  INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`. `tongPurchaseMultiplier` is asserted to return the
-  same value as `jingIncomeMultiplier` for the same input, so the two cannot drift apart.
+  purchase** — the base batch is `CHAR_BUY_TROOP_BASE (30) × tongPurchaseMultiplier(tong)`, jittered
+  ±`CHAR_BUY_TROOP_JITTER` (25%), hard-capped by gold and the spec's batch max (100). The old cap
+  (`CHAR_BUY_TROOP_MAX × the multiplier`) almost never bound — a leader's per-round gold rarely
+  affords 100 troops — so tong was effectively decorative; the base batch keeps it inside the range
+  where gold actually binds. `tongPurchaseMultiplier` is asserted to return the same value as
+  `jingIncomeMultiplier` for the same input, so the two cannot drift apart.
   - **`tong` does not touch defection at all — this took two passes.** The original
     `AMBITION_KING_TONG_REDUCE` multiply in `loyaltyCheck.ts` was removed first, but that was
     **not the end of it**: `AMBITION_KING_TONG_DELTA` kept living in `defectionEvents.ts`, reading
@@ -1298,10 +1369,13 @@ rules separately will drift from them; that is the whole reason the module exist
   cost a literal expression. They are exported now so the popup shows the same numbers.
 - Each building's effect carries its **unit** with it (`percent` / `gold` / `troops`), so the popup
   never has to guess how to render it.
-- The popup also shows what the administrator **actually** pockets, by calling `splitIncome()`
-  itself rather than printing "40%". With no administrator nobody is paid, so a printed ratio would
+- The popup also shows what the administrator **actually** pockets, by calling `placeOutput()` +
+  `splitIncome()` themselves rather than printing "40%" — the pie already carries the administrator's
+  jing multiplier (see the Income section), and the market building row's per-round output passes the same
+  multiplier through `placeEffectLabel`. With no administrator nobody is paid, so a printed ratio would
   read as though he still got paid. This needed `kingId` on the faction payload, because the king's
-  cut comes off the top first.
+  share comes off the grown pie, and a **dead king does not count** (alive-filtered, same as the
+  simulation).
 
 ### The building row quotes the price that is actually charged
 
@@ -1757,6 +1831,72 @@ only password accounts have one, which is exactly why that column is nullable.
   baselined with `prisma migrate resolve --applied` first. **Do not run `prisma migrate reset`
   against this database.**
 
+### Signals: the king calls, the AI follows
+
+Phase 5 (`signals.ts`) **issues** signals — for years it only expired them and decremented cooldowns, so
+the Signal table was never written and `aiMove`'s rally marching waited on a call that could never come.
+Each alive faction's **king** issues at most one signal (the faction's only sender), gated by
+`SIGNAL_COOLDOWN` (merchant kings take double — sparing with any call). The policy
+(`src/lib/kingSignal.ts`, pure) keys off the king's **spending posture**: a place about to fall
+(margin < 0, margin = estimated defence − the strongest adjacent hostile leader's estimated attack) is
+**always relieved first**; with nothing urgent, the aggressive king attacks the **weakest border** (lowest
+estimated defence), guardian/merchant stand down, and the balanced king attacks only a border someone can
+actually take (border defence ≤ strongest leader's attack ÷ `AI_ATTACK_ADVANTAGE`). Issuing writes a
+`SIGNAL_ISSUED` event (faction category, banner glyph) and the king's cooldown.
+
+**Followers** (`aiMove` priority 1) march toward the signal target through friendly territory only, and a
+**hostile target needs the same estimate gate** as a self-chosen assault — the king's call is not a
+suicide order.
+
+### AI movement: estimate before engaging, defend when threatened
+
+`server/phases/aiMove.ts` no longer `rng.pick`s an enemy neighbour and charges in. Per adjacent enemy
+place the estimated attack (`estimateAttack`, `src/lib/warEstimate.ts` — the same coefficients as
+`battle.ts`, rolls at their expected 1.0) must clear the estimated defence
+(`estimatePlaceDefence`: garrison + defending leaders × fortress) times `AI_ATTACK_ADVANTAGE` (1.2);
+among the viable ones it attacks the **weakest**. No winnable target → **wait in place** (the economy
+phase re-arms it). A troops-0 survivor never charges. And a **threatened administrator stays home**
+(`isThreatened`: some hostile leader present or adjacent whose estimated attack clears the local defence
+— a lower bar than the attacking side, defence wakes before offence commits): marching the admin out
+would drop the place's defence by its strongest defender. The king's signal outranks staying.
+
+### Spending postures: each leader spends differently
+
+`src/lib/spending.ts` derives a posture from a **strict** dominance of wu / ti / jing (ties are
+balanced): aggressive / guardian / merchant / balanced. **Administrators keep a posture reserve** before
+buying troops (aggressive 0, balanced 0.25, guardian/merchant 0.5 — non-administrators keep none, a
+reserve without a building is dead money), and the posture orders the building preferences. The build
+phase (`build.ts`) is no longer `rng.pick`: under threat the fortress always comes first, otherwise the
+posture decides, and the `BUILDING_UPGRADE` event carries the `reason` (posture or `threatened`).
+Threat itself comes from `warEstimate.ts` — the same numbers the attacking side uses.
+
+### Tooltips: one placement rule, a bottom sheet on touch
+
+`src/lib/tooltipPlacement.ts` (pure) is the single above-or-below rule for all tooltip surfaces:
+**below by default** with the panel's **top-left near the cursor**, flipping above only when below
+genuinely does not fit — a cursor in the top half is always served from below (the map's tooltip used to
+be *always* above and clipped at the top edge). On `(pointer: coarse)` the ability tooltips open a
+**bottom sheet** instead (tap to open, ✕ / backdrop / Esc to close — a floating tooltip is unreadable on
+touch: the finger lifts, mouseleave fires). Touch devices get **no map hover tooltip** — a tap already
+opens the place detail panel.
+
+### Map rotation is fully supported
+
+Touch pinch (sigma's built-in) and a desktop gesture (right-drag or Shift+drag, context menu suppressed)
+rotate the camera. Every layer is rotation-aware: the territory affine, faction labels measured through
+sigma, `pointInRotatedRect` for the label hit test, and the overlay's four-corner culling box (see the
+territory section). `focusNode` **keeps the current angle**; only the reset (↺) returns to 0. The
+graph-rebuild effect already snapshots and restores `angle`.
+
+### World initialisation is shared by seed and reset
+
+`server/initWorld.ts` is the **only** way a runnable world is built — the full place set (the king's
+seat with initial buildings and garrison), geographic-MST roads (1-3 per place, degree-capped), a
+ForceAtlas2 layout, king + faction + administrators, and the round-0 snapshot before advancing to round 1.
+`prisma/seed.ts` and the reset-world endpoint both call it; the reset endpoint used to create ten
+placeholder places (no roads, no faction, no king), which produced a world that could not run. The RNG
+draw order is identical to the original seed — one seed grows one world.
+
 ### Type Safety
 
 - All code must be fully typed with TypeScript strict mode
@@ -1818,7 +1958,8 @@ exactly why a mojibake scan reporting "clean" is not evidence of anything.
 
 ### Initial Game State
 
-The seed script (`prisma/seed.ts`) creates:
+The seed script (`prisma/seed.ts`) shares its initialisation with the reset-world endpoint
+(`server/initWorld.ts` — one definition, see the World-initialisation section above) and creates:
 - **1 world** (global, unique)
 - **100 places** with roads connecting them
 - **1 character** (king) with 1 faction
@@ -2279,6 +2420,11 @@ subdivision and its legend were removed only the type use remained, so it became
 `TreemapMetric` union. Leaving a `const` that is only used as a type invites the next reader
 to think it still does something.
 
+**面板寬度在 md 檔收窄**（`w-[20rem] md:w-[24rem]`，Oct 2026）：512px 的地圖欄上 384px 的面板
+蓋掉 75%，平板帶先收窄。`max-w-[80vw]` 保留。
+**The side panel narrows at md** (`w-[20rem] md:w-[24rem]`, Oct 2026): on a 512px map column a 384px
+panel covered 75% of it, so the tablet band gets the narrower width first. `max-w-[80vw]` stays.
+
 **地點列表加上搜尋、擁有權過濾，以及「無窮載入」。** 世界可以到 2000 個地點，而這個面板
 只有 24rem 寬，一次建立所有列等於每次開分頁都重建整個列表。所以只畫
 `CONFIG.PLACE_LIST_PAGE_SIZE`（100）列，捲到接近底部再載入下一頁。
@@ -2297,11 +2443,13 @@ changes**, or it points into the tail of a different set and the list looks unre
 infers the literal `100` and the setter cannot return a larger number, so the very first
 "load 100 more" fails to compile — the same trap as the autoplay-speed slider.
 
-**面板寬度改動會連帶影響相機控制的偏移。** `GM_HUD_CONTROLS_OPEN` 的 `lg:right-[31rem]`
-是由「面板 24rem + 頁籤 rail 與間距約 7rem」推出來的，不是拍腦袋的數字。面板寬度一改就
-必須重算，否則 reset／縮小／滑桿會被面板蓋住。
-The camera-control offset follows the panel width. `lg:right-[31rem]` is derived from 24rem of
-panel plus roughly 7rem of rail and gutter — it is not a guess. Change the panel width and it
+**面板寬度改動會連帶影響相機控制的偏移。** `GM_HUD_CONTROLS_OPEN` 的 `md:right-[31rem]`
+是由「面板 24rem + 頁籤 rail 與間距約 7rem」推出來的，不是拍腦袋的數字（Oct 2026 從 `lg` 提前到
+`md`，平板帶 768-1023 不再被面板蓋住控制列）。面板寬度一改就必須重算，否則 reset／縮小／
+滑桿會被面板蓋住。
+The camera-control offset follows the panel width. `md:right-[31rem]` is derived from 24rem of
+panel plus roughly 7rem of rail and gutter — it is not a guess (Oct 2026: moved from `lg` to `md` so the
+768-1023px tablet band no longer hides the controls under the panel). Change the panel width and it
 must be recomputed, or reset/zoom-out/the slider end up underneath the panel.
 
 ### 生育與王位繼承 / Childbirth & throne inheritance
@@ -2337,6 +2485,20 @@ relation, never denormalised into a counter that could disagree with it.
 **「沒有子女就走原本行為」是刻意的：繼承只律增加一條路徑。
 Ordering by age gives the first-born. "No children keeps the original behaviour" is deliberate:
 inheritance only **adds** a path, so it cannot quietly swallow the collapse rule when no heir exists.
+
+**戰死也走同一條繼承路**（Oct 2026）：以前只有自然死亡觸發繼承／崩解——君王戰死時
+`faction.kingId` 永遠指向屍體，勢力永不崩解。現在 `server/afterDeath.ts` 的
+`processDeadLeaders` 由 `battle.ts`（收尾一次）與 `ageAndDeath.ts` **共用**：君王死亡 →
+最年長子女繼位或勢力崩解；**行政官席位清空**也是同一個善後（以前死人佔著席位領分成）。
+席位清空**不蓋冷卻錨點**——死亡不是任何人的主動操作，蓋了會讓該地 10 回合請不到
+行政官。不畫 RNG，戰鬥的亂數序列不變。
+**Battle deaths take the same succession path** (Oct 2026): only natural death used to trigger
+succession/collapse — a battle-dead king left `faction.kingId` on a corpse forever. `processDeadLeaders`
+(`server/afterDeath.ts`) is shared by `battle.ts` (once, at the end of the phase) and `ageAndDeath.ts`:
+king death → oldest child inherits or the faction collapses; **dead administrators' seats are cleared**
+by the same aftermath (a corpse used to hold the seat and keep collecting its share). The seat clearing
+stamps **no cooldown** — a death is nobody's deliberate act, and stamping would freeze the place out of
+the assignment phase for 10 rounds. No RNG draws, so the battle phase's random sequence is unchanged.
 
 **生育必須跑在老化舍死的後面。** 若先生子下了回合、父亲亡名事发在此刻，
 那个子女出生的瞬間就成為君玉，「生育」变成存欽術。

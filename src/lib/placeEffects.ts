@@ -125,11 +125,19 @@ export function nextUpgradeGain(kind: BuildingKind, level: number): number | nul
  */
 export function placeOutputAt(
   kind: BuildingKind,
-  level: number
+  level: number,
+  /**
+   * 行政官的 jing 倍率：**只有市場的金色產出**受它影響（jing 放大整塊餅＝基礎 +
+   * 市場）；兵營的徵兵與堡壘的防禦百分比都不受 jing 影響，倍率對它們是無操作。
+   * The administrator's jing multiplier: **only the market's gold output** is scaled
+   * by it (jing grows the whole pie = base + market); the barracks' recruits and the
+   * fortress's defence percentage are not jing-scaled, so it is a no-op for them.
+   */
+  outputMultiplier = 1
 ): { value: number; unit: 'gold' | 'troops' } | null {
   switch (kind) {
     case 'market':
-      return { value: placeIncome(level), unit: 'gold' };
+      return { value: Math.floor(placeIncome(level) * outputMultiplier), unit: 'gold' };
     case 'barracks':
       return { value: placeRecruits(level), unit: 'troops' };
     case 'fortress':
@@ -164,9 +172,10 @@ export function placeOutputAt(
  */
 export function placeEffectLabel(
   kind: BuildingKind,
-  level: number
+  level: number,
+  outputMultiplier = 1
 ): { value: number; unit: 'percent' | 'gold' | 'troops' } {
-  const total = placeOutputAt(kind, level);
+  const total = placeOutputAt(kind, level, outputMultiplier);
   if (total) return total;
   return { value: buildingTotal(kind, level), unit: buildingPerLevel(kind).unit };
 }

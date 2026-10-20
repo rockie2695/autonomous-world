@@ -128,6 +128,8 @@ export const CONFIG = {
   // 用個人金錢購買士兵 / Buying troops from personal gold
   CHAR_BUY_TROOP_PRICE: 2, // 每個士兵的金錢成本 / Gold cost per troop
   CHAR_BUY_TROOP_MIN: 10, // 每次購買最少士兵數 / Min troops per purchase
+  CHAR_BUY_TROOP_BASE: 30, // tong 倍率作用的基準批量（tong 決定一次買多少）/ The base batch the tong multiplier scales
+  CHAR_BUY_TROOP_JITTER: 0.25, // 基準批量上下抖動比例 / Jitter fraction around the base batch
   CHAR_BUY_TROOP_MAX: 100, // 每次購買最多士兵數 / Max troops per purchase
 
   // ── 速度 / 逃脫 (v1.1) ──────────────────────────────────────────────────
@@ -313,6 +315,21 @@ export const CONFIG = {
   // Defence uses **體魄 (ti)**, not leadership (tong). The two share a formula — both are
   // `× (1 + x/30)` — but they answer different questions: wu is "how hard they hit", ti is
   // "how well they hold". tong now only affects how many troops a leader can buy.
+  // ── 多回合戰爭 / Multi-round war ──
+  // 戰鬥不再一回合決勝負：被擊中扣**兵力**（HP 制），戰爭持續到一方潰敗。
+  // BATTLES NO LONGER END IN ONE ROUND: a hit costs **troops** (HP-style) and the war
+  // lasts until one side breaks.
+  BATTLE_HITS_PER_KILL: 8, // 每點攻擊力換算的士兵傷害分母 / attack power divided by this (x defence) = troops lost per strike
+  BATTLE_WAR_FATIGUE: 0.95, // 每輪全員疲勞乘數 / per-round fatigue multiplier for every combatant
+  BATTLE_ROUT_RATIO: 0.5, // 攻方剩餘 < 守方剩餘 × 此值 → 潰逃 / attackers rout when below this fraction of the defence
+  BATTLE_MAX_ROUNDS: 8, // 戰爭最大輪數，超過攻方退兵 / max war rounds before the attackers retreat
+  // 戰報回放節奏（彈窗內的動畫）/ the report's replay pacing (in-modal animation)
+  BATTLE_REPLAY_STRIKE_MS: 600,
+  BATTLE_REPLAY_PAUSE_MS: 900,
+  // 出手紀錄的保留輪數：超過就刪（舊戰爭不能回放是刻意取捨）/
+  // Strike-log retention in rounds: older strikes are deleted (old wars losing
+  // their replay is a deliberate trade-off)
+  BATTLE_STRIKE_RETENTION_ROUNDS: 20,
   BATTLE_RANDOM_MIN: 0.85, // 隨機變異下限 / Random variance lower bound
   BATTLE_RANDOM_MAX: 1.15, // 隨機變異上限 / Random variance upper bound
   BATTLE_ATK_WU_MULT: 1 / 30, // wu 對攻擊力的貢獻 / Wu contribution to attack power
@@ -336,7 +353,7 @@ export const CONFIG = {
   // 1.2 = demanding a 20% edge as a safety margin: the rolls span 0.85–1.15, so a
   // 20% cushion survives one bad roll. Lower → bolder AI (more suicides); higher →
   // more waiting and stockpiling.
-  AI_ATTACK_ADVANTAGE: 1.2,
+  AI_ATTACK_ADVANTAGE: 0.8, // 敢不敢啃：估計戰力 ≥ 守方估計防禦 × 此值就開打（勢均力敵也能開戰，多回合磨到分出勝負）/ dare-to-bite: engage when the estimated attack reaches this fraction of the estimated defence
 
   // ── 消費性格的儲備率 ──
   // 行政官買兵前留在口袋裡的比例（只有行政官有建築要蓋；非行政官不留儲備）。

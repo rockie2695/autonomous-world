@@ -23,7 +23,11 @@ import { apiFetch } from '@/lib/api';
 import { CONFIG } from '@/lib/gameConfig';
 import { defectionValue, defectionChance } from '@/lib/defection';
 import { buildRelationCombatDeltas, effectiveAbility } from '@/lib/relationCombat';
-import { splitIncome } from '../../../server/income';
+import {
+  splitIncome,
+  jingIncomeMultiplier,
+  placeOutput,
+} from '../../../server/income';
 import {
   BUILDING_MAX_LEVEL,
   buildingPerLevel,
@@ -42,7 +46,7 @@ import { StatsCharts, CharacterRadarHover, RADAR_AXES } from './stats-charts';
 import { DetailModal, FactionRanking, LeaderRelations } from './leader-detail';
 import { abilityTipLines, useAbilityTip } from './tooltip';
 import type { WorldInfo, WorldState } from './types';
-import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_CORNER_BR, GM_CORNER_TL, GM_CORNER_TR, GM_FRAME, GM_HUD_CONTROLS_CLOSED, GM_HUD_CONTROLS_OPEN, GM_HUD_LEGEND, GM_KPI, GM_KPI_FIRST, GM_KPI_LABEL, GM_KPI_VALUE, GM_LEGEND, GM_LEGEND_ITEM, GM_MODAL, GM_MODAL_PHOTO, GM_MODAL_VEIL, GM_PANEL, GM_PHOTO, GM_RAIL, GM_SKEL, GM_STAT, GM_STAT_LABEL, GM_STAT_VALUE, GM_STRIP, GM_STRIP_INLINE, GM_STRIP_PHOTO, GM_STRIP_VEIL, GM_TIMELINE, GM_TITLE, GM_VEIL, GM_VIGNETTE } from './styles';
+import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_CORNER_BR, GM_CORNER_TL, GM_CORNER_TR, GM_FRAME, GM_HUD_CONTROLS_CLOSED, GM_HUD_CONTROLS_OPEN, GM_HUD_LEGEND, GM_KPI, GM_KPI_FIRST, GM_KPI_LABEL, GM_KPI_VALUE, GM_LEGEND, GM_LEGEND_ITEM, GM_MODAL, GM_MODAL_PHOTO, GM_MODAL_VEIL, GM_PANEL, GM_PHOTO, GM_RAIL, GM_SKEL, GM_STAT, GM_STAT_LABEL, GM_STAT_VALUE, GM_STRIP, GM_STRIP_INLINE, GM_STRIP_PHOTO, GM_STRIP_VEIL, GM_TIMELINE, GM_TITLE, GM_VEIL } from './styles';
 
 const SigmaMap = dynamic(
   () => import('@/components/SigmaMap').then((mod) => mod.SigmaMap),
@@ -914,14 +918,13 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
             />
           </div>
 
-          {/* HUD 框角與暗角 / HUD corner brackets + vignette */}
+          {/* HUD 框角 / HUD corner brackets */}
           <div className={`${GM_FRAME}`} aria-hidden="true">
             <span className={`${GM_CORNER_TL}`} />
             <span className={`${GM_CORNER_TR}`} />
             <span className={`${GM_CORNER_BL}`} />
             <span className={`${GM_CORNER_BR}`} />
           </div>
-          <div className={`${GM_VIGNETTE}`} aria-hidden="true" />
 
           {/* HUD 分成兩個面板：圖例貼左下、相機控制貼右下 / HUD split into two panels: legend bottom-left, camera controls bottom-right */}
           <div className={`${GM_HUD_LEGEND}`}>
@@ -1350,7 +1353,8 @@ function MapSidePanel({
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 28 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
-          className={`pointer-events-auto h-full w-[24rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
+          className={`pointer-events-auto h-full w-[20rem] md:w-[24rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
+
         >
           <div className="flex items-center justify-between px-3 pt-3 pb-2">
             <span className="font-display text-xs text-gray-400 tracking-wider">
@@ -2761,14 +2765,30 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
   const othersHere = placeChars.filter(
     (c) => c.id !== place.administratorId && c.id !== kingIdOfThisPlace
   ).length;
-  const adminLeaderShare = adminChar
+  const placeSplit = adminChar
     ? splitIncome(
-        placeIncome(place.market),
-        kingCharOfPlace ? kingCharOfPlace.jing : null,
+        // 與模擬同一份規則：**整塊餅**先乘行政官的 jing 倍率（地方產出），分配階段
+        // 不再對行政官重複乘。死君王不算（模擬有 alive 過濾）。
+        // The same rule as the simulation: the **whole pie** is scaled by the
+        // administrator's jing first (the place's output), and the split no longer
+        // multiplies the administrator again. A dead king does not count (the
+        // simulation alive-filters).
+        placeOutput(place.market, adminChar.jing),
+        kingCharOfPlace && kingCharOfPlace.alive ? kingCharOfPlace.jing : null,
         adminChar.jing,
         othersHere
-      ).admin
+      )
     : null;
+  const adminLeaderShare = placeSplit?.admin ?? null;
+  // 在場的其他將領每人分到多少：與模擬同一條 floor（餘數留在地方上）/
+  // What each other leader here pockets: the same floor as the simulation (the
+  // remainder stays with the place)
+  const perOther =
+    placeSplit && othersHere > 0 ? Math.floor(placeSplit.others / othersHere) : 0;
+  // 行政官的 jing 倍率：建築行的「每回合產出」要印**實際**產出（含此倍率）/
+  // The administrator's jing multiplier: the building rows' per-round output prints
+  // the **actual** output (this multiplier included)
+  const outputMultiplier = adminChar ? jingIncomeMultiplier(adminChar.jing) : 1;
 
   // 相連地點保留完整物件（不是只有名字）——點擊跳轉需要 id /
   // Keep the whole place objects rather than just names: navigating needs the id
@@ -2898,8 +2918,14 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                 // table and the dots' tooltips go through the same function — the row and the
                 // dots used to print this one building's own contribution, so market level 1
                 // carried both "15 gold / round" and "+5 gold".
-                const currentLabel = placeEffectLabel(row.kind, level);
-                const nextLabel = placeEffectLabel(row.kind, level + 1);
+                // 市場行的產出要含**行政官的 jing 倍率**（實際產出）；堡壘是百分比、
+                // 兵營是徵兵，都不受 jing 影響，倍率對它們是無操作。
+                // The market row's output includes the **administrator's jing
+                // multiplier** (the actual output); fortress is a percentage and
+                // barracks is recruitment — neither is jing-scaled, so the multiplier
+                // is a no-op for them.
+                const currentLabel = placeEffectLabel(row.kind, level, outputMultiplier);
+                const nextLabel = placeEffectLabel(row.kind, level + 1, outputMultiplier);
                 const expanded = openBuilding === row.kind;
                 const affordable = adminChar !== null && adminChar.gold >= (cost ?? 0);
                 return (
@@ -3036,7 +3062,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                                   ? 'bg-cyan-400/45'
                                   : 'border border-white/20 bg-transparent'
                             }`}
-                            title={`L${lvl} · ${formatEffect(placeEffectLabel(row.kind, lvl).value, placeEffectLabel(row.kind, lvl).unit)} / ${t('place.perRound')}`}
+                            title={`L${lvl} · ${formatEffect(placeEffectLabel(row.kind, lvl, outputMultiplier).value, placeEffectLabel(row.kind, lvl, outputMultiplier).unit)} / ${t('place.perRound')}`}
                           />
                           );
                         })}
@@ -3052,7 +3078,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           >
                           <ul className="space-y-0.5">
                             {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
-                              const out = placeEffectLabel(row.kind, lvl);
+                              const out = placeEffectLabel(row.kind, lvl, outputMultiplier);
                               // 印的是**此地此刻每回合的總產出**，不是這一棟自己的貢獻：
                               // 市場 0 級時貢獻是 0，但地方照樣有基礎收入，印 0 會讓讀者
                               // 以為這棟建築一點用都沒有。堡壘沒有「總產出」，退回累積百分比。
@@ -3135,12 +3161,67 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
             {/* 依新的分配規則，沒有行政官就誰都不拿，所以這裡必須寫明實際結果而不是比例 /
                 Under the new split nobody is paid without an administrator, so this states the
                 outcome rather than the nominal share */}
-            <div className="flex items-baseline justify-between gap-2 text-base">
-              <span className="text-gray-400">{t('place.toAdmin')}</span>
-              <span className={`font-display tabular-nums ${adminChar ? 'text-amber-300' : 'text-gray-500'}`}>
-                {adminLeaderShare === null ? t('place.nobodyPaid') : `+${adminLeaderShare}`}
-              </span>
-            </div>
+            {/* 本回合分成：**每個人**在此地拿多少（君王與行政官可能人在別處，錢仍來自
+                這裡；其他人在場者平分，餘數留在地方上——與模擬同一份 splitIncome）。
+                This round's split: **everyone's** take here (the king and the
+                administrator may be elsewhere, but their gold still comes from this
+                place; the others present split their bucket evenly with the remainder
+                staying put — the same splitIncome as the simulation). */}
+            {adminLeaderShare === null ? (
+              <div className="flex items-baseline justify-between gap-2 text-base">
+                <span className="text-gray-400">{t('place.roundSplit')}</span>
+                <span className="text-gray-500">{t('place.nobodyPaid')}</span>
+              </div>
+            ) : (
+              <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2">
+                <div className="text-xs uppercase tracking-wider text-cyan-300">
+                  {t('place.roundSplit')}
+                </div>
+                {kingCharOfPlace && kingCharOfPlace.alive && placeSplit && placeSplit.king > 0 && (
+                  <div className="flex items-baseline justify-between gap-2 text-base">
+                    <span className="truncate text-gray-400">
+                      👑 {kingCharOfPlace.name}
+                      {kingCharOfPlace.placeId !== place.id && (
+                        <span className="ml-1 text-[11px] text-gray-600">{t('place.elsewhere')}</span>
+                      )}
+                    </span>
+                    <span className="font-display tabular-nums text-amber-300">
+                      +{placeSplit.king}
+                    </span>
+                  </div>
+                )}
+                {adminChar && placeSplit && placeSplit.admin > 0 && (
+                  <div className="flex items-baseline justify-between gap-2 text-base">
+                    <span className="truncate text-gray-400">
+                      👤 {adminChar.name}
+                      {adminChar.placeId !== place.id && (
+                        <span className="ml-1 text-[11px] text-gray-600">{t('place.elsewhere')}</span>
+                      )}
+                    </span>
+                    <span className="font-display tabular-nums text-amber-300">
+                      +{placeSplit.admin}
+                    </span>
+                  </div>
+                )}
+                {placeChars
+                  .filter(
+                    (c) => c.id !== kingIdOfThisPlace && c.id !== place.administratorId
+                  )
+                  .map((c) => (
+                    <div
+                      key={c.id}
+                      className="flex items-baseline justify-between gap-2 text-base"
+                    >
+                      <span className="truncate text-gray-400">{c.name}</span>
+                      <span
+                        className={`font-display tabular-nums ${perOther > 0 ? 'text-amber-300' : 'text-gray-600'}`}
+                      >
+                        +{perOther}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
 
           {/* 駐軍 / Garrison */}

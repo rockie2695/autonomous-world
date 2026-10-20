@@ -58,14 +58,14 @@ describe('kingSignal', () => {
   it('a balanced king only attacks a border someone can actually take', () => {
     const input = {
       ownMargins: [{ placeId: 'home', margin: 20 }],
-      borderTargets: [{ placeId: 'enemy1', defence: 100 }],
+      borderTargets: [{ placeId: 'enemy1', defence: 130 }],
       strongestAttack: 100,
     };
-    // 最弱邊界防禦 100 > 最強將領 100 ÷ 1.2 ≈ 83 → 不開戰 /
-    // Border defence 100 > strongest 100 ÷ 1.2 ≈ 83 → no call
+    // 最弱邊界防禦 100 > 最強將領 100 ÷ 0.8 = 125 → 不開戰 /
+    // Border defence 100 > strongest 100 ÷ 0.8 = 125 → no call
     expect(kingSignal({ posture: 'balanced', ...input })).toBeNull();
     // 邊界防禦降到 60 → 打 /
-    // Border defence drops to 60 → attack
+    // Border defence drops to 60 -> attack
     expect(
       kingSignal({
         posture: 'balanced',

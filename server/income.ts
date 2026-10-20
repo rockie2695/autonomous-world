@@ -34,6 +34,7 @@
 // ============================================================================
 
 import { CONFIG } from '@/lib/gameConfig';
+import { placeIncome } from '@/lib/placeEffects';
 
 /** 一次分配的結果 / The result of one split */
 export interface IncomeSplit {
@@ -63,6 +64,64 @@ export function jingIncomeMultiplier(jing: number): number {
     1 +
     (Math.max(0, jing) - CONFIG.INCOME_JING_MIDPOINT) / CONFIG.CHAR_ABILITY_MAX;
   return Math.max(0, centred);
+}
+
+/**
+ * 一個地方**本回合的實際產出**（整數金幣）：基礎 + 市場，再乘**行政官**的 jing 倍率。
+ * A place's **actual output this round** in whole gold: base + market, scaled by the
+ * **administrator's** jing multiplier.
+ *
+ * jing 的收入效果只有這一條——行政官的 jing 放大整塊餅。分配階段（splitIncome）
+ * 對行政官不再重複乘，所以倍率在這裡**恰好作用一次**。沒有行政官時是基礎產出
+ * （那個地方照樣生產，只是一分不發）。
+ *
+ * jing's income effect is exactly this: the administrator's jing scales the whole pie.
+ * The split (splitIncome) does not multiply the administrator again, so the multiplier
+ * applies **precisely once** here. With no administrator the output is the base (the
+ * place still produces; it just pays nobody).
+ *
+ * **取整在這裡**：金幣永遠是整數——`Character.gold` 是 `Int` 欄位，而事件的「收益」
+ * 也要印得出人話（不是 12.166666666666666）。
+ * **Rounded here**: gold is always whole — `Character.gold` is an `Int` column, and the
+ * event's income figure has to read as prose (not 12.166666666666666).
+ */
+export function placeOutput(market: number, adminJing: number | null): number {
+  if (adminJing === null) return placeIncome(market);
+  return Math.floor(placeIncome(market) * jingIncomeMultiplier(adminJing));
+}
+
+/**
+ * 這一筆買多少：**tong 決定基準批量**（統領＝一次能籌集多大规模），隨機只在
+ * +/-JITTER 內抖動。金幣與規格上限（100）是硬上限，買不到下限就不買（呼叫端的
+ * `maxBuyable >= CHAR_BUY_TROOP_MIN` 閘門負責）。
+ *
+ * How big one purchase is: **tong decides the base batch** (leadership = the size of
+ * a host you can raise at once), with the random only jittering within +/-JITTER.
+ * Gold and the spec cap (100) are the hard limits; the caller's
+ * `maxBuyable >= CHAR_BUY_TROOP_MIN` gate handles "cannot afford the minimum".
+ *
+ * 純函式（jitter 由呼叫端從 RNG 取 -1..1），可測：jitter 0 = 恰好基準批量。
+ * Pure (the caller draws jitter from the RNG as -1..1), testable: jitter 0 lands
+ * exactly on the base batch.
+ */
+export function purchaseBatch(
+  tong: number,
+  maxBuyable: number,
+  jitter: number
+): number {
+  const base = Math.round(
+    CONFIG.CHAR_BUY_TROOP_BASE * tongPurchaseMultiplier(tong)
+  );
+  const span = Math.round(base * CONFIG.CHAR_BUY_TROOP_JITTER);
+  const raw = base + Math.round(span * jitter);
+  // 夾限順序：先「買得起」（maxBuyable），再規格上限，最後批次下限——
+  // 下限只在買得起 >= 10 時才可能生效（呼叫端的閘門保證）。
+  // Clamp order: affordability first, then the spec cap, then the batch minimum —
+  // the minimum can only bind when maxBuyable >= 10 (the caller's gate guarantees it).
+  return Math.max(
+    CONFIG.CHAR_BUY_TROOP_MIN,
+    Math.min(CONFIG.CHAR_BUY_TROOP_MAX, maxBuyable, raw)
+  );
 }
 
 /**
@@ -104,9 +163,12 @@ export function tongPurchaseMultiplier(tong: number): number {
  * Guarantees the shares always sum to `income` — or to 0 when there is no
  * administrator. No gold is created and no share can go negative.
  *
- * @param income - 地點收入 / The place's income
+ * @param income - 地點收入（**已**由呼叫端乘上行政官的 jing 倍率）/ The place's income (**already** scaled by the administrator's jing at the caller)
  * @param kingJing - 君王 jing，無君王時為 null / The king's jing, null when there is no king
- * @param adminJing - 行政官 jing，無行政官時為 null / The admin's jing, null when there is no admin
+ * @param adminJing - 行政官 jing，**只用於在職判定**（null = 缺席）；他的 jing 倍率
+ *   已經放大整塊收入，這裡再乘就是平方 / The administrator's jing, used **only for the
+ *   vacancy check** (null = absent); his jing multiplier already scaled the whole
+ *   income, and applying it here again would square it
  * @param othersCount - 其他角色人數（決定 30% 給誰）/ How many other characters there are
  * @returns 三方應得的金額 / What each side receives
  */
@@ -135,8 +197,19 @@ export function splitIncome(
   const othersShare = CONFIG.INCOME_OTHER_SHARE;
   const hasOthers = othersCount > 0;
 
-  // 君王份額：有君王就是 30%，沒有就併入行政官 /
-  // The king's share: 30% when he exists, otherwise folded into the administrator
+  // 君王份額：有君王就是 30%，沒有就併入行政官。君王的 **jing 值**在這裡不參與——
+  // 只判斷他在不在位。一個地方的收入只受**行政官的 jing**影響（呼叫端已用它放大
+  // 整塊餅），君王的 30% 是變大後的餅的**固定抽成**。這讓「每個 jing 至多作用一次」
+  // 结构上成立：開國君王通常自己就是行政官，同一個人的 jing 若在餅上、又在份額上
+  // 各作用一次就是 ×jing²。
+  //
+  // The king's share: 30% when he exists, otherwise folded into the administrator.
+  // The king's **jing value** plays no part here — only whether he is on the throne.
+  // A place's income is affected by the **administrator's jing alone** (the caller
+  // already scaled the whole pie with it), and the king's 30% is a **flat cut** of
+  // that grown pie. This makes "every jing applies at most once" *structural*: the
+  // founding king is usually the administrator himself, and the same person's jing
+  // acting on both the pie and the share would be ×jing².
   const kingPortion = kingJing === null ? 0 : kingShare;
   // 行政官份額：自己的 40%，外加沒有君王時的 30%、沒有其他人時的 30%
   // The administrator's share: their own 40%, plus the king's 30% when vacant and the
@@ -144,28 +217,35 @@ export function splitIncome(
   const adminPortion =
     CONFIG.INCOME_ADMIN_SHARE + (kingJing === null ? kingShare : 0) + (hasOthers ? 0 : othersShare);
 
-  const kingRaw = income * kingPortion * jingIncomeMultiplier(kingJing ?? 0);
-  const adminRaw = income * adminPortion * jingIncomeMultiplier(adminJing);
-  const requested = kingRaw + adminRaw;
-
-  // 兩人同時高 jing 時加總可能超過地點收入：按比例縮回，維持兩人的相對高低 /
-  // Two high-jing leaders can together exceed the place's income, so scale both
-  // back proportionally — that preserves which of the two is richer
-  const scale = requested > income ? income / requested : 1;
-  const king = Math.floor(kingRaw * scale);
+  // 比例是**結構性**的（總和 ≤ 100%）：君王在場時 30 + 40 + 30 = 100；君王缺席時
+  // 行政官最多 70 + 30 = 100。沒有任何倍率會再加乘（jing 的收入效果只有「行政官
+  // 放大整塊餅」一條，已在呼叫端作用），所以**不需要**比例縮回——floor 的餘數由
+  // 「其他人」吸收，三份照樣加總等於收入。
+  //
+  // The shares are **structural** (their sum ≤ 100%): king present 30 + 40 + 30 = 100;
+  // king absent admin at most 70 + 30 = 100. No multiplier adds on top any more (jing's
+  // only income effect — the administrator scaling the whole pie — already happened at
+  // the caller), so **no proportional scale-back is needed**: the floor remainders are
+  // absorbed by "everyone else", and the three shares still sum to the income.
+  // 每一份都取整：金幣永遠是整數，**包括**沒有其他人時的 `income − king`（收入若帶
+  // 小數，這裡曾經吐出 9.166666666666668）。
+  // Every share is floored: gold is always whole — **including** the no-others
+  // `income − king` (with a fractional income this branch once produced
+  // 9.166666666666668).
+  const king = Math.floor(income * kingPortion);
+  const admin = Math.floor(income * adminPortion);
 
   if (!hasOthers) {
-    // 沒有其他人可分時，縮回剩下的餘額歸行政官——否則那筆錢會**憑空消失**，
+    // 沒有其他人可分時，餘額歸行政官——否則那筆錢會**憑空消失**，
     // 而這個函式的整個重點就是總額必定等於 income。
     //
-    // With nobody else to share with, the leftover from the scale-back goes to the
-    // administrator — otherwise that gold simply **vanishes**, and the whole point of this
-    // function is that the shares sum to `income`.
-    return { king, admin: income - king, others: 0 };
+    // With nobody else to share with, the leftover goes to the administrator —
+    // otherwise that gold simply **vanishes**, and the whole point of this function is
+    // that the shares sum to `income`.
+    return { king, admin: Math.floor(income - king), others: 0 };
   }
 
   // 「其他人」永遠是剩餘額，所以三份加起來必定等於 income /
   // "Everyone else" is always the remainder, so the three shares sum to `income`
-  const admin = Math.floor(adminRaw * scale);
-  return { king, admin, others: income - king - admin };
+  return { king, admin, others: Math.floor(income - king - admin) };
 }

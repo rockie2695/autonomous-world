@@ -22,8 +22,11 @@
 //   present; the three shares always sum to the income
 // - 招募：BASE_RECRUIT + BARRACKS_LV × BARRACKS_PER_LV / Recruitment = BASE_RECRUIT + BARRACKS_LV × BARRACKS_PER_LV
 // - 角色購兵：1 兵 = 2 金，批次 10-100 / Characters buy troops: 1 troop = 2 gold, batch 10-100
-// - jing（經濟）會放大領導者 pockets 的份額，規則見 server/income.ts /
-//   jing (economy) multiplies what a leader pockets — see server/income.ts
+// - 一個地方的收入只受**行政官的 jing**影響（放大整塊餅）；君王與其他人的份額是
+//   變大後的餅的固定比例，規則見 server/income.ts /
+//   A place's income is shaped by the **administrator's jing alone** (it scales the
+//   whole pie); the king's and the others' shares are flat ratios of that grown pie —
+//   see server/income.ts
 //
 // 使用方式 / Usage:
 //   await economy(worldId, round, rng);
@@ -32,10 +35,15 @@
 import { prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
-import { splitIncome, tongPurchaseMultiplier } from '../income';
+import {
+  splitIncome,
+  tongPurchaseMultiplier,
+  placeOutput,
+  purchaseBatch,
+} from '../income';
 import { spendingPosture, troopReserveRate } from '@/lib/spending';
 import { inTransaction, type TxClient } from '../tx';
-import { placeIncome, placeRecruits } from '@/lib/placeEffects';
+import { placeRecruits } from '@/lib/placeEffects';
 
 /**
  * 處理世界中所有地點的經濟。
@@ -104,8 +112,6 @@ export async function economy(
     // when nobody was.
     if (!place.factionId) continue;
 
-    const income = placeIncome(place.market);
-
     // 取得君王與總督 / Get king and admin
     // ── 沒人在這裡，就沒有控制者，錢也不發放 ──
     // 一個地方要有住在這裡的角色才算被掌握。沒有人的話，連國王的份也不發 —— 否則一個
@@ -125,6 +131,24 @@ export async function economy(
     // means "alive but neutral" and would still pay that id, and the dead get nothing.
     const kingJing = kingId ? (leaderJing.get(kingId) ?? null) : null;
     const adminJing = adminId ? (leaderJing.get(adminId) ?? null) : null;
+
+    // ── 行政官的 jing 放大**整塊餅**（地方產出），不是他自己的份額 ──
+    // 舊制把倍率乘在行政官的份額上，但分配總額被封在地點收入裡——單一領取人時
+    // 倍率完全看不出效果（×1.22 的請求被縮回 ×1.00）。现在倍率先作用在產出上：
+    // jing 24 的地方產出 ×1.22，jing 5 的只有 ×0.58，高經濟的行政官真的讓地方更富裕。
+    // 分配階段（splitIncome）**不再**對行政官重複乘——那會是平方。
+    // 產出在 `placeOutput` **取整**：金幣永遠是整數。
+    //
+    // ── The administrator's jing scales the **whole pie** (the place's output), not
+    // his own share ──
+    // The old rule multiplied the administrator's share, but the split is capped at
+    // the place's income — with a single recipient the multiplier had no visible
+    // effect (a ×1.22 request was scaled back to ×1.00). The multiplier now acts on
+    // the output first: a jing-24 place produces ×1.22, a jing-5 one ×0.58, so a
+    // high-economy administrator genuinely makes the place richer. The split
+    // (splitIncome) **no longer** multiplies the administrator again — that would
+    // square it. The output is **rounded** in `placeOutput`: gold is always whole.
+    const income = placeOutput(place.market, adminJing);
     // 「其他人」= 住在這裡、又既不是君王也不是行政官的角色 /
     // "Everyone else" = living here, and neither the king nor the administrator
     const otherChars = place.characters.filter(
@@ -254,25 +278,21 @@ export async function economy(
         (char.gold - reserve) / CONFIG.CHAR_BUY_TROOP_PRICE
       );
       if (maxBuyable >= CONFIG.CHAR_BUY_TROOP_MIN) {
-        // ── tong（統領）決定「這一筆買多少」，公式與 jing 對收入的完全相同 ──
-        // 購買上限 = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)
-        // 以平均值為中心，所以一般將領的上限就是 CHAR_BUY_TROOP_MAX、高 tong 買得到更多、
-        // 低 tong 買得少一些。錢仍然是最硬的限制：買不到 min 就不買。
+        // ── tong（統領）決定「這一筆買多少」：基準批量 = BASE × tong 倍率，隨機只在
+        // ±25% 內抖動。舊制（上限 100 × 倍率）幾乎不咬人——將領每回合的錢買不到 100
+        // 兵，tong 的上限永遠是鬆的，購兵量由隨機與金幣決定。金幣仍是硬上限：
+        // 買不到 min 就不買。
         //
-        // tong (leadership) sets **how large one purchase is**, with exactly the formula jing
-        // uses for income: cap = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) /
-        // CHAR_ABILITY_MAX). Centred on the average, so an average leader's cap is just
-        // CHAR_BUY_TROOP_MAX, a high-tong one buys more and a low-tong one less.
-        // Gold is still the hard limit, and the floor stays CHAR_BUY_TROOP_MIN.
-        const tongCap = Math.max(
-          CONFIG.CHAR_BUY_TROOP_MIN,
-          Math.round(
-            CONFIG.CHAR_BUY_TROOP_MAX *
-              tongPurchaseMultiplier(char.tong)
-          )
+        // ── tong (leadership) decides **how large one purchase is**: base batch =
+        // BASE × the tong multiplier, jittered within +/-25%. The old rule (cap 100 ×
+        // multiplier) almost never bound — a leader's per-round gold rarely affords 100
+        // troops, so tong's cap was always slack and the size was decided by randomness
+        // and gold. Gold is still the hard limit: below the minimum batch, no purchase.
+        const buyCount = purchaseBatch(
+          char.tong,
+          maxBuyable,
+          rng.float(-1, 1)
         );
-        const buyCap = Math.min(tongCap, maxBuyable);
-        const buyCount = rng.int(CONFIG.CHAR_BUY_TROOP_MIN, buyCap);
 
         const cost = buyCount * CONFIG.CHAR_BUY_TROOP_PRICE;
 

@@ -85,8 +85,6 @@ export const GM_BADGE =
 
 /** 地圖 HUD 外框與角標 / the map HUD frame and its corner brackets */
 export const GM_FRAME = 'pointer-events-none absolute inset-[10px] z-[5]';
-export const GM_VIGNETTE =
-  'pointer-events-none absolute inset-0 z-[4] bg-[radial-gradient(ellipse_at_50%_50%,transparent_58%,rgba(2,6,23,0.55)_100%)]';
 /** 地圖 HUD 面板：圖例靠左、相機控制靠右，都貼齊地圖底部 /
  *  Map HUD panels: legend bottom-left, camera controls bottom-right */
 export const GM_HUD_PANEL =
@@ -112,8 +110,9 @@ export const GM_HUD_LEGEND = `${GM_HUD_PANEL} left-4 max-w-[min(55%,24rem)] max-
 // have to clear or reset/zoom-out/the slider end up underneath it. They return to the edge
 // when the panel is closed.
 // A fixed 31rem offset pushes the controls off-screen on narrow viewports, so it only
-// applies from lg up; narrow keeps them on the edge.
-export const GM_HUD_CONTROLS_OPEN = `${GM_HUD_PANEL} right-4 lg:right-[31rem]`;
+// applies from md up; narrow keeps them on the edge (where the panel is an overlay
+// drawer anyway).
+export const GM_HUD_CONTROLS_OPEN = `${GM_HUD_PANEL} right-4 md:right-[31rem]`;
 export const GM_HUD_CONTROLS_CLOSED = `${GM_HUD_PANEL} right-4`;
 /**
  * 選擇回合：疊在地圖左緣，換取地圖寬度。圖例在左下、相機控制在右下，所以左上是
