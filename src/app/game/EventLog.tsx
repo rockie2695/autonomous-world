@@ -3,15 +3,18 @@
 // ============================================================================
 // 事件日誌 / Event Log
 // ============================================================================
-// 依回合抓取事件，並提供三種篩選：勢力下拉、事件分類（可複選）、資訊種類
-// （人物 / 地點 / 其他）。分類對應 EVENT_CATEGORY，資訊種類則看事件 data 裡
-// 帶的是角色還是地點，決定名字要不要做成可點的按鈕。
+// 依回合抓取事件，並提供五種篩選：勢力下拉、**將領下拉**、**地點下拉**、
+// 事件分類（可複選）、資訊種類（人物 / 地點 / 其他）。分類對應 EVENT_CATEGORY，
+// 資訊種類則看事件 data 裡帶的是角色還是地點，決定名字要不要做成可點的按鈕。
+// 將領 / 地點的匹配規則（一個事件可能帶多個 id）住在 eventFilter.ts（純、有測試）。
 //
-// Fetches a round's events and offers three filters: a faction dropdown, a
-// multi-select of event categories, and info-kind toggles (people / place /
-// other). Categories come from EVENT_CATEGORY; the info kind is derived from
-// whether the event's data carries a character or a place, which is what decides
-// if a name becomes a clickable button.
+// Fetches a round's events and offers five filters: a faction dropdown, a
+// **leader dropdown**, a **place dropdown**, a multi-select of event categories,
+// and info-kind toggles (people / place / other). Categories come from
+// EVENT_CATEGORY; the info kind is derived from whether the event's data carries
+// a character or a place, which is what decides if a name becomes a clickable
+// button. The leader / place matching rule (one event can carry several ids)
+// lives in eventFilter.ts (pure, tested).
 // ============================================================================
 
 import { useState, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type ReactNode } from 'react';
@@ -22,6 +25,7 @@ import { hslToHex } from '@/components/mapShared';
 import { CONFIG } from '@/lib/gameConfig';
 import { apiFetch } from '@/lib/api';
 import { EventGlyph } from './icons';
+import { eventLeaderIds, eventPlaceIds } from './eventFilter';
 import type { GameEvent, WorldState } from './types';
 import { GM_BTN, GM_PANEL, GM_SKEL, GM_TITLE } from './styles';
 /**
@@ -186,6 +190,13 @@ export function EventLog({
     kind: 'captured' | 'death' | 'escape';
     charName: string;
   } | null>(null);
+  // 將領 / 地點下拉：'all' = 不篩。語意是「與此人（此地）**相關**的事件」——
+  // 一個事件可能帶多個 id，命中任何一個就算（規則見 eventFilter.ts）。
+  // Leader / place dropdowns: 'all' = no filter. The semantics are "events
+  // **involving** this leader (or place)" — one event can carry several ids and a
+  // match on any counts (the rule lives in eventFilter.ts).
+  const [leaderFilter, setLeaderFilter] = useState<string>('all');
+  const [placeFilter, setPlaceFilter] = useState<string>('all');
   const [categoryFilter, setCategoryFilter] = useState<Set<EventCategory>>(
     () => new Set(EVENT_CATEGORIES)
   );
@@ -202,9 +213,13 @@ export function EventLog({
   // can tell whether it has gone stale by comparison alone. The category set has no
   // stable order, so it is sorted first — otherwise identical filters would produce
   // different keys and reset the page for no reason.
-  const filterKey = `${factionFilter}|${[...categoryFilter].sort().join(',')}|${
-    infoFilter.people ? 1 : 0
-  }${infoFilter.place ? 1 : 0}${infoFilter.other ? 1 : 0}`;
+  const filterKey = `${factionFilter}|${leaderFilter}|${placeFilter}|${[
+    ...categoryFilter,
+  ]
+    .sort()
+    .join(',')}|${infoFilter.people ? 1 : 0}${infoFilter.place ? 1 : 0}${
+    infoFilter.other ? 1 : 0
+  }`;
 
   // 分批顯示：回合數增長後事件可能上萬筆，避免一次掛載全部 DOM。
   // 分頁狀態**連同當時的篩選鍵一起存**：篩選一變，鍵就不再相等，顯示筆數自動
@@ -243,18 +258,48 @@ export function EventLog({
     };
   }, [characters, places]);
 
+  // 將領下拉的選項：按名字排序（localeCompare 讓中文排序合理）。已故的標 †——
+  // 他們的事件還在日誌裡，篩得到。
+  // The leader dropdown's options, name-sorted (localeCompare keeps Chinese
+  // sensible). The dead carry † — their events remain in the log and stay filterable.
+  const leaderOptions = useMemo(
+    () =>
+      [...characters]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((c) => ({ id: c.id, label: c.alive ? c.name : `${c.name} †` })),
+    [characters]
+  );
+  const placeOptions = useMemo(
+    () =>
+      [...places]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((p) => ({ id: p.id, label: p.name })),
+    [places]
+  );
+
   const filtered = useMemo(
     () =>
       events.filter((event) => {
         if (!categoryFilter.has(EVENT_CATEGORY[event.type] ?? 'place')) return false;
         if (!infoFilter[eventInfoOf(event.data)]) return false;
+        // 「與此人相關」＝事件提到的**任何**將領 id 命中（父子、朋友、君王與
+        // 行政官都算）/ "Involving this leader" = any leader id the event mentions
+        // matches (a father, a friend, the king and the administrator all count)
+        if (leaderFilter !== 'all' && !eventLeaderIds(event.data).includes(leaderFilter)) {
+          return false;
+        }
+        // 「與此地相關」＝發生地或移動的起訖命中 / "Involving this place" = where
+        // it happened, or either endpoint of a move
+        if (placeFilter !== 'all' && !eventPlaceIds(event.data).includes(placeFilter)) {
+          return false;
+        }
         if (factionFilter === 'all') return true;
         return factionOfEvent(event.data) === factionFilter;
       }),
     // factionOfEvent 是 useMemo 產生的新參考，每回合資料變動才會換 /
     // factionOfEvent is a fresh reference only when its inputs change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [events, categoryFilter, infoFilter, factionFilter, factionOfEvent]
+    [events, categoryFilter, infoFilter, factionFilter, leaderFilter, placeFilter, factionOfEvent]
   );
 
   /**
@@ -447,6 +492,8 @@ export function EventLog({
 
   const filtersActive =
     factionFilter !== 'all' ||
+    leaderFilter !== 'all' ||
+    placeFilter !== 'all' ||
     categoryFilter.size !== EVENT_CATEGORIES.length ||
     !infoFilter.people ||
     !infoFilter.place ||
@@ -771,6 +818,8 @@ export function EventLog({
               type="button"
               onClick={() => {
                 setFactionFilter('all');
+                setLeaderFilter('all');
+                setPlaceFilter('all');
                 setCategoryFilter(new Set(EVENT_CATEGORIES));
                 setInfoFilter({ people: true, place: true, other: true });
               }}
@@ -779,6 +828,50 @@ export function EventLog({
               {t('events.filterReset')}
             </button>
           )}
+        </div>
+
+        {/* 將領 / 地點下拉：一列放兩組（label + select 各半）。全世界的將領與
+            地點都在選項裡——日誌抓的是**所有回合**，任何人任何地的歷史都篩得到。
+            Leader / place dropdowns: two pairs on one row (each label + select takes
+            half). Every leader and place in the world is an option — the log fetches
+            **all** rounds, so anyone's or anywhere's history is filterable. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <label className="text-xs text-gray-400 shrink-0" htmlFor="gm-evt-leader">
+              {t('events.filterByLeader')}
+            </label>
+            <select
+              id="gm-evt-leader"
+              value={leaderFilter}
+              onChange={(e) => setLeaderFilter(e.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-white/10 bg-gray-900/80 px-2 py-1 text-xs text-gray-200 focus:border-cyan-400/50 focus:outline-none"
+            >
+              <option value="all">{t('events.filterAll')}</option>
+              {leaderOptions.map((leader) => (
+                <option key={leader.id} value={leader.id}>
+                  {leader.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex min-w-0 flex-1 items-center gap-1.5">
+            <label className="text-xs text-gray-400 shrink-0" htmlFor="gm-evt-place">
+              {t('events.filterByPlace')}
+            </label>
+            <select
+              id="gm-evt-place"
+              value={placeFilter}
+              onChange={(e) => setPlaceFilter(e.target.value)}
+              className="min-w-0 flex-1 rounded-md border border-white/10 bg-gray-900/80 px-2 py-1 text-xs text-gray-200 focus:border-cyan-400/50 focus:outline-none"
+            >
+              <option value="all">{t('events.filterAll')}</option>
+              {placeOptions.map((place) => (
+                <option key={place.id} value={place.id}>
+                  {place.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* 類別多選 / Category multi-select */}

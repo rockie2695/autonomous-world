@@ -169,7 +169,7 @@ server/
 ├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
 ├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (used by aiMove + battle escape)
 ├── adminAssign.ts         # grantAdmin/revokeAdmin — the ONLY writers of Place.administratorId
-├── income.ts              # splitIncome() — king 30% / admin 40% / everyone else 30%, never stored wrong
+├── income.ts              # splitIncome() + othersOf() — king 30% / admin 40% / the controlling faction's others 30%
 ├── battleReport.ts        # PLACE_CAPTURED arithmetic behind the event log's 戰報 panel
 ├── uniqueNames.ts         # DB-backed alive-only uniqueness scans over the pure name generators
 ├── tx.ts                  # Transaction helpers — only where a half-write destroys something
@@ -359,6 +359,15 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
   suffix existed only because the `ADMIN_ASSIGNED` / `ADMIN_REMOVED` rows used to carry it; the
   `ambitionDelta` i18n key and its two false "ambition changed" clauses went with it, because
   ambition has not changed for a leader in a long time and the log was still claiming it had.
+- **A ledger row is summed only on the round its `round` names** — `loyaltyCheck` (phase 8) reads
+  `round === current` and nothing else. Every writer therefore has to stamp the round whose
+  **check** it wants to feed: the spawn path (phase 2) and the manual API write the current / next
+  round, which phase 8 of that round reads. **The capture path must pass `ledgerRound: round + 1`**
+  (Oct 2026): a capture happens in phase 10, after that round's check has run, so the revoke's
+  `+DEFECTION_ADMIN_REPLACED_DELTA` was being written and then never counted by any roll — the
+  "lost their place, more likely to defect" effect did not exist. `transferAdminSeat` passes it;
+  the popup's 本回合影響 (which reads the same per-round table) shows the row from the next round on,
+  so the tooltip's arithmetic and the roll stay identical.
 
 ### Map Spotlight & Move Animation
 
@@ -411,10 +420,12 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 
 ### Event Log Filters (`src/app/game/EventLog.tsx`)
 
-Three independent filters compose by AND; the header reports how many of the round's
+Five independent filters compose by AND; the header reports how many of the round's
 events survived, and says so when all of them were filtered out.
 
 - **Faction** — a `<select>` (`#gm-evt-faction`) plus 全部. `factionOfEvent()` resolves an event's faction through **`charId` first, then `placeId`**. `charId` is the reliable link (every character-bearing event carries it, backfilled at read time — see above), so a `CHARACTER_MOVED` row filters under the mover's faction rather than the destination's
+- **Leader** — a `<select>` (`#gm-evt-leader`) listing every character in the world, name-sorted (`localeCompare`), the dead suffixed `†` (their events remain in the log). The semantics are "events **involving** this leader": `eventLeaderIds()` (`src/app/game/eventFilter.ts`, pure and tested) collects **every** leader id an event's data carries — `charId`, `fatherId`, `friendId`, `kingId`, `adminId`, `newAdminId` — and a match on any counts. Without that, filtering by a leader would drop the rows where they appear as a father, a friend, the king or an `INCOME` recipient
+- **Place** — a `<select>` (`#gm-evt-place`) listing every place, name-sorted. Same semantics: `eventPlaceIds()` matches `placeId` **or either endpoint of a move** (`fromPlaceId` / `toPlaceId`), so a move into or out of the place shows up. The matching rule lives in `eventFilter.ts`, not inline in the component — it is the kind of "which fields count" rule that silently drifts when written twice
 - **Category** — six multi-select chips, each an `aria-pressed` toggle. `EVENT_CATEGORY` maps an event `type` to one of `battle` / `character` / `economy` / `faction` / `admin` / `other`, and `EVENT_CATEGORIES` is the chip order. Chips are multi-select, not radio: any subset stays active
 - **Info kind** — 人物 / 地點 / 其他 toggles, derived by `eventInfoOf()` from what the event's `data` carries. This is not a display filter: it decides whether a name renders as a clickable button (`onFocusPlace` / `onOpenLeaderDetail`) or as plain text, which is what makes names in the log navigable
 - Filtering is derived (`filterKey` + `useMemo`), never applied by mutating the fetched list, so toggling filters back off restores the full set for free
@@ -1074,8 +1085,12 @@ itself still shows only the **spotlight ring** — do not move the replay onto t
 `server/phases/battle.ts` resolves a contested place as a **war spanning several simulation rounds**
 (Oct 2026 — it was one combined engagement per round before, and a relay of 1v1 duels before that; both
 ended every battle instantly, which made a signalled army worthless). **Troops are HP**: a strike costs
-the target `floor(attackPower / (defenceFactor × BATTLE_HITS_PER_KILL))` troops instead of removing it,
-and the war continues until one side breaks.
+the target `max(1, floor(attackPower / (defenceFactor × BATTLE_HITS_PER_KILL)))` troops instead of
+removing it — **a landed strike always costs at least one troop** (Oct 2026). Without the floor a
+1-troop army dealt `floor(~1.3 / (defence × 8))` = **0** damage every round: a war between tiny armies
+grounded through eight rounds of nothing and ended in a coin-flip retreat whose escape roll usually
+killed the invader (17 of 24 living leaders had ≤ 1 troop, so this was most wars). "8 hits per troop"
+still holds for armies of 8+, where the floor is already ≥ 1. The war continues until one side breaks.
 
 Per war round (one phase-10 run): every combatant strikes **in speed order** — attackers hit the
 **walls first** (garrison damage, then the defending leaders once the walls fall), defenders hit the
@@ -1088,6 +1103,45 @@ reached → the attackers retreat. **Stateless by design**: "hostile leaders kee
 *is* the war — no Battle table; the round count is reconstructed from the BattleStrike log (a contiguous
 run of rounds). Reinforcements emerge naturally: leaders arriving next round simply join, which is what
 makes signals matter.
+
+**Co-located enemies always fight, the same round they meet** (Oct 2026). Two gaps used to keep enemy
+leaders standing in one place from ever engaging — the reported case: 玄影·芬妮 and 姜勇 shared
+華唧峽谷 for a round and no strike was recorded:
+
+- **The unowned branch had no leader-vs-leader combat.** Everyone present was an "attacker" of the
+  walls; with garrison 0 the *fastest* arrival simply took the place and the intruder was ignored.
+  Fix: the owned places are **re-fetched after the unowned branch** — a place captured this round
+  (with intruders still standing in it) enters the war rounds below in the *same* round. The
+  escape-destination map is refreshed with them, so a routed leader cannot flee into a place just
+  captured as if it were unowned land. Do not move that fetch back above the unowned loop: the war
+  rounds want the world *after* the captures.
+- **`aiMove` only looked at adjacent places** (see "AI movement"): a defender abandoned their own
+  place with an enemy inside it to grab a defence-0 empty neighbour, and an invader never stayed to
+  press the attack — both walked apart before the battle phase could see them. Fixed there with
+  "an enemy at my feet: stay and fight".
+
+**A capture hands the administrator seat to the capturer** (`transferAdminSeat`, Oct 2026). The old
+rule only appointed when the seat was vacant, so the *old owner's* administrator kept the seat after
+a capture and collected the new owner's 40% every round. Now the old seat is revoked first
+(`revokeAdmin`: a `+DEFECTION_ADMIN_REPLACED_DELTA` ledger row + an `ADMIN_REMOVED` event — only
+when the holder is alive and is not the capturer; a corpse's seat counts as vacant), then the
+capturer is granted (`grantAdmin`; when replaced, only the `ADMIN_REMOVED` is logged — the same
+convention as the spawn path). Capture paths stay **not** cooldown-gated, and every seat change still
+goes through the `adminAssign.ts` helpers — never a direct `administratorId` write.
+`battle.eventOrder.test.ts` guards that each handover call site sits right after its `PLACE_CAPTURED`.
+
+**A late capture pass closes the escape gap** (Oct 2026). The war rounds' **escapes** drop a routed
+leader on a neighbouring place — and the unowned-place pass ran **before** they landed, so the round
+ended with "an unowned place with an enemy leader standing on it" and the capture deferred a full
+round (the reported case: 芬妮 fled to 沙海塘 in round 25 and the place stayed unowned). Fix:
+`resolveRouted` records every escape landing spot in `lateCaptureCandidates`, and after the war
+rounds the battle phase re-scans **exactly those spots**: if still unowned and garrison 0, the free
+capture runs there and then — same `PLACE_CAPTURED` + `transferAdminSeat` as the first pass, and
+the capturer may be the escapee themselves (the fatigue loop has floored them back to 1 troop). The
+"who captures" rule lives in one pure function, `captureLeaderOf()` (`src/lib/capture.ts` —
+factioned, troop-bearing, fastest), quoted by **both** the first pass and the late pass; do not
+restate it inline. **A siege is deliberately not re-run** — it spans rounds by design (reinforcements
+simply join), and running it twice in one round would double the damage and the fatigue.
 
 ### Every living leader keeps at least one soldier
 
@@ -1281,7 +1335,10 @@ instead of scattering.
 
 - **The shares are 30% king / 40% administrator / 30% everyone else** (shared equally), all in
   `server/income.ts`. The administrator takes the largest cut because they are the one actually
-  running the place. **The three shares always sum to `income`.**
+  running the place. **The three shares always sum to `income`.** "Everyone else" is `othersOf()` —
+  the **controlling faction's** leaders present, minus the king and the administrator. A leader of
+  another faction standing in the place (an invader) is **not** paid from it: the ground they stand
+  on belongs to someone else, and so does its income (Oct 2026 — they used to share the 30% bucket).
 - **No administrator means nobody is paid** — this deliberately inverts the old rule, which routed
   a vacant administrator's share to the king. Paying a king who is not present is worse than paying
   nobody, so the gold stays with the place. This check runs **first**, because it is the only branch
@@ -1304,10 +1361,18 @@ instead of scattering.
   `floor(placeIncome(market) × the multiplier)` — `Character.gold` is an `Int` column, and an
   unfloored pie once produced a fractional `9.166666666666668` administrator payout (reported and fixed
   Oct 2026). `economy.ts` and the place popup both call it — one definition, so the preview cannot drift.
-- **The place popup lists everyone's take** (`本回合分成`): the king (`split.king`, tagged 在別處 when
-  he lives elsewhere — his gold still comes from this place), the administrator (`split.admin`), and
-  every other leader present at `floor(split.others / count)` each (the remainder stays with the place,
-  the same floor as the simulation). No administrator → 無人領取.
+- **The popup's 叛變值 tooltip shows the breakdown** (Oct 2026): ambition + the
+  loyalty penalty + this round's ledger deltas, listed term by term with the
+  loyalty-difference visible as its own `+2`. The numbers come from
+  `defectionBreakdown()` and `defectionValue()` delegates to it — the value, the
+  breakdown, and the simulation's roll share **one source**. The 叛變機率 row's
+  tooltip states the formula and the "below the midpoint it is 0" rule.
+- **The place popup lists the recipients' take** (`本回合分成`): the king (`split.king`, tagged 在別處 when
+  he lives elsewhere — his gold still comes from this place), the administrator (`split.admin`), and the
+  controlling faction's other leaders present at `floor(split.others / count)` each (the remainder stays
+  with the place, the same floor as the simulation). The count and the list share **one** `othersOf()`
+  result, so they cannot drift; foreign-faction leaders standing here appear under 駐紮將領 but **not** in
+  the split. No administrator → 無人領取.
 - **`tong` is 統領 / Leadership and now does exactly one thing: it scales the size of a single troop
   purchase** — the base batch is `CHAR_BUY_TROOP_BASE (30) × tongPurchaseMultiplier(tong)`, jittered
   ±`CHAR_BUY_TROOP_JITTER` (25%), hard-capped by gold and the spec's batch max (100). The old cap
@@ -1326,6 +1391,18 @@ instead of scattering.
   - **`tong` no longer defends.** That is 體魄 / `ti` now (`BATTLE_DEF_TI_MULT`). Both use
     `× (1 + x/30)`, but they answer different questions: `wu` is "how hard they hit", `ti` is "how
     well they hold", and `tong` is "how many troops can they buy at once".
+- **A new king destabilises the faction** (Oct 2026). When a faction crowns a new king — an heir
+  after a natural or battle death (`KING_INHERITED`) — its leaders get
+  `+DEFECTION_NEW_KING_DELTA` (2) per round for `DEFECTION_NEW_KING_ROUNDS` (10) rounds, written by
+  `defectionEvents` (phase 7), one row per round like the cooling. The window is rebuilt from the
+  `Event` table (KING_INHERITED's `data` carries `factionId`); several successions inside one
+  window take the **earliest** — two kings in a row is still one unstable period, and stacking a
+  second window would double-count the same signal. The king himself is **not** on the list: he
+  never defects (`loyaltyCheck` does not roll kings), and he is the transition's beneficiary, not
+  the wavering party. Timing mirrors the friend rule: a battle succession is written in phase 10
+  after phase 7 has run, so it starts the next round; a natural succession (phase 3) starts the same
+  round. Defector-founded and collapse-founded factions get no window — there is no
+  `KING_INHERITED` row, and a faction those leaders chose to join is not a power vacuum.
 - **`defectionBase` and `DefectionEvent.delta` are integers**, migration
   `20261017000000_ambition_and_delta_to_int`. Both were `Float`.
   - **`Rng.gaussianInt(mean, sigma, min, max)` is what draws them**, not `Math.round` at each call
@@ -1853,12 +1930,31 @@ suicide order.
 `server/phases/aiMove.ts` no longer `rng.pick`s an enemy neighbour and charges in. Per adjacent enemy
 place the estimated attack (`estimateAttack`, `src/lib/warEstimate.ts` — the same coefficients as
 `battle.ts`, rolls at their expected 1.0) must clear the estimated defence
-(`estimatePlaceDefence`: garrison + defending leaders × fortress) times `AI_ATTACK_ADVANTAGE` (1.2);
-among the viable ones it attacks the **weakest**. No winnable target → **wait in place** (the economy
-phase re-arms it). A troops-0 survivor never charges. And a **threatened administrator stays home**
+(`estimatePlaceDefence`: garrison + defending leaders × fortress) times `AI_ATTACK_ADVANTAGE` (0.8 —
+"do I dare bite this", not "can I win in one round"); among the viable ones it attacks the **weakest**.
+No winnable target → **wait in place** (the economy phase re-arms it). A troops-0 survivor never
+charges. And a **threatened administrator stays home**
 (`isThreatened`: some hostile leader present or adjacent whose estimated attack clears the local defence
 — a lower bar than the attacking side, defence wakes before offence commits): marching the admin out
 would drop the place's defence by its strongest defender. The king's signal outranks staying.
+
+**An enemy at my feet means stay and fight** (Oct 2026): when the place a leader is standing in hosts
+a hostile leader — the defender's own ground, or the invader standing on enemy land — they do not
+move this round; the battle phase resolves the war. Before this, `aiMove`'s enemy search covered only
+*adjacent* places, and among the "viable" ones the weakest wins the sort — a defence-0 unowned
+neighbour always beat the enemy actually standing there. The defender walked off their own contested
+place, the invader wandered off too, and since `aiMove` runs *before* the battle the two were never
+co-located when it mattered. A signal outranks staying; a factionless leader never fights, so they
+keep marching.
+
+**The enemy search compares against the character's own faction, not the place they stand on**
+(Oct 2026). Both the attack search and the signal-march stepping stones used `currentPlaceFaction`
+as the reference, which is wrong twice over: a leader standing on **unowned** land saw their own
+faction's neighbours as targets, and a leader standing on **enemy** ground could only route through
+enemy territory (their own faction's places looked hostile too). The reference is now
+`char.factionId` — hostile-owned neighbours are the enemy, and unowned plus friendly land is
+passable. For a leader standing on their own faction's place the two references agree, which is why
+this stayed invisible for so long.
 
 ### Spending postures: each leader spends differently
 

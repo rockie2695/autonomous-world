@@ -22,8 +22,17 @@ describe('strikeDamage', () => {
     expect(tough).toBeGreaterThan(0);
   });
 
-  it('never goes negative', () => {
-    expect(strikeDamage(1, 5)).toBe(0);
+  it('a landed strike always costs at least one troop (tiny armies can still kill)', () => {
+    // 1 攻擊力 vs 防禦 5：floor(1/40) = 0，但打中了就要扣 1 兵——否則 1 兵軍隊之間
+    // 的戰爭永遠 0 傷害、八輪空轉後靠退兵擲骰收場 /
+    // 1 attack power vs defence 5: floor(1/40) = 0, but a landed strike costs one
+    // troop — otherwise wars between 1-troop armies deal 0 damage for eight rounds
+    // and end in an escape roll
+    expect(strikeDamage(1, 5)).toBe(1);
+  });
+
+  it('no attack power, no strike, no damage', () => {
+    expect(strikeDamage(0, 5)).toBe(0);
   });
 });
 

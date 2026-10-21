@@ -40,18 +40,18 @@ export async function defectionEvents(
 ): Promise<void> {
   // 取得所有存活角色 / Get all living characters
   //
-  // 查詢欄位剛好只剩這些：`factionId` 與 `defectionBase` 原本是為了「君王統率降低野心」而查的，
-  // 那條規則移除之後**沒有任何地方讀得到它們**，所以一併拿掉 —— 多查出來的欄位不會報錯，
-  // 只會讓人以為這個階段還在意那兩件事。
+  // `factionId` 與 `isKing` 給「新王登基」窗口用（見下）；`defectionBase` 在君王
+  // 統率規則移除後已無人讀，維持不查。
   //
-  // The select is now exactly this: `factionId` and `defectionBase` existed only for the "king's tong
-  // reduces defectionBase" rule, and nothing reads them since that rule was removed. Fetching them
-  // anyway cannot fail — it just implies this phase still cares about those two things.
+  // `factionId` and `isKing` feed the new-king window (below); `defectionBase` has had
+  // no reader since the king's-tong rule was removed and stays unqueried.
   const characters = await prisma.character.findMany({
     where: { worldId, alive: true },
     select: {
       id: true,
       lastPromotedRound: true,
+      factionId: true,
+      isKing: true,
     },
   });
 
@@ -127,6 +127,39 @@ export async function defectionEvents(
     where: { worldId },
     select: { aId: true, bId: true, sinceRound: true },
   });
+
+  // ── 新王登基窗口 / The new-king window ────────────────────────────────────
+  // 勢力換了新君王之後的 DEFECTION_NEW_KING_ROUNDS 回合是權力交接的窗口。從
+  // `Event` 表重建（與冷卻同一個做法——「何時繼位」本來就是事件表的一等資料，
+  // 野心不存任何狀態），KING_INHERITED 的 `data` 帶著 `factionId`。同一窗口內
+  // 多次繼位取**最早**的一次：連著換兩個王仍然是同一個不穩定期，窗口再疊一層
+  // 只會把同一個訊息算重。
+  //
+  // The DEFECTION_NEW_KING_ROUNDS rounds after a faction crowns a new king are a
+  // hand-over window. Rebuilt from the `Event` table (the same approach as the
+  // cooling — "when did the throne change" is already first-class there, and
+  // defectionBase stores no state); KING_INHERITED's `data` carries the
+  // `factionId`. Several successions inside one window take the **earliest**:
+  // two kings in a row is still one unstable period, and layering a second window
+  // would double-count the same signal.
+  const successionWindowStart = round - CONFIG.DEFECTION_NEW_KING_ROUNDS + 1;
+  const successions = await prisma.event.findMany({
+    where: {
+      worldId,
+      type: 'KING_INHERITED',
+      round: { gte: successionWindowStart },
+    },
+    select: { round: true, data: true },
+  });
+  const newKingSince = new Map<string, number>();
+  for (const succession of successions) {
+    const factionId = (succession.data as { factionId?: unknown } | null)?.factionId;
+    if (typeof factionId !== 'string' || !factionId) continue;
+    const existing = newKingSince.get(factionId);
+    if (existing === undefined || succession.round < existing) {
+      newKingSince.set(factionId, succession.round);
+    }
+  }
 
   /** 某人 → 其朋友（連同友誼成立的回合）/ who a leader is friends with, and since when */
   const friends = new Map<string, Array<{ id: string; sinceRound: number }>>();
@@ -248,6 +281,33 @@ export async function defectionEvents(
           },
         });
       }
+    }
+
+    // ── 新王登基 / A new king ascends ────────────────────────────────────────
+    // 我所屬的勢力在窗口內換了新君王：每回合 +2。**君王本人不在名單上**——他不會
+    // 叛變（loyaltyCheck 根本不擲君王），而且新王是交接的受益人，不是動搖的人。
+    // 時序與朋友叛逃同一條：戰死的繼位寫在階段 10，本階段（7）當回合已跑過，所以
+    // 從下一回合起算；老死的繼位寫在階段 3，當回合就開始。
+    //
+    // My faction crowned a new king inside the window: +2 per round. **The king
+    // himself is not on the list** — he never defects (loyaltyCheck does not roll
+    // kings), and the new king is the transition's beneficiary, not the wavering
+    // party. The timing mirrors the friend rule: a battle succession is written in
+    // phase 10 after this phase (7) has run, so it starts the next round; a natural
+    // succession (phase 3) starts the same round.
+    const successionRound = char.factionId
+      ? newKingSince.get(char.factionId)
+      : undefined;
+    if (successionRound !== undefined && !char.isKing) {
+      await prisma.defectionEvent.create({
+        data: {
+          worldId,
+          charId: char.id,
+          round,
+          delta: CONFIG.DEFECTION_NEW_KING_DELTA,
+          reason: `New king since round ${successionRound}; `,
+        },
+      });
     }
 
     // 野心是**固定初始值**，所以這裡不再改寫 `Character.defectionBase`，只寫帳本。

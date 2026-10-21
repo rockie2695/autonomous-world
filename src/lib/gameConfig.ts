@@ -199,6 +199,19 @@ export const CONFIG = {
   DEFECTION_FRIEND_DELTA: 2, // 每位叛逃的朋友寫入的 delta / Delta written per friend who defected
   DEFECTION_FRIEND_ROUNDS: 10, // 影響持續回合數 / Rounds a friend's defection keeps counting
 
+  // ── 新王登基 / A new king ascends ────────────────────────────────────────
+  // 勢力換了新君王（老王過世或戰死，最年長子女繼位）之後是權力交接的窗口：
+  // 手下將領更想動。帳本形制與冷卻相同——**每回合各寫一筆**，窗口過了自然停止；
+  // 君王本人不在名單上（他不會叛變，而且他是交接的受益人）。
+  //
+  // A faction with a freshly ascended king (an heir after a natural or battle
+  // death) is in a hand-over window: its leaders are likelier to move. The ledger
+  // shape matches the cooling — **one row per round**, stopping on its own when the
+  // window closes. The king himself is not on the list (he never defects, and he
+  // is the transition's beneficiary, not the wavering party).
+  DEFECTION_NEW_KING_DELTA: 2, // 新王窗口內每回合的 delta / Delta per round inside the new-king window
+  DEFECTION_NEW_KING_ROUNDS: 10, // 窗口持續回合數 / Rounds the window stays open
+
   // ── 叛變 / Defection ─────────────────────────────────────────────────────
   // 野心是**固定的初始值**（和 ti／wu／tong 一樣），不再隨事件被改寫；會變的是
   // 「叛變值」，而它**不存資料庫**、每回合重算。

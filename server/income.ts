@@ -249,3 +249,34 @@ export function splitIncome(
   // "Everyone else" is always the remainder, so the three shares sum to `income`
   return { king, admin, others: Math.floor(income - king - admin) };
 }
+
+/**
+ * 這個地方的「其他人」是誰：**受控勢力**裡、既不是君王也不是行政官的存活將領。
+ * 異勢力的將領（入侵者、過客）不領這個地方的錢——他們不是這裡的人；他們站的
+ * 地方是別人的，收入自然也是別人的。回傳空陣列代表「其他人」那份無人可分，
+ * splitIncome 會把它併給行政官。
+ *
+ * Who counts as "everyone else" at a place: the **controlling faction's** living
+ * leaders other than the king and the administrator. A leader of another faction
+ * (an invader, a passer-by) is not paid from this place — they are not its
+ * people; the ground they stand on belongs to someone else, and so does its
+ * income. An empty array means the "others" bucket has nobody to pay and
+ * splitIncome folds it into the administrator's share.
+ *
+ * 純函式，模擬（economy）與地點彈窗（本回合分成）**共用同一份**——預覽與模擬
+ * 各寫一份，遲早會對不上。
+ *
+ * Pure; the simulation (economy) and the place popup (本回合分成) **share this
+ * one definition** — a preview that restates the rule separately will drift.
+ */
+export function othersOf<T extends { id: string; factionId: string | null }>(
+  chars: ReadonlyArray<T>,
+  placeFactionId: string | null,
+  kingId: string | null,
+  adminId: string | null
+): T[] {
+  if (!placeFactionId) return [];
+  return chars.filter(
+    (c) => c.factionId === placeFactionId && c.id !== kingId && c.id !== adminId
+  );
+}

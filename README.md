@@ -448,8 +448,11 @@ view of faction power rather than another rendering of one metric.
 ### Battles
 - Characters move 1 territory per turn
 - When enemy leaders occupy the same place they fight a **multi-round war**: every round each
-  combatant strikes in speed order with their own dice, costing the target troops (troops are HP) —
-  a war can take several rounds before one side breaks
+  combatant strikes in speed order with their own dice, costing the target troops (troops are HP; a
+  landed strike always costs at least one) — a war can take several rounds before one side breaks
+- **Meeting on the same ground means fighting the same round**: a place captured while enemy leaders
+  still stand in it goes straight to a war round, and a leader with an enemy at their feet does not
+  walk away from it
 - The defence fights behind walls: garrison damage first, the defending leaders after, and the fortress
   mitigates every strike; everyone fatigues per round, so the attacker loses long wars
 - The war ends when the defence is gone (capture), the attackers are gone (hold), the attackers fall
@@ -459,7 +462,7 @@ view of faction power rather than another rendering of one metric.
 
 ### Economy
 - Each territory generates income based on market level
-- Income is split: **30% king, 40% administrator, 30% shared among everyone else**. A vacant king or an empty "everyone else" bucket has its share absorbed by whoever is present, because the total is fixed and gold cannot vanish 
+- Income is split: **30% king, 40% administrator, 30% shared among everyone else** — "everyone else" means the **controlling faction's** leaders present; a leader of another faction standing in the place (an invader) is not paid from it. A vacant king or an empty "everyone else" bucket has its share absorbed by whoever is present, because the total is fixed and gold cannot vanish
 - **No administrator means nobody is paid.** The administrator is the person actually running the place, so without one the place is ungoverned, and quietly routing the money to a distant king would pay someone who is not there
 - **Economy (jing)** scales the place's whole output through the **administrator**: the pie is
   `placeIncome(market) × (1 + (admin jing − 17.5) / 30)` (floored to whole gold), so a high-`jing`

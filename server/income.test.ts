@@ -19,6 +19,7 @@ import {
   placeOutput,
   purchaseBatch,
   tongPurchaseMultiplier,
+  othersOf,
 } from './income';
 import { placeIncome } from '@/lib/placeEffects';
 import { CONFIG } from '@/lib/gameConfig';
@@ -136,6 +137,41 @@ describe('Income split', () => {
       expect(split.king).toBe(0);
       expect(split.admin).toBe(0);
       expect(split.others).toBe(0);
+    });
+  });
+
+  describe('othersOf', () => {
+    // 一個地方的駐場將領：受控勢力的君王、行政官與兩名將領，外加一名異勢力入侵者
+    // 與一名無所屬的過客 / A place's residents: the controlling faction's king,
+    // administrator and two leaders, plus a foreign-faction invader and a
+    // factionless passer-by
+    const chars = [
+      { id: 'king', factionId: 'f1' },
+      { id: 'admin', factionId: 'f1' },
+      { id: 'own1', factionId: 'f1' },
+      { id: 'own2', factionId: 'f1' },
+      { id: 'invader', factionId: 'f2' },
+      { id: 'loner', factionId: null },
+    ];
+
+    it('pays only the controlling faction, minus the king and the admin', () => {
+      const others = othersOf(chars, 'f1', 'king', 'admin');
+      expect(others.map((c) => c.id)).toEqual(['own1', 'own2']);
+    });
+
+    it('never pays a foreign-faction leader standing in the place', () => {
+      const others = othersOf(chars, 'f1', 'king', 'admin');
+      expect(others.some((c) => c.id === 'invader')).toBe(false);
+      expect(others.some((c) => c.id === 'loner')).toBe(false);
+    });
+
+    it('an unowned place pays nobody from the others bucket', () => {
+      expect(othersOf(chars, null, 'king', 'admin')).toEqual([]);
+    });
+
+    it('vacant seats exclude nobody extra', () => {
+      const others = othersOf(chars, 'f1', null, null);
+      expect(others.map((c) => c.id)).toEqual(['king', 'admin', 'own1', 'own2']);
     });
   });
 

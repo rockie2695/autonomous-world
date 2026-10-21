@@ -72,12 +72,40 @@ export interface DefectionInput {
  * produces an DefectionEvent, so there is no delta to add and a constant is the only option.
  * Everything event-shaped comes from real deltas in the database.
  */
+export interface DefectionBreakdown {
+  /** 基礎：野心（固定初始值）/ the base: the fixed initial ambition */
+  base: number;
+  /** 忠誠標籤與君王不同的罰分（CONFIG.DEFECTION_VALUE_LOYALTY_PENALTY）/
+   * The loyalty-mismatch penalty (CONFIG.DEFECTION_VALUE_LOYALTY_PENALTY) */
+  loyaltyPenalty: number;
+  /** 本回合帳本 delta 總和（可負）/ this round's ledger delta total (can be negative) */
+  eventDelta: number;
+  /** 合計 / the total */
+  total: number;
+}
+
+/**
+ * 叛變值的**構成**：三個部分各自攤開，讓彈窗的 tooltip 能顯示「怎麼算出來的」。
+ * `defectionValue` 委托這裡——值與明細**同出一源**，不可能漂移。
+ *
+ * The **breakdown** of the defection value: the three parts laid out so the popup's
+ * tooltip can show *how it was computed*. `defectionValue` delegates here — the
+ * value and the breakdown come from **one source** and cannot drift.
+ */
+export function defectionBreakdown(input: DefectionInput): DefectionBreakdown {
+  const loyaltyPenalty = input.loyaltyMismatch
+    ? CONFIG.DEFECTION_VALUE_LOYALTY_PENALTY
+    : 0;
+  return {
+    base: input.defectionBase,
+    loyaltyPenalty,
+    eventDelta: input.eventDeltaSum,
+    total: input.defectionBase + loyaltyPenalty + input.eventDeltaSum,
+  };
+}
+
 export function defectionValue(input: DefectionInput): number {
-  return (
-    input.defectionBase +
-    (input.loyaltyMismatch ? CONFIG.DEFECTION_VALUE_LOYALTY_PENALTY : 0) +
-    input.eventDeltaSum
-  );
+  return defectionBreakdown(input).total;
 }
 
 /**

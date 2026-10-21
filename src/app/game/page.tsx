@@ -21,12 +21,18 @@ import type { MapCameraControls } from '@/components/SigmaMap';
 import { LeaderAvatar } from '@/components/LeaderAvatar';
 import { apiFetch } from '@/lib/api';
 import { CONFIG } from '@/lib/gameConfig';
-import { defectionValue, defectionChance } from '@/lib/defection';
+import {
+  defectionBreakdown,
+  defectionValue,
+  defectionChance,
+  DEFECTION_MIDPOINT,
+} from '@/lib/defection';
 import { buildRelationCombatDeltas, effectiveAbility } from '@/lib/relationCombat';
 import {
   splitIncome,
   jingIncomeMultiplier,
   placeOutput,
+  othersOf,
 } from '../../../server/income';
 import {
   BUILDING_MAX_LEVEL,
@@ -1700,6 +1706,57 @@ function LeaderDetail({
   const defectionRate = defectionChance(defection);
 
   /**
+   * 叛變值的**構成明細**（tooltip）：野心 + 忠誠罰分 + 本回合帳本，只列非零項、
+   * 每項寫明來源——「忠誠與君王不同 → +2」這條影響直接看得見。數字與明細來自
+   * `defectionBreakdown`（與模擬同一份）。
+   *
+   * The defection value's **breakdown** (the tooltip): ambition + the loyalty
+   * penalty + this round's ledger, listing only the non-zero terms with each one's
+   * source — "loyalty differs from the king -> +2" is visible directly. The numbers
+   * come from `defectionBreakdown` (the same one the simulation uses).
+   */
+  const defectionTip = useMemo(() => {
+    const bd = defectionBreakdown({
+      defectionBase: char.defectionBase,
+      loyaltyMismatch,
+      eventDeltaSum,
+    });
+    const terms: string[] = [String(bd.base)];
+    if (bd.loyaltyPenalty) {
+      terms.push(
+        '+' + bd.loyaltyPenalty + '（' + t('character.tipDefectionLoyaltyTerm') + '）'
+      );
+    }
+    if (bd.eventDelta !== 0) {
+      const sign = bd.eventDelta > 0 ? '+' : '−';
+      terms.push(
+        sign + Math.abs(bd.eventDelta) + '（' + t('character.tipDefectionLedgerTerm') + '）'
+      );
+    }
+    return [
+      t('character.tipDefectionRule'),
+      terms.join(' + ') + ' = ' + bd.total,
+    ];
+  }, [char.defectionBase, loyaltyMismatch, eventDeltaSum]);
+
+  /**
+   * 叛變**機率**的公式 tooltip：與 `defectionChance` 同一條式，並點出「低於中點
+   * 就是 0」這條容易誤解的規則。
+   * The defection **chance** formula tooltip: the same formula as
+   * `defectionChance`, plus the easily-misread "below the midpoint it is 0" rule.
+   */
+  const rateTip = useMemo(
+    () => [
+      t('character.tipDefectionRateRule', {
+        mid: DEFECTION_MIDPOINT,
+        rate: (CONFIG.DEFECTION_BASE_RATE * 100).toFixed(1),
+      }),
+      defection + ' → ' + (defectionRate * 100).toFixed(1) + '%',
+    ],
+    [defection, defectionRate]
+  );
+
+  /**
    * 同地點關係對戰鬥力的影響，同樣是**用同一組純函式在客戶端重算**。
    *
    * 伺服器在 `battle.ts` 裡用 `buildRelationCombatDeltas()` 算過一次；這裡呼叫同一個
@@ -1862,8 +1919,16 @@ function LeaderDetail({
           ),
         },
         { label: t('character.defectionBase'), value: char.defectionBase, tip: abilityTipLines('defectionBase', char.defectionBase) },
-        { label: t('character.defectionValue'), value: defection.toFixed(1) },
-        { label: t('character.defectionChance'), value: `${(defectionRate * 100).toFixed(1)}%` },
+        {
+          label: t('character.defectionValue'),
+          value: defection.toFixed(1),
+          tip: defectionTip,
+        },
+        {
+          label: t('character.defectionChance'),
+          value: `${(defectionRate * 100).toFixed(1)}%`,
+          tip: rateTip,
+        },
       ],
     },
   ];
@@ -2762,9 +2827,20 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
     ? (factions.find((f) => f.id === place.factionId)?.kingId ?? null)
     : null;
   const kingCharOfPlace = characters.find((c) => c.id === kingIdOfThisPlace) ?? null;
-  const othersHere = placeChars.filter(
-    (c) => c.id !== place.administratorId && c.id !== kingIdOfThisPlace
-  ).length;
+  // 「本回合分成」的名單：與模擬**同一份** othersOf——只有受控勢力的將領分錢，
+  // 異勢力的駐場將領（入侵者）不領。計數與名單共用同一個結果，兩處不可能漂移。
+  //
+  // The 本回合分成 roster: the **same** othersOf as the simulation — only the
+  // controlling faction's leaders are paid; a leader of another faction standing
+  // here (an invader) is not. The count and the list share one result, so the two
+  // cannot drift.
+  const splitRecipients = othersOf(
+    placeChars,
+    place.factionId,
+    kingIdOfThisPlace,
+    place.administratorId
+  );
+  const othersHere = splitRecipients.length;
   const placeSplit = adminChar
     ? splitIncome(
         // 與模擬同一份規則：**整塊餅**先乘行政官的 jing 倍率（地方產出），分配階段
@@ -3203,11 +3279,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                     </span>
                   </div>
                 )}
-                {placeChars
-                  .filter(
-                    (c) => c.id !== kingIdOfThisPlace && c.id !== place.administratorId
-                  )
-                  .map((c) => (
+                {splitRecipients.map((c) => (
                     <div
                       key={c.id}
                       className="flex items-baseline justify-between gap-2 text-base"

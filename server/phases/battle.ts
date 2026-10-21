@@ -35,6 +35,7 @@ import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import { recordMove } from '../moveEvent';
 import { fortressDefenceMult } from '@/lib/placeEffects';
+import { captureLeaderOf } from '@/lib/capture';
 import {
   strikeDamage,
   warFatigue,
@@ -44,7 +45,7 @@ import {
 import { buildRelationCombatDeltas, effectiveAbility } from '@/lib/relationCombat';
 import { buildBattleReport } from '../battleReport';
 import { processDeadLeaders, type DeadLeader } from '../afterDeath';
-import { grantAdmin } from '../adminAssign';
+import { grantAdmin, revokeAdmin } from '../adminAssign';
 
 /**
  * 潰敗或疲勞之後，**活著的將領至少保有 1 名士兵**。
@@ -169,21 +170,17 @@ export async function battle(
   // report's war replay reads it.
 
   // ── 0. 全景查詢 / The full picture ──
+  // 有主地方**不在這裡**抓：下面的佔領階段（A）會改變所有權，戰爭輪（B）要的是
+  // 佔領**之後**的世界——見 B 段前的重抓。
+  // The owned places are **not** fetched here: the capture stage below (A) changes
+  // ownership, and the war rounds (B) want the world *after* those captures — see
+  // the re-fetch before section B.
   const unownedPlaces = await prisma.place.findMany({
     where: { worldId, factionId: null },
     include: {
       characters: {
         where: { alive: true },
         select: { id: true, factionId: true, wu: true, ti: true, speed: true, troops: true, name: true, isKing: true },
-      },
-    },
-  });
-  const places = await prisma.place.findMany({
-    where: { worldId, factionId: { not: null } },
-    include: {
-      characters: {
-        where: { alive: true },
-        select: { id: true, factionId: true, wu: true, tong: true, ti: true, speed: true, troops: true, name: true, isKing: true },
       },
     },
   });
@@ -215,6 +212,18 @@ export async function battle(
     }
     return fought;
   };
+
+  // 逃跑落腳點：戰爭輪裡潰逃者被丟到的鄰地。第一趟掃描（無主之地）在他們落地
+  // **之前**跑過，看不到新來的人——回合結束時就會出現「無主之地站著敵將」的
+  // 不一致狀態（回報的案例：芬妮 逃到 沙海塘，為什麼沒佔領？）。晚佔領趟（見
+  // B 段之後）只掃這些地點，便宜而精確。
+  //
+  // Escape landing spots: the neighbours a routed leader was dropped on. The
+  // first pass (unowned places) ran *before* they landed and never saw the
+  // newcomer, so the round would end with "an unowned place with an enemy leader
+  // on it" — the reported case: 芬妮 fled to 沙海塘, why didn't she take it? The
+  // late pass (after section B) scans exactly these spots: cheap and precise.
+  const lateCaptureCandidates = new Set<string>();
 
   // 出手紀錄（收尾批次寫入）/ strike rows, batch-written once at the end
   type StrikeRow = {
@@ -259,6 +268,7 @@ export async function battle(
         }
       }
       if (escapePlaceId) {
+        lateCaptureCandidates.add(escapePlaceId);
         await prisma.character.update({
           where: { id: member.id },
           data: { troops: 0, placeId: escapePlaceId },
@@ -325,6 +335,69 @@ export async function battle(
     return 'killed';
   };
 
+  /**
+   * 地點易主時的行政官席位交接：舊主的席位先免職（+1 帳本、ADMIN_REMOVED 事件），
+   * 再把席位交給佔領者。以前只在席位**空著**時才任命——舊主的人會繼續佔著席位，
+   * 每回合領新主 40% 的分成。佔領路徑**不受**行政官冷卻限制（既定規則：
+   * captures still apply）。
+   *
+   * The administrator seat handover when a place changes hands: the old owner's
+   * seat is revoked first (+1 ledger, an ADMIN_REMOVED event), then granted to the
+   * capturer. The old rule only appointed when the seat was **vacant** — the old
+   * owner's administrator kept the seat and collected the new owner's 40% every
+   * round. Capture paths are **not** cooldown-gated (the standing rule: captures
+   * still apply).
+   */
+  const transferAdminSeat = async (
+    placeRef: { id: string; name: string },
+    oldAdministratorId: string | null,
+    newLeader: { id: string; name: string; factionId: string | null }
+  ): Promise<void> => {
+    if (!newLeader.factionId) return;
+    let replaced = false;
+    if (oldAdministratorId && oldAdministratorId !== newLeader.id) {
+      const old = await prisma.character.findUnique({
+        where: { id: oldAdministratorId },
+        select: { id: true, name: true, alive: true },
+      });
+      // 死人佔著的席位視同空缺——免職一具屍體只會寫出噪音 /
+      // A seat held by a corpse counts as vacant — revoking a corpse is pure noise
+      if (old && old.alive) {
+        replaced = true;
+        await revokeAdmin({
+          worldId,
+          round,
+          // **帳本記下一回合**：佔領在階段 10，本回合的忠誠檢查（階段 8）已經跑過，
+          // 帳本行只在它 round 所指的那一回合被加總——不 +1 的話「被奪地 +1」永遠
+          // 餵不到任何一次擲骰。彈窗在下一回合的「本回合影響」看得到這筆。
+          //
+          // **The ledger row lands on the next round**: a capture is phase 10 and
+          // this round's loyalty check (phase 8) has already run, and a ledger row
+          // is only summed on the round its `round` names — without the +1 the
+          // "lost their place" +1 would never feed any roll. The popup's 本回合影響
+          // shows it from the next round on.
+          ledgerRound: round + 1,
+          place: placeRef,
+          char: old,
+          newAdmin: { id: newLeader.id, name: newLeader.name },
+          logEvent: true,
+        });
+      }
+    }
+    // 被取代時只記 ADMIN_REMOVED（免職事件已經說了是誰接任）；席位本來空著才記
+    // ADMIN_ASSIGNED——與出生指派同一個慣例。
+    // When replaced, only ADMIN_REMOVED is logged (the removal event already says
+    // who succeeds); ADMIN_ASSIGNED is logged only when the seat was vacant — the
+    // same convention as the spawn path.
+    await grantAdmin({
+      worldId,
+      round,
+      place: placeRef,
+      char: { id: newLeader.id, name: newLeader.name },
+      logEvent: !replaced,
+    });
+  };
+
   // ── A. 無主之地：自由佔領（無駐軍）或圍攻（有駐軍，多輪）──
   // Unowned places: a free capture when undefended, otherwise a multi-round siege.
   for (const place of unownedPlaces) {
@@ -334,10 +407,13 @@ export async function battle(
     if (attackers.length === 0) continue;
 
     if (place.garrison <= 0) {
-      // 無駐軍：站上去就佔領（自由佔領，與舊制相同）/
-      // Undefended: walking in takes the place (the same free capture as before)
-      const leader = [...attackers].sort((a, b) => b.speed - a.speed)[0]!;
-      if (!leader.factionId) continue;
+      // 無駐軍：站上去就佔領。佔領者規則收在 `captureLeaderOf`（有勢力、有兵、
+      // 最快）——晚佔領趟引用**同一份**，兩處不會漂移。
+      // Undefended: walking in takes the place. The rule lives in
+      // `captureLeaderOf` (factioned, troop-bearing, fastest) — the late pass
+      // quotes the **same** one, so the two cannot drift.
+      const leader = captureLeaderOf(place.characters);
+      if (!leader) continue;
       await prisma.place.update({
         where: { id: place.id },
         data: { factionId: leader.factionId, garrison: 0 },
@@ -358,14 +434,11 @@ export async function battle(
           },
         },
       });
-      if (!place.administratorId) {
-        await grantAdmin({
-          worldId,
-          round,
-          place: { id: place.id, name: place.name },
-          char: { id: leader.id, name: leader.name },
-        });
-      }
+      await transferAdminSeat(
+        { id: place.id, name: place.name },
+        place.administratorId,
+        leader
+      );
       continue;
     }
 
@@ -460,14 +533,11 @@ export async function battle(
           },
         },
       });
-      if (!place.administratorId) {
-        await grantAdmin({
-          worldId,
-          round,
-          place: { id: place.id, name: place.name },
-          char: { id: leader.id, name: leader.name },
-        });
-      }
+      await transferAdminSeat(
+        { id: place.id, name: place.name },
+        place.administratorId,
+        leader
+      );
       continue;
     }
 
@@ -487,13 +557,40 @@ export async function battle(
     }
   }
 
+  // ── 佔領後重抓有主地方 / Re-fetch the owned places after the captures ──
+  // 上面（A 段）剛剛可能佔領了幾個地方，而**敵對將領可能還站在裡面**——開場的
+  // 查詢在佔領之前取樣，看不到新的所有權。這裡重抓一次，讓這些地方進入下面的
+  // 戰爭輪：同處一地的兩名敵將**真的會開打**，而不是佔領者拿牌、入侵者被無視。
+  // 順手刷新逃跑目的地對照：本回合剛被佔領的地方在新圖裡是「有主」，潰逃者
+  // 不能把它當成無主之地逃進去。
+  //
+  // Section A may just have captured several places while **hostile leaders were
+  // still standing in them** — the opening query sampled before those captures and
+  // cannot see the new ownership. Re-fetching here lets those places enter the war
+  // rounds below: two hostile leaders sharing a place **actually fight**, instead
+  // of the capturer taking the prize and the intruder being ignored. The escape
+  // map is refreshed with them: a place captured this round is owned in the new
+  // picture, so a routed leader cannot flee into it as if it were unowned land.
+  const ownedPlaces = await prisma.place.findMany({
+    where: { worldId, factionId: { not: null } },
+    include: {
+      characters: {
+        where: { alive: true },
+        select: { id: true, factionId: true, wu: true, tong: true, ti: true, speed: true, troops: true, name: true, isKing: true },
+      },
+    },
+  });
+  for (const refetched of ownedPlaces) {
+    placeFactionMap.set(refetched.id, refetched.factionId);
+  }
+
   // ── B. 有主地方：戰爭輪 ───────────────────────────────────────────────────
   // 每個被攻打的地方一輪：全場按速度降序，每人出手一次打最強的活著的敵人；
   // 傷害扣兵力；兵力歸零者逃亡擲骰或陣亡。一輪結束後判定戰爭走向。
   // Each besieged place fights one round: everyone strikes in speed order, damage
   // costs troops, a zeroed member flees or dies, and the war's direction is decided
   // after the pass.
-  for (const place of places) {
+  for (const place of ownedPlaces) {
     if (!place.factionId) continue;
 
     const defenders = place.characters.filter(
@@ -729,14 +826,11 @@ export async function battle(
           },
         },
       });
-      if (!place.administratorId) {
-        await grantAdmin({
-          worldId,
-          round,
-          place: { id: place.id, name: place.name },
-          char: { id: leader.id, name: leader.name },
-        });
-      }
+      await transferAdminSeat(
+        { id: place.id, name: place.name },
+        place.administratorId,
+        leader
+      );
     } else if (verdict === 'rout' || verdict === 'retreat') {
       // 攻方潰逃／退兵：每人各自逃亡擲骰或陣亡。守軍不動（他們在家）/
       // The attackers rout or retreat: each flees or dies. The defence stays (it is
@@ -760,6 +854,62 @@ export async function battle(
     }
     // 'hold' / 'continue'：守住了或繼續——都不需要額外處理 /
     // 'hold' / 'continue': held or still grinding — nothing more to do
+  }
+
+  // ── 晚佔領：戰爭輪之後補掃逃跑落腳點 / Late capture: re-scan escape landings ──
+  // 戰爭輪的**逃跑**會把潰逃者丟到無主之地——第一趟掃描早已跑過，那個地方這一
+  // 回合就不會被佔領，回合結束時是「無主之地站著敵將」。這裡補一次：只做**駐軍
+  // 為 0 的自由佔領**，佔領者規則與第一趟同一份（`captureLeaderOf`）。**圍城
+  // 不重跑**——它本來就是跨回合的（增援自然加入），同一回合跑兩次會雙倍傷害
+  // 與疲勞。佔領者可能是逃過來的那位本人（疲勞迴圈已把他保底回 1 兵）。
+  //
+  // The war rounds' **escapes** drop a routed leader on unowned land — the first
+  // pass ran long before, so the place would go uncaptured this round and the
+  // round would end with "an unowned place with an enemy leader on it". This pass
+  // closes the gap: **the free capture only** (garrison 0), with the same
+  // `captureLeaderOf` rule as the first pass. **A siege is not re-run** — it
+  // spans rounds by design (reinforcements simply join), and running it twice in
+  // one round would double the damage and the fatigue. The capturer may well be
+  // the escapee themselves (the fatigue loop has floored them back to 1 troop).
+  for (const candidateId of lateCaptureCandidates) {
+    const place = await prisma.place.findUnique({
+      where: { id: candidateId },
+      include: {
+        characters: {
+          where: { alive: true },
+          select: { id: true, factionId: true, wu: true, ti: true, speed: true, troops: true, name: true, isKing: true },
+        },
+      },
+    });
+    // 已易主或仍在圍城：不動 / already owned, or still under siege: leave it
+    if (!place || place.factionId !== null || place.garrison > 0) continue;
+    const leader = captureLeaderOf(place.characters);
+    if (!leader) continue;
+    await prisma.place.update({
+      where: { id: place.id },
+      data: { factionId: leader.factionId, garrison: 0 },
+    });
+    await prisma.event.create({
+      data: {
+        worldId,
+        round,
+        type: 'PLACE_CAPTURED',
+        data: {
+          charId: leader.id,
+          charName: leader.name,
+          placeId: place.id,
+          placeName: place.name,
+          factionId: leader.factionId,
+          garrisonFought: 0,
+          report: null,
+        },
+      },
+    });
+    await transferAdminSeat(
+      { id: place.id, name: place.name },
+      place.administratorId,
+      leader
+    );
   }
 
   // 出手紀錄批次寫入（戰爭回放的資料來源）/

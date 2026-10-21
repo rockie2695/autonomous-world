@@ -29,10 +29,23 @@ export function strikeDamage(
   defenceFactor: number
 ): number {
   const factor = Math.max(0.0001, defenceFactor);
-  return Math.max(
-    0,
-    Math.floor(attackPower / (factor * CONFIG.BATTLE_HITS_PER_KILL))
+  const floored = Math.floor(
+    attackPower / (factor * CONFIG.BATTLE_HITS_PER_KILL)
   );
+  // **命中至少扣 1 兵**：只要這一擊有攻擊力（attackPower > 0），傷害就不會是 0。
+  // 否則小部隊的戰爭永遠空轉——1 兵 vs 1 兵的攻擊力約 1.3，除以（防禦 × 8）後取整
+  // 恆為 0，打八輪雙方兵力紋絲不動，最後只靠 BATTLE_MAX_ROUNDS 退兵收場（逃亡
+  // 擲骰通常就是死）。「8 擊換 1 兵」對 ≥8 兵的軍隊仍然成立：那裡的 floor 本來就 ≥1。
+  //
+  // **A landed strike always costs at least one troop**: as long as the strike
+  // carries any attack power (attackPower > 0), the damage is never 0. Otherwise a
+  // small army's war spins forever — 1 troop vs 1 troop is ~1.3 attack power,
+  // which divides by (defence × 8) to a floored 0, so eight rounds leave both
+  // sides untouched and the war ends only at BATTLE_MAX_ROUNDS with an escape
+  // roll that usually kills. "8 hits per troop" still holds for armies of 8+:
+  // the floor is already ≥ 1 there.
+  if (floored <= 0 && attackPower > 0) return 1;
+  return Math.max(0, floored);
 }
 
 /**

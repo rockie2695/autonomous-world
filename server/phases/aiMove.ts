@@ -218,10 +218,15 @@ export async function aiMove(
       }
 
       // 尋找可更接近目標的相鄰地點（BFS 深度 1）/ Find adjacent place that gets closer to target (BFS depth 1)
-      // 目前先移至任一非敵方佔領的相鄰地點 / For now, just move to any adjacent place that's not owned by enemy
+      // 跳過**敵對**佔領的鄰地；無主與友方鄰地都可以當跳板。比較基準同樣是角色
+      // 自己的勢力——否則站在敵地上接令的人，只能沿著敵人的領土行軍。
+      // Skip **hostile**-owned neighbours; unowned and friendly ones both work as
+      // stepping stones. The reference is again the character's own faction —
+      // otherwise a leader taking a call from enemy ground could only march
+      // through enemy territory.
       for (const neighbor of neighbors) {
         const neighborFaction = placeFactionMap.get(neighbor);
-        if (neighborFaction !== currentPlaceFaction) continue; // 跳過敵方地點 / Skip enemy places
+        if (neighborFaction !== null && neighborFaction !== char.factionId) continue; // 跳過敵方地點 / Skip hostile places
         await prisma.character.update({
           where: { id: char.id },
           data: { placeId: neighbor },
@@ -238,6 +243,33 @@ export async function aiMove(
         break;
       }
       continue;
+    }
+
+    // ── 腳下有敵人：留在原地打 ──
+    // 我所在的地方**駐著敵對將領**（我是守方，或我是踩上敵地的入侵者）就不移動：
+    // 戰鬥階段（階段 10）會解析這場戰爭。以前 aiMove 只看**相鄰**地點——守方會丟下
+    // 被人踩著的自家地盤、去佔一個防禦為 0 的空地方，入侵者也不會留在敵地上開戰，
+    // 兩人各走各的路，永遠碰不上（aiMove 跑在戰鬥之前，走掉了就打不成）。
+    // 號令優先於留守：上面的分支已經 continue。無所屬的將領不參戰，照樣行軍。
+    //
+    // ── An enemy at my feet: stay and fight ──
+    // When the place I am standing in **hosts a hostile leader** (I am the
+    // defender, or the invader standing on enemy ground), I do not move: the
+    // battle phase (phase 10) resolves that war. aiMove used to look only at
+    // **adjacent** places — a defender would abandon their own place with an enemy
+    // inside it to go grab a defence-0 empty one, and an invader would not stay to
+    // press the attack, so the two walked apart and never met (aiMove runs before
+    // the battle, and once they walk off there is no fight to resolve). A signal
+    // outranks staying: that branch already continued above. A factionless leader
+    // never fights, so they keep marching.
+    if (char.factionId) {
+      const hostileHere = (residentsByPlace.get(char.placeId) ?? []).some(
+        (r) =>
+          r.id !== char.id &&
+          r.factionId !== null &&
+          r.factionId !== char.factionId
+      );
+      if (hostileHere) continue;
     }
 
     // ── 受威脅的行政官留守 ──
@@ -277,10 +309,17 @@ export async function aiMove(
     if (char.factionId) {
       const neighbors = adjacent.get(char.placeId) ?? [];
 
-      // 尋找敵方地點（不同陣營或無主）/ Find enemy places (different faction or unowned)
+      // 尋找敵方地點（敵方勢力或無主）。比較基準是**角色自己的勢力**，不是腳下
+      // 地點的勢力：站在無主之地上的人，不該把自己勢力的鄰地當成目標；站在敵地上
+      // 的人，也不該把友方鄰地當成目標。無主鄰地照樣是目標——誰都可以去佔。
+      // Find enemy places (hostile factions or unowned). The reference is the
+      // **character's own faction**, not the current place's: someone standing on
+      // unowned land must not target their own faction's neighbours, and someone
+      // standing on enemy ground must not target friendly ones. Unowned neighbours
+      // stay targets — anyone may take them.
       const enemyPlaces = neighbors.filter((n) => {
         const nFaction = placeFactionMap.get(n);
-        return nFaction !== currentPlaceFaction;
+        return nFaction !== char.factionId;
       });
 
       if (enemyPlaces.length > 0) {

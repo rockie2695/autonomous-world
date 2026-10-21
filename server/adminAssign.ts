@@ -165,6 +165,22 @@ export interface RevokeAdminParams {
   logEvent?: boolean;
   /** 額外寫入 ADMIN_REMOVED 事件 data 的欄位 / Extra fields merged into the ADMIN_REMOVED Event data */
   eventData?: Record<string, unknown>;
+  /**
+   * 這筆 delta 要餵給**哪一回合**的忠誠檢查；預設 = `round`（免職與檢查同一回合：
+   * 出生指派是階段 2、手動指派寫的是下一個將跑的回合）。**佔領路徑必須傳
+   * `round + 1`**：佔領發生在階段 10，而忠誠檢查是階段 8——同回合的檢查已經跑過，
+   * 帳本行又只在它 `round` 欄位所指的那一回合被加總，不 +1 的話這筆
+   * +DEFECTION_ADMIN_REPLACED_DELTA 永遠不會被任何一次擲骰算到。
+   *
+   * Which round's loyalty check this delta feeds; defaults to `round` (the removal
+   * and the check share a round: the spawn path is phase 2, and the manual API
+   * writes the next round that will run). **The capture path must pass
+   * `round + 1`**: a capture happens in phase 10 while the loyalty check is phase
+   * 8 — that round's check has already run, and a ledger row is only summed on the
+   * round its `round` names, so without the +1 this
+   * +DEFECTION_ADMIN_REPLACED_DELTA would never be counted by any roll.
+   */
+  ledgerRound?: number;
 }
 
 /**
@@ -198,7 +214,8 @@ async function revokeAdminTx(
     char,
     newAdmin,
     logEvent = false,
-    eventData }: RevokeAdminParams
+    eventData,
+    ledgerRound }: RevokeAdminParams
 ): Promise<void> {
   // 野心是**固定初始值**，免職不再改寫它；這裡只寫一筆帳本，讓忠誠檢查下回合把這筆
   // delta 加進叛變值。原本「順帶清掉未到期減免」的連帶動作也一起退休：現在根本不會
@@ -212,7 +229,10 @@ async function revokeAdminTx(
     data: {
       worldId,
       charId: char.id,
-      round,
+      // 帳本行記在**要餵的那一回合**（預設 = 免職的回合；佔領路徑 = 下一回合）/
+      // The ledger row is stamped with the round it feeds (default: the removal's
+      // round; the capture path: the next one)
+      round: ledgerRound ?? round,
       delta: CONFIG.DEFECTION_ADMIN_REPLACED_DELTA,
       reason: newAdmin
         ? `Removed as administrator of ${place.name} by ${newAdmin.name}`

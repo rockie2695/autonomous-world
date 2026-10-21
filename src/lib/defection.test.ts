@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  defectionBreakdown,
   defectionValue,
   defectionChance,
   DEFECTION_MIDPOINT,
@@ -26,6 +27,34 @@ describe('defectionValue', () => {
     expect(defectionValue({ defectionBase: 20, loyaltyMismatch: false, eventDeltaSum: -2 })).toBe(18);
     // And a +3 event is +3, not +1.
     expect(defectionValue({ defectionBase: 20, loyaltyMismatch: false, eventDeltaSum: 3 })).toBe(23);
+  });
+});
+
+describe('defectionBreakdown', () => {
+  it('lays out the three parts and they sum to the total', () => {
+    const bd = defectionBreakdown({ defectionBase: 16, loyaltyMismatch: true, eventDeltaSum: 3 });
+    expect(bd.base).toBe(16);
+    expect(bd.loyaltyPenalty).toBe(2);
+    expect(bd.eventDelta).toBe(3);
+    expect(bd.total).toBe(21);
+    expect(bd.base + bd.loyaltyPenalty + bd.eventDelta).toBe(bd.total);
+  });
+
+  it('the loyalty penalty is 0 when the tag matches', () => {
+    const bd = defectionBreakdown({ defectionBase: 16, loyaltyMismatch: false, eventDeltaSum: 0 });
+    expect(bd.loyaltyPenalty).toBe(0);
+    expect(bd.total).toBe(16);
+  });
+
+  it('the ledger delta is the real sum, negative included', () => {
+    const bd = defectionBreakdown({ defectionBase: 20, loyaltyMismatch: false, eventDeltaSum: -2 });
+    expect(bd.eventDelta).toBe(-2);
+    expect(bd.total).toBe(18);
+  });
+
+  it('defectionValue delegates to the breakdown (the value and the breakdown cannot drift)', () => {
+    const input = { defectionBase: 16, loyaltyMismatch: true, eventDeltaSum: 3 };
+    expect(defectionValue(input)).toBe(defectionBreakdown(input).total);
   });
 });
 

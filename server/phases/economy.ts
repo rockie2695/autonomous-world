@@ -40,6 +40,7 @@ import {
   tongPurchaseMultiplier,
   placeOutput,
   purchaseBatch,
+  othersOf,
 } from '../income';
 import { spendingPosture, troopReserveRate } from '@/lib/spending';
 import { inTransaction, type TxClient } from '../tx';
@@ -67,7 +68,7 @@ export async function economy(
         // 武/體/經：消費性格（spending.ts）由此推導，決定行政官買兵前留多少 /
         // wu/ti/jing feed the spending posture (spending.ts), which decides how
         // much an administrator keeps aside before buying troops
-        select: { id: true, name: true, gold: true, troops: true, tong: true, wu: true, ti: true, jing: true },
+        select: { id: true, name: true, gold: true, troops: true, tong: true, wu: true, ti: true, jing: true, factionId: true },
       },
       faction: {
         select: { kingId: true },
@@ -149,11 +150,16 @@ export async function economy(
     // (splitIncome) **no longer** multiplies the administrator again — that would
     // square it. The output is **rounded** in `placeOutput`: gold is always whole.
     const income = placeOutput(place.market, adminJing);
-    // 「其他人」= 住在這裡、又既不是君王也不是行政官的角色 /
-    // "Everyone else" = living here, and neither the king nor the administrator
-    const otherChars = place.characters.filter(
-      (c: { id: string }) => c.id !== kingId && c.id !== adminId
-    );
+    // 「其他人」= **受控勢力**裡、既不是君王也不是行政官的駐場將領（othersOf，
+    // 與地點彈窗同一份）。**異勢力的將領不算**：敵對將領站在這裡不會讓他領這個
+    // 地方的錢——入侵者不能領佔領地的收入。君王與行政官另有自己的份額。
+    //
+    // "Everyone else" = the **controlling faction's** leaders here, excluding the
+    // king and the administrator (othersOf — the same one the place popup reads).
+    // A leader of another faction does not count: an enemy standing here is not
+    // paid from this place — an invader does not collect the income of the ground
+    // they are standing on. The king and the administrator have their own shares.
+    const otherChars = othersOf(place.characters, place.factionId, kingId, adminId);
     const split = splitIncome(income, kingJing, adminJing, otherChars.length);
 
     // 分配收入 / Distribute income
