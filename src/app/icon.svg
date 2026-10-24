@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 自治世界的火花標記：深空底 + 青色核心光，與首頁品牌同色 -->
+  <!-- A spark mark on deep space: dark ground + cyan core glow, same hues as the brand -->
+  <rect width="64" height="64" rx="14" fill="#020617"/>
+  <circle cx="32" cy="32" r="10" fill="#22d3ee"/>
+  <circle cx="32" cy="32" r="17" fill="none" stroke="#22d3ee" stroke-opacity="0.35" stroke-width="2"/>
+  <circle cx="32" cy="32" r="24" fill="none" stroke="#22d3ee" stroke-opacity="0.15" stroke-width="2"/>
+  <circle cx="49" cy="32" r="3" fill="#f59e0b"/>
+</svg>

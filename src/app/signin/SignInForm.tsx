@@ -158,7 +158,7 @@ export function SignInForm({
   // forward instead.
   if (isSignedIn && hasPassword) {
     return (
-      <div className="w-full max-w-md text-center">
+      <div className="w-full max-w-lg text-center">
         <h1 className="font-display text-2xl font-bold tracking-wide text-white">
           {t('auth.alreadySignedIn')}
         </h1>
@@ -187,7 +187,7 @@ export function SignInForm({
   }
 
   return (
-    <div className="w-full max-w-md">
+    <div className="w-full max-w-lg">
       {/* 分頁：登入／註冊（已登入時不需要切換）/ Tabs: sign in / register (hidden when
           already signed in, since the form then only sets a password) */}
       {!isSignedIn && (

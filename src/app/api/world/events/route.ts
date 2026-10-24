@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { EventsQuerySchema } from '@/lib/validations';
+import { withRetry } from '@/lib/retry';
 
 export async function GET(request: NextRequest) {
   // 需要認證 / Require authentication
@@ -45,6 +46,20 @@ export async function GET(request: NextRequest) {
   }
 
   const { round } = queryResult.data;
+
+  // 一回合的事件量級是數百筆，所以取回量要有上限：先前這個端點可以一次回傳**所有
+  // 回合**，載荷沒有上限（26 回合就已四千多筆）。單回合查詢取最新的 N 筆再翻回
+  // 舊到新——順序在**伺服器端**定，客戶端不反轉。
+  //
+  // A round holds hundreds of events, so the fetch is bounded: this endpoint used to
+  // return *every* round at once, with no ceiling (already four thousand rows at round
+  // 26). A single-round query takes the newest N and flips them back to oldest-first -
+  // the order is decided **on the server**, the client never reverses.
+  const limitParam = searchParams.get('limit');
+  const parsedLimit = limitParam === null ? NaN : Number.parseInt(limitParam, 10);
+  const limit = Number.isInteger(parsedLimit)
+    ? Math.min(1000, Math.max(1, parsedLimit))
+    : 500;
 
   // 尋找活躍的世界 / Find the active world
   const world = await prisma.world.findFirst({
@@ -80,13 +95,23 @@ export async function GET(request: NextRequest) {
   // millisecond resolution, and events written back to back within a round routinely land in
   // the same millisecond, leaving their order **undefined** without it. That is what makes an
   // ordering bug look intermittent instead of consistently wrong.
-  const events = await prisma.event.findMany({
+  const bounded = round !== undefined;
+  const events = await withRetry(() =>
+    prisma.event.findMany({
     where: {
       worldId: world.id,
       ...(round !== undefined ? { round } : {}),
     },
-    orderBy: [{ round: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
-  });
+    // 有限量時取**最新**的 N 筆（否則會取到最舊的），之後再翻回舊到新 /
+    // With a limit, take the **newest** N (otherwise it takes the oldest), then flip
+    // them back to oldest-first
+    orderBy: bounded
+      ? [{ round: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }]
+      : [{ round: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      take: bounded ? limit : undefined,
+    })
+  );
+  if (bounded) events.reverse();
 
   // 讀取時 enrich：只存 placeId 的事件補上地名（讀取時 join 讓舊事件也能顯示地名，
   // 不需回填資料庫）。`CHARACTER_SPAWNED` 與 `CHILD_BORN` 的 `placeName` 雖然已經隨事件

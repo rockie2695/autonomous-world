@@ -32,6 +32,7 @@
 
 import { prisma } from '@/lib/prisma';
 import { createRng } from '@/lib/rng';
+import { type RoundPhaseId, type RoundPhaseTiming } from '@/lib/roundPhases';
 import { createSnapshot } from '@/lib/snapshot';
 import { recalculateLayout, shouldRecalculate } from './graph/layout';
 
@@ -67,6 +68,22 @@ export interface RoundResult {
   charactersBorn: number;
   battlesFought: number;
   defections: number;
+  /** 每個階段的耗時 / How long each phase took */
+  phases: RoundPhaseTiming[];
+}
+
+/**
+ * 跑回合時的選項 / Options for running a round
+ */
+export interface RunRoundOptions {
+  /**
+   * 某個階段**開始**時呼叫（進度回報用）/ Called when a phase **starts** (progress reporting)
+   */
+  onPhase?: (id: RoundPhaseId) => void;
+  /**
+   * 某個階段**結束**時呼叫（帶著耗時）/ Called when a phase **ends** (with its duration)
+   */
+  onPhaseDone?: (timing: RoundPhaseTiming) => void;
 }
 
 // ─── 主要函數 / Main Function ─────────────────────────────────────────────────
@@ -84,8 +101,31 @@ export interface RoundResult {
  * const result = await runRound('world-123');
  * console.log(`Round ${result.round} completed in ${result.duration}ms`);
  */
-export async function runRound(worldId: string): Promise<RoundResult> {
+export async function runRound(
+  worldId: string,
+  options: RunRoundOptions = {}
+): Promise<RoundResult> {
   const startTime = Date.now();
+
+  // ── 階段計時 / Phase timings ──
+  // 每個階段都記一次耗時：回合檢查器（/api/world/inspect）與首頁的管線圖都靠它。
+  // 階段**拋錯也要記**（finally）——失敗的那一段正是最該被看見的。
+  //
+  // Every phase records its duration: the round inspector (/api/world/inspect) and the
+  // home page's pipeline diagram both read it. A phase that **throws** still records
+  // (finally) - the failing segment is the one worth seeing.
+  const timings: RoundPhaseTiming[] = [];
+  const runPhase = async <T>(id: RoundPhaseId, fn: () => Promise<T>): Promise<T> => {
+    options.onPhase?.(id);
+    const phaseStart = Date.now();
+    try {
+      return await fn();
+    } finally {
+      const timing: RoundPhaseTiming = { id, ms: Date.now() - phaseStart };
+      timings.push(timing);
+      options.onPhaseDone?.(timing);
+    }
+  };
 
   // 取得世界 / Fetch the world
   const world = await prisma.world.findUniqueOrThrow({
@@ -108,16 +148,20 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   let defections = 0;
 
   // ── 階段 1：生成地點 / Phase 1: Spawn Places ──────────────────────────────
-  await spawnPlaces(worldId, currentRound, rng);
+  await runPhase('spawnPlaces', () => spawnPlaces(worldId, currentRound, rng));
 
   // ── 階段 2：生成角色 / Phase 2: Spawn Characters ──────────────────────────
   // 回傳本回合新生成的角色 ID；這些角色在本回合不得移動（出生回合原地待命）
   // Returns IDs spawned this round; they must not move in their spawn round
-  const spawnedIds = await spawnCharacters(worldId, currentRound, rng);
+  const spawnedIds = await runPhase('spawnCharacters', () =>
+    spawnCharacters(worldId, currentRound, rng)
+  );
   charactersSpawned = spawnedIds.length;
 
   // ── 階段 3：年齡和死亡 / Phase 3: Age and Death ─────────────────────────
-  charactersDied = await ageAndDeath(worldId, currentRound, rng);
+  charactersDied = await runPhase('ageAndDeath', () =>
+    ageAndDeath(worldId, currentRound, rng)
+  );
 
   // ── 階段 3.5：生育 / Phase 3.5: Childbirth ───────────────────────────────
   // 必須在階段 3（老化與死亡）**之後**：若在本回合才生下的孩子立刻繼承剛死的王位，
@@ -127,52 +171,80 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   // inherit from a parent who just died, or the child would become king the instant it was
   // born and childbirth would be a resurrection spell. Age and death decide inheritance
   // first, so the heir search only ever sees children that already existed.
-  const bornIds = await childbirth(worldId, currentRound, rng);
+  const bornIds = await runPhase('childbirth', () =>
+    childbirth(worldId, currentRound, rng)
+  );
   charactersBorn = bornIds.length;
 
   // ── 階段 4：經濟 / Phase 4: Economy ───────────────────────────────────
-  await economy(worldId, currentRound, rng);
+  await runPhase('economy', () => economy(worldId, currentRound, rng));
 
   // ── 階段 5：信號 / Phase 5: Signals ───────────────────────────────────
-  await signals(worldId, currentRound, rng);
+  await runPhase('signals', () => signals(worldId, currentRound, rng));
 
   // ── 階段 6：關係 / Phase 6: Relationships ─────────────────────────────
-  await relationships(worldId, currentRound, rng);
+  await runPhase('relationships', () => relationships(worldId, currentRound, rng));
 
   // ── 階段 7：野心事件 / Phase 7: Defection Events ───────────────────────────
-  await defectionEvents(worldId, currentRound, rng);
+  await runPhase('defectionEvents', () => defectionEvents(worldId, currentRound, rng));
 
   // ── 階段 8：忠誠度檢查 / Phase 8: Loyalty Check ─────────────────────────
-  defections = await loyaltyCheck(worldId, currentRound, rng);
+  defections = await runPhase('loyaltyCheck', () =>
+    loyaltyCheck(worldId, currentRound, rng)
+  );
 
   // ── 階段 9：AI 移動 / Phase 9: AI Move ───────────────────────────────────
   // skipIds：本回合出生的角色不移動 / Spawned this round stay put
-  await aiMove(worldId, currentRound, rng, new Set(spawnedIds));
+  await runPhase('aiMove', () =>
+    aiMove(worldId, currentRound, rng, new Set(spawnedIds))
+  );
 
   // ── 階段 10：戰鬥 / Phase 10: Battle ───────────────────────────────────
-  battlesFought = await battle(worldId, currentRound, rng);
+  battlesFought = await runPhase('battle', () => battle(worldId, currentRound, rng));
 
   // ── 階段 11：建築 / Phase 11: Build ────────────────────────────────────
-  await build(worldId, currentRound, rng);
+  await runPhase('build', () => build(worldId, currentRound, rng));
 
   // ── 階段 12：指派管理員 / Phase 12: Assign Admins ────────────────────────
-  await assignAdmins(worldId, currentRound, rng);
+  await runPhase('assignAdmins', () => assignAdmins(worldId, currentRound, rng));
 
   // ── 階段 13：勢力崩潰 / Phase 13: Faction Collapse ─────────────────────────
-  await factionCollapse(worldId, currentRound, rng);
+  await runPhase('factionCollapse', () => factionCollapse(worldId, currentRound, rng));
 
   // ── 階段 14：勢力死亡 / Phase 14: Faction Death ────────────────────────────
-  await factionDeath(worldId, currentRound, rng);
+  await runPhase('factionDeath', () => factionDeath(worldId, currentRound, rng));
 
   // ── 階段 15：ForceAtlas2 佈局重算 / Phase 15: ForceAtlas2 Layout Recalc ────
   // 每 LAYOUT_RECALC_INTERVAL 回合全域重算一次
   // Full recalculation every LAYOUT_RECALC_INTERVAL rounds
   if (shouldRecalculate(currentRound)) {
-    await recalculateLayout(worldId);
+    await runPhase('layout', () => recalculateLayout(worldId));
   }
 
   // ── 階段 16：快照 / Phase 16: Snapshot ─────────────────────────────────
-  const snapshotBuffer = await createSnapshot(worldId);
+  // 事件數**先**數出來：快照的 meta 要帶著它（回合檢查器靠這個數字說明「這一回合
+  // 發生了多少事」），而快照是這一回合寫的東西之一。
+  //
+  // The event count is taken **first**: the snapshot's meta carries it (the round
+  // inspector uses it to say "how much happened this round"), and the snapshot is
+  // one of the things this round writes.
+  const eventCount = await prisma.event.count({
+    where: { worldId, round: currentRound },
+  });
+  const snapshotBuffer = await runPhase('snapshot', () =>
+    createSnapshot(worldId, {
+      phases: timings,
+      durationMs: Date.now() - startTime,
+      summary: {
+        events: eventCount,
+        battlesFought,
+        defections,
+        charactersSpawned,
+        charactersDied,
+        charactersBorn,
+      },
+    })
+  );
   await prisma.roundSnapshot.create({
     data: {
       worldId,
@@ -182,22 +254,18 @@ export async function runRound(worldId: string): Promise<RoundResult> {
   });
 
   // ── 階段 16：推進回合 / Phase 16: Advance Round ────────────────────────────
-  await prisma.world.update({
-    where: { id: worldId },
-    data: {
-      currentRound: currentRound + 1,
-      rngState: rng.getState(),
-    },
-  });
+  await runPhase('advance', () =>
+    prisma.world.update({
+      where: { id: worldId },
+      data: {
+        currentRound: currentRound + 1,
+        rngState: rng.getState(),
+      },
+    })
+  );
 
   // ── 回傳結果 / Return Results ─────────────────────────────────────────────
   const duration = Date.now() - startTime;
-  // 本回合實際寫入的事件數：占位 0 會讓呼叫端以為這一回合什麼都沒發生 /
-  // The real number of events written this round: a placeholder 0 reads as
-  // "nothing happened at all"
-  const eventCount = await prisma.event.count({
-    where: { worldId, round: currentRound },
-  });
 
   return {
     worldId,
@@ -209,5 +277,6 @@ export async function runRound(worldId: string): Promise<RoundResult> {
     charactersBorn,
     battlesFought,
     defections,
+    phases: timings,
   };
 }

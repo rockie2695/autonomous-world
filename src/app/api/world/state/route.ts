@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { decompressSnapshot } from "@/lib/snapshot";
+import { withRetry } from "@/lib/retry";
 import { WorldStateQuerySchema } from "@/lib/validations";
 import { CONFIG } from "@/lib/gameConfig";
 
@@ -142,11 +143,23 @@ export async function GET(request: NextRequest) {
       world: { ...state.world, currentRound: world.currentRound },
       spotlights,
       moves,
+      // 這份資料是從**快照**來的還是**即時**查的？兩條路徑讀的是不同來源，客戶端
+      // 需要知道自己在看哪一份（回合剛跑完、快照還沒寫好時就是即時路徑）/
+      // Whether this payload came from the **snapshot** or a **live** query: the two
+      // paths read different sources, and the client needs to know which one it is
+      // looking at (right after a round, before its snapshot lands, it is live)
+      servedFrom: "snapshot",
     });
   }
   // 沒有可用的快照 — 查詢即時資料 / No snapshot available — query live data
   // 這是沒有快照的回合的後備方案 / This is a fallback for rounds without snapshots
-  const [places, factions, characters, roads, friendships, discontents] = await Promise.all([
+  // 瞬時失敗（連線被回收、交易衝突）重試一次就好——雲端資料庫偶爾會這樣，
+  // 直接丟出來就是一整個面板壞掉 /
+  // A transient failure (a reaped connection, a serialization conflict) is fixed by
+  // one retry - a cloud database does this occasionally, and surfacing it breaks a
+  // whole panel.
+  const [places, factions, characters, roads, friendships, discontents] = await withRetry(() =>
+    Promise.all([
     prisma.place.findMany({
       where: { worldId: world.id },
       select: {
@@ -225,7 +238,8 @@ export async function GET(request: NextRequest) {
       where: { worldId: world.id },
       select: { aId: true, bId: true, sinceRound: true },
     }),
-  ]);
+  ])
+  );
 
   /**
    * 本回合的 DefectionEvent：叛變值的「事件部分」就是這些 delta 的總和。
@@ -250,6 +264,7 @@ export async function GET(request: NextRequest) {
       name: world.name,
       currentRound: world.currentRound,
     },
+    servedFrom: "live",
     places,
     factions,
     characters,

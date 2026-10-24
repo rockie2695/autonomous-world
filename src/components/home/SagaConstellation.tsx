@@ -21,7 +21,8 @@
 // of the HTML copy below. The chart is a chart; the copy is copy.
 // ============================================================================
 
-import { motion, useReducedMotion } from 'motion/react';
+import { motion } from 'motion/react';
+import { useStillness } from './Motion';
 import { createTranslator, type Locale } from '@/lib/i18n';
 
 type SagaConstellationProps = {
@@ -88,7 +89,17 @@ const node = {
 
 export default function SagaConstellation({ locale }: SagaConstellationProps) {
   const t = createTranslator(locale);
-  const reduce = useReducedMotion();
+  // 靜態偵測走 hydration 安全的 useStillness：useReducedMotion 分歧在「第一筆
+  // 渲染」，SSR 與靜態客戶端會畫出不同的 style 屬性，每次進站都報
+  // hydration mismatch。掛載後才讀設定；讀到靜態時用 key 重掛動畫子樹，
+  // 讓 motion 元件直接以最終狀態上台（所有 reduce 分支都是延遲 0）。
+  // The stillness check goes through hydration-safe useStillness:
+  // useReducedMotion branches on the FIRST render, so SSR and a static client
+  // painted different style attributes — a hydration mismatch on every entry.
+  // The preference is read after mount; reading still re-mounts the animated
+  // subtrees through the keys, so the motion nodes mount straight at their
+  // final state (every reduce branch has delay 0).
+  const reduce = useStillness();
 
   const eras: Era[] = [
     { step: '01', title: t('home.saga.s1Title'), text: t('home.saga.s1Text') },
@@ -112,7 +123,10 @@ export default function SagaConstellation({ locale }: SagaConstellationProps) {
     <div>
       {/* ── 圖 / The figure ───────────────────────────────────────────────── */}
       {/* 純裝飾：所有資訊都在下面的 HTML 裡 / Purely decorative: the copy below has it all */}
+      {/* key 讓「掛載後才知道」的靜態切換重掛整棵動畫子樹
+          The key re-mounts the animated subtree when the post-mount stillness flip arrives */}
       <svg
+        key={reduce ? 'still-star' : 'move-star'}
         className="h-auto w-full text-cyan-400/70"
         viewBox="0 0 1000 340"
         role="presentation"
@@ -235,7 +249,10 @@ export default function SagaConstellation({ locale }: SagaConstellationProps) {
       {/* ── 文字 / The copy ───────────────────────────────────────────────── */}
       {/* 每個時代一欄，順序與星座節點一致
           One column per era, in the same order as the constellation's stars */}
-      <ol className="mt-8 grid grid-cols-1 gap-7 sm:grid-cols-2 lg:grid-cols-5">
+      <ol
+        key={reduce ? 'still-copy' : 'move-copy'}
+        className="mt-8 grid grid-cols-1 gap-7 sm:grid-cols-2 lg:grid-cols-5"
+      >
         {eras.map((era, index) => (
           <motion.li
             key={era.step}

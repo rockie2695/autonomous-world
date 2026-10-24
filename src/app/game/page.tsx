@@ -47,11 +47,13 @@ import {
 } from '@/lib/placeEffects';
 import { signOut } from 'next-auth/react';
 import { Ic, Crown } from './icons';
+import { BuildingFigure } from './BuildingFigure';
 import { EventLog } from './EventLog';
 import { StatsCharts, CharacterRadarHover, RADAR_AXES } from './stats-charts';
 import { DetailModal, FactionRanking, LeaderRelations } from './leader-detail';
 import { abilityTipLines, useAbilityTip } from './tooltip';
-import type { WorldInfo, WorldState } from './types';
+import { RoundInspector, type RoundInspectPayload } from './RoundInspector';
+import type { RoundJobView, WorldInfo, WorldState } from './types';
 import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_CORNER_BR, GM_CORNER_TL, GM_CORNER_TR, GM_FRAME, GM_HUD_CONTROLS_CLOSED, GM_HUD_CONTROLS_OPEN, GM_HUD_LEGEND, GM_KPI, GM_KPI_FIRST, GM_KPI_LABEL, GM_KPI_VALUE, GM_LEGEND, GM_LEGEND_ITEM, GM_MODAL, GM_MODAL_PHOTO, GM_MODAL_VEIL, GM_PANEL, GM_PHOTO, GM_RAIL, GM_SKEL, GM_STAT, GM_STAT_LABEL, GM_STAT_VALUE, GM_STRIP, GM_STRIP_INLINE, GM_STRIP_PHOTO, GM_STRIP_VEIL, GM_TIMELINE, GM_TITLE, GM_VEIL } from './styles';
 
 const SigmaMap = dynamic(
@@ -182,6 +184,7 @@ function TelemetryStrip({
   territories,
   aliveCharacters,
   totalTroops,
+  durationMs,
   inline = false,
 }: {
   round: number;
@@ -190,11 +193,27 @@ function TelemetryStrip({
   territories: number;
   aliveCharacters: number;
   totalTroops: number;
+  /** 這一回合的耗時（毫秒）；null = 還沒有量測 / This round's duration (ms); null = no measurement yet */
+  durationMs: number | null;
   /** 併入頂部列而非獨佔一行 / Merged into the header row instead of taking its own */
   inline?: boolean;
 }) {
+  // 回合耗時**緊接著回合**：這一列是可捲動的，排在最後會被擠出可視區，而
+  // 「這一回合花了多久」正是最該一眼看到的數字 /
+  // The round's duration sits **right after the round**: this row scrolls, and a
+  // last item gets pushed out of view — and "how long did this round take" is
+  // exactly the number worth seeing at a glance.
   const items = [
     { label: t('game.round'), value: String(round).padStart(4, '0') },
+    {
+      label: t('game.roundDuration'),
+      value:
+        durationMs === null
+          ? '—'
+          : durationMs >= 1000
+            ? `${(durationMs / 1000).toFixed(1)}s`
+            : `${Math.round(durationMs)}ms`,
+    },
     { label: t('home.stats.factions'), value: aliveFactions.toLocaleString() },
     { label: t('home.stats.places'), value: territories.toLocaleString() },
     { label: t('home.stats.characters'), value: aliveCharacters.toLocaleString() },
@@ -369,6 +388,20 @@ export default function GamePage() {
    * Don't request round state until world progress resolves, so we never fetch round 0 first */
   const canFetchRound =
     selectedRound !== null || worldInfo !== undefined || worldInfoError;
+
+  // 回合檢查器的資料：這一回合的階段耗時與摘要（快照裡帶著量測）/
+  // The round inspector's data: this round's phase timings and summary (the
+  // snapshot carries the measurements).
+  const { data: roundInspect } = useQuery<RoundInspectPayload | null>({
+    queryKey: ['roundInspect', round],
+    queryFn: async () => {
+      const response = await apiFetch(`/api/world/inspect?round=${round}`);
+      if (!response.ok) return null;
+      return response.json();
+    },
+    staleTime: 30 * 1000,
+    enabled: canFetchRound,
+  });
 
   const {
     data: worldState,
@@ -658,7 +691,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
         <div className="stars" aria-hidden="true" />
         <div className="stars2" aria-hidden="true" />
         <div className="nebula" aria-hidden="true" />
-        <div className={`relative text-center max-w-md ${GM_PANEL} border-red-500/30! px-8 py-8`}>
+        <div className={`relative text-center max-w-lg ${GM_PANEL} border-red-500/30! px-8 py-8`}>
           <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center">
             <svg className="w-8 h-8 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
@@ -766,6 +799,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
           territories={territories}
           aliveCharacters={aliveCharacterList.length}
           totalTroops={totalTroops}
+          durationMs={roundInspect?.durationMs ?? null}
         />
 
         <div className="flex items-center gap-2 ml-auto shrink-0">
@@ -783,7 +817,16 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
 
           <NextRoundButton
             isAdmin={isAdmin}
-            currentRound={round}
+            // 冪等鍵必須是**世界的真實下一回合**（worldInfo.currentRound），不是畫面
+            // 顯示的回合——顯示回合是「最新已執行」，拿它送鍵永遠差 1 → 恆 409。
+            // worldInfo 尚未回應時用顯示回合 + 1 推導（看的就是最新回合，等價）。
+            //
+            // The idempotency key must be the world's **real next round**
+            // (worldInfo.currentRound), not the displayed round — the displayed
+            // round is the latest *executed* one, off by one → a permanent 409.
+            // Before worldInfo answers, derive it as the displayed round + 1
+            // (that round is the latest, so the two agree).
+            nextRound={worldInfo?.currentRound ?? round + 1}
             onSuccess={(round) => {
               setSelectedRound(round);
               // 回合可能沒變（正在看最新回合）→ 快取不會失效，強制重新抓取
@@ -793,6 +836,12 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
               // 事件日誌現在包含所有回合 → 新回合完成後也要失效
               // Event log now spans all rounds → invalidate after a new round too
               void queryClient.invalidateQueries({ queryKey: ['events'] });
+              // 跑完一回合後 world.currentRound 前進了：worldCurrent 也要失效，
+              // 否則下一次點擊的冪等鍵還是舊值 → 再次 409
+              // After a round runs, world.currentRound advanced: worldCurrent
+              // must be invalidated too, or the next click's idempotency key is
+              // the old value → another 409
+              void queryClient.invalidateQueries({ queryKey: ['worldCurrent'] });
             }}
           />
           <LanguageSwitch locale={locale} onToggle={handleLocaleToggle} />
@@ -1034,6 +1083,7 @@ onTabChange={(tab) => {
           )}
           {rightTab === 'events' && (
             <EventLog
+              round={round}
               worldId={worldState?.world.id ?? ''}
               factions={worldState?.factions ?? []}
               characters={worldState?.characters ?? []}
@@ -1060,6 +1110,10 @@ onTabChange={(tab) => {
                 characters={worldState?.characters ?? []}
                 worldFactions={worldState?.factions ?? []}
               />
+              {/* 回合檢查器：這一回合的階段耗時與摘要。以前要手寫 SQL 才看得到 /}
+              {/* The round inspector: this round's phase timings and summary. Before,
+                  it took hand-written SQL to see any of it. */}
+              <RoundInspector round={round} data={roundInspect ?? null} />
             </>
           )}
           {rightTab === 'places' && (
@@ -1443,12 +1497,23 @@ function PanelSkeleton() {
 
 function NextRoundButton({
   isAdmin,
-  currentRound,
+  nextRound,
   onSuccess,
 }: {
   isAdmin: boolean;
-  currentRound: number;
-  /** 回傳新回合數，讓頁面跳到剛執行的回合 / Receives the new round number so the view jumps to it */
+  /**
+   * 世界的**真實下一回合**（`world.currentRound`），不是畫面顯示的回合。顯示回合是
+   * 「最新已執行」= currentRound − 1，拿它當冪等鍵永遠差 1 → 恆 409
+   * 「Round already advanced」。顯示用哪一回合由 onSuccess 決定，這裡只管送鍵。
+   *
+   * The world's **real next round** (`world.currentRound`), NOT the displayed
+   * round. The displayed round is the latest *executed* one = currentRound − 1;
+   * using it as the idempotency key is always off by one → a permanent 409
+   * "Round already advanced". Which round to display is onSuccess's business;
+   * this prop only carries the key.
+   */
+  nextRound: number;
+  /** 回傳剛執行完的回合數，讓頁面跳過去看 / Receives the executed round so the view jumps to it */
   onSuccess: (round: number) => void;
 }) {
   const [loading, setLoading] = useState(false);
@@ -1456,6 +1521,44 @@ function NextRoundButton({
   // Ref closes the race window before setState re-renders, blocking double-clicks
   const loadingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  // 背景回合工作的進度（跑到哪個階段了）/ The background job's progress
+  const [job, setJob] = useState<RoundJobView | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const queryClient = useQueryClient();
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // 卸載時停掉輪詢（否則會對著已卸載的元件 setState）/
+  // Stop polling on unmount (otherwise it sets state on an unmounted component)
+  useEffect(() => stopPolling, [stopPolling]);
+
+  // 輪詢：回合在背景跑，這裡只是問它跑到哪了 /
+  // Polling: the round runs in the background; this only asks where it is.
+  const poll = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/admin/run-round');
+      if (!res.ok) return;
+      const data = await res.json();
+      const current = (data.job ?? null) as RoundJobView | null;
+      setJob(current);
+      if (current && current.status === 'running') return;
+      stopPolling();
+      loadingRef.current = false;
+      setLoading(false);
+      // job.round 是**剛執行完**的回合；fallback 是「我以為的下一回合 − 1」，同一個語義
+      // job.round is the round that **just ran**; the fallback is "the round I
+      // believed was next" − 1, the same semantics
+      onSuccess(current?.round ?? nextRound - 1);
+    } catch {
+      // 網路抖動不是失敗：繼續輪詢就好 /
+      // A network blip is not a failure: keep polling.
+    }
+  }, [nextRound, onSuccess, stopPolling]);
 
   const handleRun = async () => {
     if (!isAdmin || loadingRef.current) return;
@@ -1463,16 +1566,57 @@ function NextRoundButton({
     setLoading(true);
     setError(null);
     try {
-      const res = await apiFetch('/api/admin/run-round', { method: 'POST' });
+      // **冪等鍵**：把「我認為的下一回合」送上去，伺服器比對世界實際的回合——對不上
+      // 就 409，不會重跑已經跑過的回合 /
+      // **The idempotency key**: the round we believe is next. The server compares it
+      // with the world's real round and refuses (409) rather than replaying a finished
+      // one.
+      const res = await apiFetch('/api/admin/run-round', {
+        method: 'POST',
+        body: JSON.stringify({ expectedRound: nextRound }),
+      });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? 'Failed');
+        // 409 有兩種，都不是「失敗」那麼簡單：
+        // ① `reason: running`（帶 job）——已經有回合在跑。接上它的進度繼續輪詢，
+        //    使用者只看到 loading 延續，而不是一個紅色錯誤。
+        // ② 冪等鍵過期——畫面資料落後於世界（例如另一個分頁跑過了回合）。靜默
+        //    重新同步 worldCurrent，下一次點擊就會帶對鍵；文案也說清楚是「資料過期」，
+        //    不是「你按錯了」。
+        //
+        // The two 409s are not plain failures:
+        // ① `reason: running` (with a job) — a round is already running. Adopt its
+        //    progress and keep polling; the user just sees the loading continue.
+        // ② A stale idempotency key — the view lagged behind the world (another tab
+        //    ran a round, say). Resync worldCurrent silently so the next click sends
+        //    the right key, and say "stale view" rather than blaming the click.
+        if (res.status === 409 && data.job) {
+          setJob(data.job as RoundJobView);
+          stopPolling();
+          pollRef.current = setInterval(() => {
+            void poll();
+          }, 1000);
+          return;
+        }
+        if (res.status === 409) {
+          void queryClient.invalidateQueries({ queryKey: ['worldCurrent'] });
+          setError(t('game.roundStale'));
+        } else {
+          setError(data.error ?? 'Failed');
+        }
+        loadingRef.current = false;
+        setLoading(false);
         return;
       }
-      onSuccess(data.round ?? currentRound + 1);
+      setJob((data.job ?? null) as RoundJobView | null);
+      // 回合在背景跑，請求立刻就回來了 → 開始輪詢進度 /
+      // The round runs in the background and the request answered at once -> poll.
+      stopPolling();
+      pollRef.current = setInterval(() => {
+        void poll();
+      }, 1000);
     } catch {
       setError('Network error');
-    } finally {
       loadingRef.current = false;
       setLoading(false);
     }
@@ -1500,7 +1644,13 @@ function NextRoundButton({
         ) : (
           <Ic className="w-3.5 h-3.5"><path d="M8 5.5v13l11-6.5z" /></Ic>
         )}
-        {t('game.nextRound')}
+        {loading && job?.currentPhase ? (
+          <span className="ml-1 text-[10px] text-cyan-200/90">
+            {t(`phases.${job.currentPhase}`)}
+          </span>
+        ) : (
+          t('game.nextRound')
+        )}
       </button>
       {error && (
         <div role="alert" className="absolute top-full mt-1 right-0 z-20 text-xs text-red-300 whitespace-nowrap bg-gray-950/95 px-2 py-1 rounded border border-red-500/30">
@@ -3020,6 +3170,8 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                       expanded ? 'z-30' : ''
                     }`}
                   >
+                    <div className="flex items-stretch">
+                      <div className="min-w-0 flex-1">
                     <button
                       type="button"
                       aria-expanded={expanded}
@@ -3149,10 +3301,33 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           them is the card edge and would be clipped. No flip needed. */}
                       {expanded && (
                         <div
-                          className="pointer-events-none absolute left-2.5 bottom-full mb-1 z-20 min-w-[9rem] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
+                          className="pointer-events-none absolute left-2.5 bottom-full mb-1 z-20 w-[21rem] max-w-[min(21rem,calc(100vw-2rem))] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
                           role="tooltip"
                           >
-                          <ul className="space-y-0.5">
+                          {/* 展開的主圖：這一級的等距外觀 + 下一級的虛線幽靈——
+                              幽靈畫的就是「多花這筆錢會長出來的結構」。幽靈說明在圖右側；
+                              等級表在圖**下方**吃滿整個寬度——放在圖旁邊只剩 111px，
+                              每一列會折成八行。
+                              The expanded figure: this level's isometric look plus the next
+                              level's dashed ghost — the ghost is exactly what the money grows.
+                              The caption sits beside the figure; the level list runs BELOW at
+                              full width (beside the figure, 111px wrapped every row eight times). */}
+                          <div className="flex items-start gap-2">
+                            <div className="w-28 shrink-0">
+                              <BuildingFigure
+                                kind={row.kind}
+                                level={level}
+                                ghost={level < BUILDING_MAX_LEVEL}
+                                className="w-full"
+                              />
+                            </div>
+                            {level < BUILDING_MAX_LEVEL && (
+                              <div className="min-w-0 flex-1 pt-1 text-[11px] leading-tight text-cyan-300/80">
+                                {t('place.nextLevelStructure')}
+                              </div>
+                            )}
+                          </div>
+                          <ul className="mt-1.5 space-y-0.5">
                             {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
                               const out = placeEffectLabel(row.kind, lvl, outputMultiplier);
                               // 印的是**此地此刻每回合的總產出**，不是這一棟自己的貢獻：
@@ -3212,6 +3387,16 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           </div>
                         </div>
                       )}
+                    </div>
+                      </div>
+                      {/* 收起態剪影：等級的外觀一直在畫面裡，指標不會碰到（pointer-events
+                          不設 none 的話，滑過剪影會落到卡片本身——沒有 handler，是死區）。
+                          Collapsed silhouette: the level's look stays on screen; the column is
+                          pointer-events-none so hovering it falls through to the card — which
+                          has no handler and would otherwise be a dead zone. */}
+                      <div className="flex w-16 shrink-0 items-center justify-center pr-1.5" aria-hidden="true">
+                        <BuildingFigure kind={row.kind} level={level} className="w-14" />
+                      </div>
                     </div>
                   </div>
                 );

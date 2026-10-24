@@ -55,7 +55,7 @@ export default async function SignInPage() {
         <p className={EYEBROW}>{t('general.title')}</p>
         <div className={`${HAIRLINE} mt-3`} />
 
-        <div className={`${PANEL} mt-8 w-full max-w-md px-7 py-9`}>
+        <div className={`${PANEL} mt-8 w-full max-w-lg px-7 py-9 lg:w-[400px]`}>
           <SignInForm
             isSignedIn={Boolean(session?.user)}
             hasPassword={hasPassword}

@@ -79,6 +79,23 @@ export const zh = {
       step3: '見證演化',
       step3Desc: '觀察數百回合的演化，見證文明的興衰與傳奇的誕生。',
       orbitLabel: '三維軌道圖：核心是真實的回合數，外圍三顆衛星對應觀察、分析、見證三個階段',
+      pipelineTitle: '一回合真正跑的東西',
+      pipelineNote:
+        '不是示意圖：地圖上每一次佔領、每一次叛變、每一筆金錢，都由這串階段依序算出來。',
+      outOfScope:
+        '不做的事：不寫劇本、不給 AI 提示、不預設勝負。勢力會滅亡、王位會空著、戰爭會輸——這些都不是被安排好的結果。',
+    },
+    engineLab: {
+      fig: '圖 1',
+      title: '星艦裝配線',
+      hint: '滑過電子手 · ← → 換工位',
+      readoutIdle: '等待世界資料…',
+      rnd: '回合',
+      keySelected: '指到的那隻手（讀出槽正讀它的階段）',
+      keyFlame: '試車焰：引擎裝上、回合推進時點燃',
+      caption:
+        '一條 18 工位的星艦裝配線。18 隻電子手站在後側，產品坐在兩條導軌之間的托架上，從第 1 站走到第 18 站——一個工位對應左表的一個階段，工具頭由那個階段的分組決定。回合推進時，上一艘完工的船滑出廠房、新龍骨進站、18 站逐站施工、第 17 站裝上引擎、第 18 站試車；同一時間後牆的 18 格狀態燈條逐格亮起、里程計滾到新的回合數（公開端點，每 15 秒輪詢一次）。船的完成度就是這趟走線的進度：走到第 n 站，前 n 批零件才裝上。',
+      aria: '18 工位星艦裝配線：滑鼠滑過或用左右方向鍵選擇工位',
     },
     stats: {
       title: '世界概況',
@@ -94,6 +111,7 @@ export const zh = {
     nav: {
       world: '世界',
       how: '運作',
+      orrery: '星儀',
       saga: '傳奇',
       live: '即時',
       enter: '進入系統',
@@ -125,6 +143,24 @@ export const zh = {
       legendTitle: '目前存活的勢力',
       graphLabel: '以真實世界資料渲染的三維勢力圖：每個光點是一座據點，顏色代表所屬勢力',
       graphEmpty: '這個世界還沒有據點。',
+    },
+
+    // ── 發條星儀 / The Roundworks Orrery ─────────────────────────────────
+    // 文案對齊模型頁的字幕：三勢力行星 4/6/8 回合一圈、衛星是據點、
+    // 錶盤記回合。不要在這裡介紹模型頁沒有的東西。
+    // The copy mirrors the model page's own captions: three faction planets
+    // orbiting in 4/6/8 rounds, moons as settlements, the dial logging rounds.
+    // Nothing may be advertised here that the model page does not have.
+    orrery: {
+      eyebrow: '發條星儀',
+      title: '上一次鍵，世界走一回合',
+      body: '三顆行星是三支勢力——焰洲四回合繞一圈、霜脊六、沉星八；衛星是據點，各自兩到四回合繞行星一圈。轉動發條，錶盤記下走過的每一回合。拖曳模型或按方向鍵，親手上一次弦。',
+      // 星儀 iframe 的無障礙名稱 / accessible name of the orrery iframe
+      frameTitle: '發條星儀——上一圈發條，世界走一回合（互動模型）',
+      linkLabel: '開啟完整模型頁',
+      // 另開視窗的提示：只給輔助科技讀，畫面上不必再多一行字
+      // The new-tab hint is for assistive tech only; the visible line stays clean
+      linkHint: '（另開視窗）',
     },
 
     // ── 特色區段 / Features section ──────────────────────────────────────
@@ -194,6 +230,45 @@ export const zh = {
     nextRound: '下一回合',
     adminOnly: '僅管理員可操作',
     noData: '此回合尚無資料',
+    roundStale: '回合已前進：畫面資料過期，已重新同步，請再按一次',
+    roundDuration: '回合耗時',
+    roundOverview: '回合概覽',
+    roundEvents: '事件',
+    roundBattles: '戰鬥',
+    roundDefections: '叛變',
+    roundPhases: '階段耗時',
+    roundPhaseTotal: '合計',
+    roundEventMix: '事件種類',
+    roundWorldScale: '世界規模（地點／將領／勢力／道路）',
+    roundServedSnapshot: '快照',
+    roundServedLive: '即時',
+    roundNoData: '尚無回合量測資料',
+  },
+
+  // ── 回合的階段 / The round's phases ──
+  phases: {
+    spawnPlaces: '生成地點',
+    spawnCharacters: '生成將領',
+    ageAndDeath: '老化與死亡',
+    childbirth: '生育',
+    economy: '經濟',
+    signals: '號令',
+    relationships: '關係',
+    defectionEvents: '叛變事件',
+    loyaltyCheck: '忠誠檢查',
+    aiMove: 'AI 移動',
+    battle: '戰鬥',
+    build: '建築',
+    assignAdmins: '指派行政官',
+    factionCollapse: '勢力崩解',
+    factionDeath: '勢力消滅',
+    layout: '佈局重算',
+    snapshot: '快照',
+    advance: '推進回合',
+    groupWorld: '世界生成',
+    groupSimulation: '模擬',
+    groupAftermath: '收尾',
+    groupPersistence: '持久化',
   },
 
   // ── 地圖 / Map ──────────────────────────────────────────────────────────
@@ -351,6 +426,7 @@ export const zh = {
     perLevel: '每級效果',
     perRound: '每回合產出',
     nextLevelEffect: '升一級後的效果',
+    nextLevelStructure: '虛線＝下一級新增的結構',
     recruitsToGarrison: '徵兵（加入駐軍）',
     incomeTotal: '總收入',
     toAdmin: '行政官實拿',

@@ -1,20 +1,26 @@
 // ============================================================================
 // API 路由 — 執行下一回合（僅管理員）/ API Route — Run Next Round (Admin Only)
 // ============================================================================
-// 觸發下一個遊戲回合的執行。
-// Triggers execution of the next game round.
-// 僅管理員使用者可存取。
-// Only accessible by admin users.
+// 觸發下一個遊戲回合的執行。**回合在背景跑**：POST 立刻回 202，前端輪詢
+// GET 拿進度。回合本身要 30 秒左右，放在請求裡會被任何代理或平台逾時掐斷，
+// 而 `currentRound` 只在全部階段跑完才 +1——被掐斷的回合會在下一次嘗試時從
+// 階段 1 重跑，前面的寫入被重複套用。
 //
-// POST /api/admin/run-round
-// 標頭 / Headers: Authorization: Bearer <token> 或基於 session 的認證 / or session-based auth
-// 回應 / Response: { success: true, round: number, duration: number }
+// Triggers execution of the next game round. **The round runs in the background**:
+// the POST answers 202 immediately and the client polls GET for progress. A round
+// takes ~30 seconds, and running it inside the request means any proxy or
+// platform timeout cuts it in half - and since currentRound only increments after
+// every phase, a cut round replays from phase 1 and re-applies the earlier writes.
+//
+// POST /api/admin/run-round      body: { expectedRound?: number }
+// 回應 / Response: 202 { success: true, job }
+// GET  /api/admin/run-round      → { job: RoundJobState | null, currentRound }
 // ============================================================================
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth, isAdmin } from '@/lib/auth';
-import { runRound } from '../../../../../server/runRound';
+import { getRoundJob, startRoundJob } from '../../../../../server/roundJob';
 
 export async function POST(request: Request) {
   // 檢查認證 / Check authentication
@@ -46,24 +52,65 @@ export async function POST(request: Request) {
     );
   }
 
-  // 執行回合 / Run the round
+  // 冪等鍵：客戶端認為的「下一回合」。對不上就拒絕（409），不重跑已完成的回合 /
+  // The idempotency key: the round the client believes is next. A mismatch is
+  // refused (409) rather than replaying a finished round.
+  let expectedRound: number | null = null;
   try {
-    const result = await runRound(world.id);
+    const body = (await request.json()) as { expectedRound?: unknown };
+    if (typeof body?.expectedRound === 'number' && Number.isInteger(body.expectedRound)) {
+      expectedRound = body.expectedRound;
+    }
+  } catch {
+    // 沒有 body 也沒關係：只是不做過期檢查 / No body is fine: it just skips the
+    // staleness check
+  }
 
-    return NextResponse.json({
-      success: true,
-      round: result.round,
-      duration: result.duration,
-      charactersSpawned: result.charactersSpawned,
-      charactersDied: result.charactersDied,
-      battlesFought: result.battlesFought,
-      defections: result.defections,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown error';
+  const started = await startRoundJob(world.id, expectedRound);
+  if (!started.ok) {
+    if (started.reason === 'running') {
+      // 已經有回合在跑：回報現況，而不是排第二個回合 / A round is already
+      // running: report the state instead of queueing a second one
+      return NextResponse.json(
+        { error: 'A round is already running', job: started.job },
+        { status: 409 }
+      );
+    }
     return NextResponse.json(
-      { error: `Round execution failed: ${message}` },
-      { status: 500 }
+      { error: 'Round already advanced', currentRound: started.currentRound },
+      { status: 409 }
     );
   }
+
+  // 202：工作已經開始，但還沒跑完 / 202: the job has started, but has not finished
+  return NextResponse.json({ success: true, job: started.job }, { status: 202 });
+}
+
+export async function GET() {
+  const session = await auth();
+  if (!session?.user) {
+    return NextResponse.json(
+      { error: 'Unauthorized' },
+      { status: 401 }
+    );
+  }
+  if (!(await isAdmin(session))) {
+    return NextResponse.json(
+      { error: 'Forbidden: Admin access required' },
+      { status: 403 }
+    );
+  }
+  const world = await prisma.world.findFirst({
+    where: { active: true },
+  });
+  if (!world) {
+    return NextResponse.json(
+      { error: 'No active world found' },
+      { status: 404 }
+    );
+  }
+  return NextResponse.json({
+    job: getRoundJob(world.id),
+    currentRound: world.currentRound,
+  });
 }

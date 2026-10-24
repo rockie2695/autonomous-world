@@ -1,0 +1,130 @@
+/* ============================================================================
+   星艦引擎的圖內樣式 / The starship engine figure's own styles
+   ============================================================================
+   Kit 慣例：每張圖的代幣 scope 在自己的 class 上，不動 :root。這裡只做四件事：
+   ① 命中圈透明但可點；② 能量色面（縫/焰心 = lit，熔金窗/火焰外層 = red）——它們
+   是面，不是實體，所以沒有邊線；③ 環暈的填充接自訂漸層；④ lit 強調色接到首頁
+   的 ds-cyan，讓「選中的工位」讀起來是這個品牌的亮色。
+   Kit convention: per-figure tokens scope to the figure's class, never :root.
+   Four jobs only: ① hit circles are transparent but clickable; ② the energy
+   faces (slit/flame core = lit, molten window/outer flame = red) are fills, not
+   solids, so they carry no edges; ③ the halo's fill is the local gradient; ④
+   the lit accent wires to the home page's ds-cyan, so the selected pod reads as
+   this brand's highlight.
+   ========================================================================== */
+
+.el {
+  --anatomy-lit: var(--color-ds-cyan);
+  /* 這一張圖的表面比 kit 預設亮一階。兩個理由，都不是美感：① 廠房的地板、走道、
+     後牆與船體在同一個深度上互相重疊，全部用 #131313 會糊成一團（實測截圖裡船
+     幾乎看不出來）；② 端點稽核（drive.mjs 的 lines）量的是**看得見的墨**：畫在
+     一張與背景幾乎同色的面上的刻線，會被判定成「線端浮空」——而它確實讀不出來，
+     判定是對的。把面提亮，刻線才有東西可以停。
+     This figure's surfaces sit one step brighter than the kit's default, for two
+     reasons and neither is taste: ① the floor, walkway, back wall and hull overlap at
+     the same depth, and all of them at #131313 muddle together (on screen the ship
+     was nearly invisible); ② the line-ends audit (drive.mjs's `lines`) measures
+     **visible ink**, so a mark drawn on a face that is nearly the background colour
+     is reported as a floating end — and it is right to: that mark cannot be read.
+     Brighten the faces and the marks have something to rest on. */
+  --anatomy-paper: #161616;
+  --anatomy-face: #202020;
+  --anatomy-top: #2a2a2a;
+  --anatomy-shade-0: #121212;
+  --anatomy-shade-1: #161616;
+  --anatomy-shade-2: #1b1b1b;
+  --anatomy-shade-3: #202020;
+  --anatomy-lit-top: #343434;
+  --anatomy-lit-shade: #262626;
+  /* 產品的表面值：廠房的地板與船體本來都是 --anatomy-paper（同一塊暗色），於是
+     船只剩輪廓、和地面糊在一起。給產品自己的填充與頂面，船才讀得出是一件「被
+     造出來的東西」而不是地上的一塊暗斑。
+     The product's own surface value: the floor and the hull both defaulted to
+     --anatomy-paper (one dark value), so the ship was only an outline and merged
+     into the ground. A fill and a top of its own make it read as a manufactured
+     object rather than a dark patch on the floor. */
+  --el-product: #1d1d1d;
+  --el-product-top: #2b2b2b;
+  --el-product-shade: #171717;
+}
+
+.el .el-ship .iso-fill {
+  fill: var(--el-product);
+}
+
+.el .el-ship .iso-top {
+  fill: var(--el-product-top);
+}
+
+.el .el-ship .iso-shade {
+  fill: var(--el-product-shade);
+}
+
+.el .el-hit {
+  fill: transparent;
+  stroke: none;
+  pointer-events: all;
+  cursor: pointer;
+}
+
+/* 能量面：只填色，不描邊（Solid 的邊線語言不適用於會發光的縫與焰）
+   Energy faces: fill only, no stroke (an edge line has no business on a light) */
+.el .el-hot {
+  fill: var(--anatomy-lit);
+  stroke: none;
+  pointer-events: none;
+}
+
+.el .el-melt {
+  fill: var(--anatomy-red);
+  stroke: none;
+  pointer-events: none;
+}
+
+.el .el-flame {
+  stroke: none;
+  pointer-events: none;
+}
+
+/* 環暈：填充接 live.tsx 里的 #el-halo 輻射漸層
+   The halo: filled by the #el-halo radial gradient defined in live.tsx */
+.el .el-halo {
+  fill: url(#el-halo);
+  stroke: none;
+  pointer-events: none;
+}
+
+.el .el-spark {
+  fill: var(--anatomy-lit);
+  stroke: none;
+  pointer-events: none;
+}
+
+/* 產品不吃指標：裝配線的 hover 是「指到哪隻手」，船只是被造的結果。少了這一條，
+   游標停在船身上會命中船的 path、蓋掉底下那圈命中圈。
+   The product does not take the pointer: this figure's hover means "which hand",
+   and the ship is only the outcome. Without this the ship's paths win the hit test
+   over the hit circles beneath them. */
+.el .el-ship {
+  pointer-events: none;
+}
+
+/* 精細裝飾：手機版（≤640px）整組收掉。18 隻手在 390px 寬的卡片上每站只有 ~13px，
+   螺絲、通風口、鉚釘只會糊成一團；收掉之後留下的是輪廓——18 隻手仍然數得出來。
+   Fine detail: dropped entirely on phones (≤640px). At 390px wide each station is
+   ~13px, so screws, vents and rivets only smear; what remains is the silhouette —
+   and 18 hands still count. */
+@media (max-width: 640px) {
+  .el .el-fine {
+    display: none;
+  }
+}
+
+/* 卡片融進首頁：邊線用 ds-line，光暈壓低（kit 預設的純灰邊在深空背景上太亮）
+   Blend the card into the home page: the line token for the edge, a softer glow
+   (the kit's plain grey edge is too loud on the deep-space background) */
+.iso-plate:has(.el) {
+  box-shadow:
+    0 0 0 1px var(--color-ds-line),
+    0 0 44px rgba(2, 6, 23, 0.55);
+}

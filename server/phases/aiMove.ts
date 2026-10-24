@@ -177,8 +177,6 @@ export async function aiMove(
     // Spawned this round: stay put (no movement in spawn round)
     if (skipIds?.has(char.id)) continue;
 
-    const currentPlaceFaction = placeFactionMap.get(char.placeId);
-
     // 1. 檢查角色是否有號令目標 / Check if character has a target from signal
     const signalTarget = signalTargets.get(char.id);
     if (signalTarget) {

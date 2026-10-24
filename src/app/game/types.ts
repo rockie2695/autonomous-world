@@ -97,6 +97,22 @@ export interface WorldState {
   roundDefectionEvents?: Array<{ charId: string; delta: number; reason: string }>;
 }
 
+/**
+ * 回合工作的狀態（客戶端視圖）：背景執行的回合跑到哪了 /
+ * The round job's state (client view): where the background round is
+ */
+export interface RoundJobView {
+  id: string;
+  /** 正在執行的回合 / The round being executed */
+  round: number;
+  status: 'running' | 'done' | 'failed';
+  /** 目前跑到哪個階段 / The phase currently running */
+  currentPhase: string | null;
+  /** 已完成階段的耗時 / Timings of the finished phases */
+  phases: Array<{ id: string; ms: number }>;
+  error?: string;
+}
+
 export interface GameEvent {
   id: string;
   type: string;

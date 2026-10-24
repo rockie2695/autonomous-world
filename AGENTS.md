@@ -137,6 +137,8 @@ src/
     ├── auth.ts            # Auth.js configuration
     ├── prisma.ts          # Prisma client singleton
     ├── api.ts             # apiFetch helper (unified 401 handling)
+    ├── retry.ts           # Transient database failures: retry with jittered backoff
+    ├── roundPhases.ts     # The round's phases - ONE source (server timing, inspector, home diagram)
     ├── queryClient.tsx    # TanStack Query provider
     ├── validations.ts     # Zod validation schemas
     ├── gameConfig.ts      # All tunable game values (the project's ONE config)
@@ -167,6 +169,7 @@ src/
 ```
 server/
 ├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
+├── roundJob.ts            # The round as a BACKGROUND job (idempotency + progress polling)
 ├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (used by aiMove + battle escape)
 ├── adminAssign.ts         # grantAdmin/revokeAdmin — the ONLY writers of Place.administratorId
 ├── income.ts              # splitIncome() + othersOf() — king 30% / admin 40% / the controlling faction's others 30%
@@ -242,8 +245,10 @@ src/components/home/
 ├── VoidCanvas.tsx         # dynamic(ssr:false) wrapper for the backdrop body
 ├── VoidScene.tsx          # three.js black hole: thin-lens deflection + crystalline lattice
 ├── HeroReticle.tsx        # SVG instrument frame over the hero product view
+├── HeroVideo.tsx          # The hero's decorative loop: paused under reduced motion, paused off-screen
 ├── SagaChart.tsx          # Self-drawing SVG star chart for #saga
 ├── WorldGraph.tsx         # dynamic(ssr:false) frame; owns the graph's a11y semantics
+├── RoundPipeline.tsx       # The round's 18 phases, drawn from roundPhases.ts (one source)
 ├── WorldGraphScene.tsx    # three.js real faction graph, built from live world data
 ├── LiveWorld.tsx          # Graph + faction legend
 ├── LiveStats.tsx          # Live counts from the public endpoint
@@ -422,6 +427,14 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 
 Five independent filters compose by AND; the header reports how many of the round's
 events survived, and says so when all of them were filtered out.
+
+**The log shows ONE round at a time** (Oct 2026). It used to fetch *every* round at once
+(`/api/world/events` with no `round`), which by round 26 was four thousand rows and
+grew by a hundred-odd every round, with no ceiling — and the filters then ran over
+that pile. Now the log follows the **displayed round** (the timeline picks it), the
+header carries the `RND 0000` badge, and the fetch is bounded (`?round=N&limit=500`).
+The server keeps the oldest-to-newest order it always had: with a limit it takes the
+**newest** N and flips them back, so the client never reverses anything.
 
 - **Faction** — a `<select>` (`#gm-evt-faction`) plus 全部. `factionOfEvent()` resolves an event's faction through **`charId` first, then `placeId`**. `charId` is the reliable link (every character-bearing event carries it, backfilled at read time — see above), so a `CHARACTER_MOVED` row filters under the mover's faction rather than the destination's
 - **Leader** — a `<select>` (`#gm-evt-leader`) listing every character in the world, name-sorted (`localeCompare`), the dead suffixed `†` (their events remain in the log). The semantics are "events **involving** this leader": `eventLeaderIds()` (`src/app/game/eventFilter.ts`, pure and tested) collects **every** leader id an event's data carries — `charId`, `fatherId`, `friendId`, `kingId`, `adminId`, `newAdminId` — and a match on any counts. Without that, filtering by a leader would drop the rows where they appear as a father, a friend, the king or an `INCOME` recipient
@@ -1151,6 +1164,237 @@ leaders start at `CHAR_START_TROOPS` (1). Only death ends a leader's soldiers.
 
 If a map-level battle visual is ever wanted again, it must be scoped to the round being displayed and
 tied to a real `PLACE_CAPTURED` event, not derived from standing ownership.
+
+### The round runs as a background job
+
+`POST /api/admin/run-round` used to **run the round inside the HTTP request**. A round takes
+tens of seconds, and any proxy or platform timeout cut it in half — and since
+`currentRound` only increments after every phase, the next attempt replayed the round
+from phase 1 and **re-applied** the earlier writes (income paid twice, events written
+twice).
+
+- The POST now **enqueues** and answers `202`; the round runs in the background and the
+  client polls `GET /api/admin/run-round` for progress. `server/roundJob.ts` owns it.
+- **Idempotency is the client's business**: the request carries `expectedRound` (the
+  round it believes is next) and the server compares it with `world.currentRound`. A
+  mismatch is a **409** — an already-run round is never replayed. One job at a time: a
+  second click is a 409, not a second queued round.
+- **The job state lives on `globalThis`**: every Next.js route is its own bundle, so a
+  module-level Map is *not* shared between routes. `globalThis` is the same process.
+- **A restart loses the job** (it is in memory). That is a deliberate trade-off — a job
+  table plus a migration for a world with a single writer — and after a loss the user
+  presses "next round" again; the idempotency check keeps the finished round from being
+  re-applied. On a serverless deployment the background work would be killed with the
+  response, so the round runner assumes a long-lived process.
+
+### The round inspector: what a round did, and where the time went
+
+Every phase records its duration (`runRound` wraps each phase in `runPhase`, and
+`RoundResult.phases` carries them). The timings travel **with the snapshot**
+(`WorldState.meta`), so a past round is inspectable without re-running it.
+
+- `GET /api/world/inspect?round=N` returns the durations, the summary (events, battles,
+  defections), the event mix and the world's scale. Before this, "which stage of the
+  last round was slowest" meant hand-writing SQL against the database.
+- The **統計 tab** renders it (`RoundInspector.tsx`): a bar per phase, proportional to
+  the slowest one, so the bottleneck is visible at a glance.
+- The game page's telemetry strip shows the same round's total duration.
+
+### The round's phases are a single source
+
+`src/lib/roundPhases.ts` lists the round's phases **once**, with their group. The
+server times them, the inspector shows them, and the home page's pipeline diagram draws
+them. Written twice, the diagram would show a phase the server never runs — which is
+exactly the kind of drift the project keeps fixing everywhere else.
+
+### Transient database failures are retried
+
+The read paths hit Neon, and a cloud database occasionally fails transiently (a reaped
+connection, a serialization conflict, a timeout). `withRetry()` (`src/lib/retry.ts`)
+retries **only** those codes, with exponential backoff and jitter — a semantic error
+retried is the same error three times, and a shared backoff without jitter is a
+thundering herd. It never touches the simulation's seeded RNG.
+
+### 發條星儀 Roundworks Orrery (`public/orrery.html`)
+
+**The hero's product view is `hero.mp4` again; the model has its own slide.** The
+orrery is an interactive isometric SVG model built with the `anatomy` skill kit,
+embedded as a lazy iframe in **`#orrery`**, the slide between `#how` and `#saga`
+(Oct 2026 it was briefly the hero's product view; the hero went back to the
+recording because an editable, hands-on instrument belongs in the body of the
+page, not behind the first headline). Do not move it back into the hero without
+reading the "Slide view" section below — a slide owns one idea.
+
+- **`scripts/orrery/build.mjs` is the ONE source.** `public/orrery.html` (dark) and
+  `public/orrery-light.html` (light) are **build artifacts** — regenerate with
+  `node scripts/orrery/build.mjs [--light]`, never edit them by hand.
+- **`scripts/orrery/model.mjs` is the single home for every number** (orbits 22/33/44,
+  periods 4/6/8 rounds, arm teeth 144/216/288 ÷ drive 36, moon periods, dial ticks,
+  18 phases, rest angles, faction colours). The build script and the live page both
+  inline its pure helpers (`armAngle`, `moonAngle`, `crankAngle`, `phaseOf`,
+  `roundAt`, `pad4`) — change a rule there, not on the page.
+- **The page's live half is assembled by inlining function sources**
+  (`fn.toString()` via the kit's `kitScript()` globals). A helper that uses a bare
+  kit name must therefore call it *unqualified* — the build side maps those names
+  through aliases so the same function runs in both scopes. A missing alias fails
+  with `ReferenceError` at build/run time, not silently.
+- **Every line must end on something painted.** The lines audit (`drive.mjs` with a
+  `["lines", path.png]` action) must report **`line ends: 0 … float`**; it is the
+  gate for any change to dials, ticks, knurls or rings. Tick midpoints sit on an
+  inner ring, rail lines run to a strip edge, needles carry dots at both ends.
+- The page honours the anatomy contracts: `?embed=1` strips chrome to the readout
+  with a transparent background (the `#orrery` slide's iframe), `?film=1` exposes the deterministic
+  `window.__film` frame-stepping contract used by the `machine` skill's recorder,
+  and `lang=zh|en` flips the readout/captions. Reduced motion renders a single
+  static frame; the tour pauses off-viewport and on a hidden tab.
+- `src/app/page.tsx` embeds it with `?embed=1&lang={locale}` + `loading="lazy"` in
+  `#orrery`, keeps `HeroReticle` over it, and offers the full page as a link whose
+  "opens in a new tab" is announced (sr-only, `home.orrery.linkHint`). The frame's
+  copy mirrors the model page's own captions and nothing more — do not advertise a
+  number there that `scripts/orrery/model.mjs` does not contain.
+
+### 星艦裝配線圖 / The starship assembly line figure (`src/components/home/engine-lab/`)
+
+`#how`'s figure beside `RoundPipeline`: **18 electronic hands** on an assembly line, building a
+starship. It replaced an earlier "engine deck with 18 pods on an orbiting ring" (Oct 2026) — a
+ring is a rotation, and the figure's job is to make the round's **ordered** 18 phases visible.
+
+**What it claims, and where each claim comes from**
+
+| Claim | Source |
+|---|---|
+| 18 stations = the round's phases, same order | `ROUND_PHASES` (never a copy) |
+| A station's tool head = that phase's **group** | `TOOL_SCHEDULE` in `geometry.ts`, keyed off `RoundPhaseGroup` |
+| One round = one finished ship | `frame.ts`'s pass: roll out → 1→18 sweep → engine in at 17 → test-fire at 18 |
+| The ship's completeness = the pass's progress | `shipPartVisible(step, station)`: batches 1..n are on at station n |
+| The round number on the odometer | `usePublicWorld().world.round` (public endpoint) |
+
+- **The resting state is a real state, not a blank**: the ship the last round finished sits at the
+  end bay (station 18) with its engine in. The next advance rolls it out, resets the hull while it
+  is invisible, and builds the next one. That is why the machine can be read at a glance: idle =
+  one completed ship, sweep = its construction.
+- **Painter's order is three fixed planes** (far: hall, wall, cabinets, crucible, ceiling, the **18
+  hands** → product: cradle + ship → near: front rail, walkway and stock, odometer, label plate).
+  An assembly line never re-layers a part the way the old orbiting ring did, so no frame ever
+  rebuilds a path: **a hand only rotates its joints, the ship only translates**.
+- **Joint angles are screen rotations, and that is a stated approximation.** A rotation about the
+  view axis is exactly rigid under orthographic projection; a rotation about the world z axis
+  projects to an ellipse. Arm joints move ≤24° (asserted in `frame.test.ts`) and the figure is a
+  stylised isometric drawing, so the trade is one transform per joint per frame. Widen the angles
+  and the deviation shows.
+- **Two fire signals, both honest**: a hand's tool lights and throws sparks while the work point is
+  at it (`reach`), and the **engine test-fires only after station 18** and only once the bell's
+  batch exists (`burn`, and the flame group's display is tied to batch 18 — a flame before the
+  engine is fitted would be a lie).
+- **`--reduced` is the only stable way to run the lines audit.** The figure sits inside a `Reveal`,
+  so a live capture measures the fade: the same code reported 44, 60, 20 and 27 floating ends on
+  consecutive runs, and 20/20 twice under `--reduced`. The gate:
+  ```bash
+  node ~/.agents/skills/anatomy/scripts/drive.mjs http://localhost:3000/ \
+    --actions <[["wait",3000],["scroll","#how .iso-plate"],["wait",900],["lines",out,"#how .iso-plate"]]> \
+    --width 1440 --height 1100 --reduced      # → line ends: 0 of 272 … float
+  ```
+  Run it at `--width 390` too: `.el-fine` is hidden there, so fewer lines are checked (0 of 178) and
+  a floating end cannot hide behind detail that is no longer drawn.
+- **`free` is used exactly as the kit documents it — for marks, not for structure.** A stencil on a
+  face (walkway tread, lane stops, bay doors, wall kick/transom, cabinet vents, pallet bands,
+  bearing ticks, plating seams, livery stripes, machined seams, and the tube-like ducts) ends in the
+  middle of that face, which is what a printed mark does; the kit's own wording covers "rule lines
+  standing for printed text". Everything structural is still rooted and still audited — the first
+  pass of that audit (44 floats) found real ones, and the fixes were geometry: a mark that stops
+  mid-face is extended to span the face it is drawn on.
+- **Node budget**: 1,303 paths at desktop (down from 2,203 in the first draft). Small cylinders and
+  thin plates are drawn `flat crease="none"` — four shade bands on a 14px-wide cylinder are 2px each
+  and smear, so the outline reads better *and* it halves the 18 hands' cost. Keep it that way; the
+  big surfaces (floor, wall, hull, shoulders) keep the kit's four-tone language.
+- **`--anatomy-*` tokens are raised one step on `.el`** (paper `#161616`, top `#2a2a2a`, …). Two
+  reasons: the floor, walkway, wall and hull overlap at one depth and all at `#131313` muddled
+  together (the ship was nearly invisible), and a mark on a face that is nearly the background
+  colour is one the audit is *right* to call a floating end.
+- **Files**: `view.ts` (layout, projection fit, canvas 1040×480), `geometry.ts` (every path, once at
+  module load), `art.tsx` (static painter's-order fragments; `SHIP_PARTS` is the 18 batches),
+  `frame.ts` (**pure** motion: pass timeline, poses, lamps, sparks — `frame.test.ts` runs it under
+  node), `live.tsx` (one rAF loop, pointer/keyboard, the readout).
+- **Editing these files: use the editor, never a shell round-trip.** `Get-Content`/`WriteAllText` in
+  Windows PowerShell reads UTF-8 as the ANSI codepage and writes the mojibake back — it destroyed
+  every Chinese comment in `geometry.ts` and `view.ts` once, and the loss is not recoverable
+  (unmappable bytes become `?`). The code survived because it is ASCII; the documentation did not.
+
+### Slide view: the homepage is a deck of screens (scroll-snap)
+
+The homepage scrolls **one screen at a time**, like a deck: `#hero`, `#live`,
+`#world`, `#features`, `#how`, `#orrery`, `#saga`, `#cta`, then the footer.
+
+- **It is pure CSS.** `html:has([data-slide-deck]) { scroll-snap-type: y mandatory }`
+  plus `snap-start` (and `snap-always` so one fling cannot skip a screen) on each
+  slide. `data-slide-deck` is the opt-in on the page's root div — the game and
+  sign-in pages never match the selector and scroll exactly as before. **Do not
+  add per-slide JavaScript for this**, and do not move the rule onto `body`: the
+  document scroller is `html`, and styling `body` does nothing.
+- **The per-slide offset has exactly one source.** `html { scroll-padding-top: 5rem }`
+  already clears the sticky header for anchors *and* for snap rest points. The
+  slides therefore carry **no `scroll-mt-*`**: measured, `scroll-padding-top` on the
+  container and `scroll-margin` on the element are **added**, so every rest point
+  landed 80px too low and left a strip of the previous slide under the header.
+- **Slides taller than the viewport still scroll freely inside themselves.** Per
+  spec a snap area larger than the snapport may rest anywhere while it covers the
+  snapport, so `#live` and `#how` (both ~2.5 screens) behave normally and snap only
+  at their boundaries. Measured on the live page: `#live` accepts rest positions
+  from its start (top − 80) to `bottom − viewport`, and a real wheel of 300px inside
+  `#how` moved 300px and stayed.
+- **Every fixed slide is `min-h-svh`** (and, where its content is short, `flex …
+  justify-center`) so it reads as a screen rather than a band of text. `#saga` is
+  `min-h-svh` without centring because its constellation sets the height.
+- **The footer is `snap-end`.** Without it the document's last scroll position is
+  not a legal rest point under `mandatory`, and the deck bounces off the closing
+  slide. Measured: max scroll == the footer's end-aligned rest.
+- **`prefers-reduced-motion` does not turn snapping off.** Snapping is a rest-point
+  rule, not an animation; the reduced-motion visitor is the one who least wants a
+  page that slides half a screen. Every *animated* thing on the page still has its
+  own reduced-motion path — the deck adds no motion of its own.
+- The seam between `#hero` and `#live` carries `SignalFeed`, which is deliberately
+  **not** a slide: it is a 49px ticker strip that rides above the live slide.
+
+### 首頁的語系是 prop，不是環境的 `t()` / A homepage locale is a prop, never the ambient `t()`
+
+**`RoundPipeline` and `EngineLabFigure` (with `EngineLabLive`) take `locale` as a
+prop, like every other homepage island** (`LiveStats`, `LiveWorld`, `FactionNebula`,
+`SagaConstellation`, `SignalFeed`, `HomeNav`). Both used to import the module-level
+`t` from `@/lib/i18n`.
+
+- During SSR that ambient `t()` **cannot see localStorage or navigator**, so it
+  resolves to `DEFAULT_LOCALE` (`zh`) while the page around it has already resolved
+  the cookie — and the client, once hydrated, resolves `en`. React then reports
+  *"Hydration failed because the server rendered text didn't match the client"* and
+  **rethrows the whole tree**. The tell was a mismatch on `aria-valuetext` and the
+  pipeline heading on an English page; the Chinese page looked clean only because
+  default == resolved there.
+- `EngineLabLive` pins its translator with `useMemo(…, [locale])` because `draw()`
+  is a dependency of the rAF path's layout effects — a fresh function on every
+  render would re-run them.
+- Adding a homepage island? Take the `locale` prop. This is the same rule the
+  server/client locale split already forced everywhere else on the page.
+
+### 首屏影片 `HeroVideo` / The hero recording and its playback rules
+
+- `src/components/home/HeroVideo.tsx` owns the decorative loop's playback:
+  **paused under `prefers-reduced-motion`** (WCAG 2.2.2 — autoplay motion that runs
+  past five seconds must be stoppable) and **paused whenever it leaves the viewport**
+  (the project's rule for every loop). One `IntersectionObserver` and the shared
+  `useStillness` — no new frame loop, and no visible control added to the instrument
+  frame.
+- `autoPlay` deliberately stays in the server output: without JS the poster would
+  never move. Under the static preference the video may run **one frame** before the
+  preference is read after mount — the same trade `Reveal`/`Parallax` already make.
+
+### Skill set for this project
+
+The `~/.agents/skills` kit ships with the agent. The six from the 2026-10 batch are
+project-relevant: `react-best-practices` (render/Next perf review), `frontend-design`
+and `web-design-guidelines` (new UI sheets and UI audits), `seo-mastery` (metadata,
+JSON-LD, Core Web Vitals — see the SEO notes under `src/app/layout.tsx`),
+`canvas-design`/`algorithmic-art` (static art only — the sim figures are `anatomy`,
+motion films are `machine`).
 
 ### Space Backdrop: three space layers, four canvases
 

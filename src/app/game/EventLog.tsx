@@ -141,6 +141,7 @@ function eventInfoOf(data: Record<string, unknown>): EventInfo {
 }
 
 export function EventLog({
+  round,
   worldId,
   factions,
   characters,
@@ -148,6 +149,8 @@ export function EventLog({
   onFocusPlace,
   onOpenLeaderDetail,
 }: {
+  /** 正在看的回合：日誌只顯示這一回合的事件 / The round on view: the log shows only this round's events */
+  round: number;
   worldId: string;
   /** 用來做勢力篩選與下拉選單 / Used for the faction filter and its dropdown */
   factions: WorldState['factions'];
@@ -161,10 +164,18 @@ export function EventLog({
   onOpenLeaderDetail: (key: string) => void;
 }) {
   const { data, isLoading } = useQuery<{ events: GameEvent[] }>({
-    // 不帶 round → 回傳所有回合的事件 / Omit round → events for ALL rounds
-    queryKey: ['events'],
+    // **只看一回合**：日誌是「正在看的那一回合」的紀錄（時間軸選哪一回合就看哪一回合），
+    // 而且先前它一次抓**所有回合**——26 回合就已經四千多筆，之後每回合再加一百多筆，
+    // 載荷沒有上限。現在一回合一次（limit 500），篩選器作用的範圍也就是這一回合。
+    //
+    // **One round at a time**: the log is the record of the round you are looking at
+    // (the timeline picks the round), and it used to fetch *all* rounds at once -
+    // already four thousand rows at round 26, growing by a hundred-odd every round,
+    // with no ceiling. Now it fetches one round (limit 500), and the filters act
+    // on that round.
+    queryKey: ['events', round],
     queryFn: async () => {
-      const res = await apiFetch('/api/world/events');
+      const res = await apiFetch(`/api/world/events?round=${round}&limit=500`);
       if (!res.ok) return { events: [] };
       return res.json();
     },
@@ -298,7 +309,6 @@ export function EventLog({
       }),
     // factionOfEvent 是 useMemo 產生的新參考，每回合資料變動才會換 /
     // factionOfEvent is a fresh reference only when its inputs change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [events, categoryFilter, infoFilter, factionFilter, leaderFilter, placeFilter, factionOfEvent]
   );
 
@@ -782,11 +792,19 @@ export function EventLog({
     <div className={`${GM_PANEL} p-3`}>
       <h3 className={`${GM_TITLE} mb-3 flex items-center justify-between`}>
         <span>{t('events.title')}</span>
-        <span className="text-cyan-300/85 text-xs tracking-widest font-normal">
-          {/* 有篩選時顯示篩選後的數量，否則顯示總數 —— 數字要跟下面看到的列一致 /
-              Show the filtered count while filters are on, so the number matches
-              the rows actually listed below */}
-          {filtersActive ? filtered.length : events.length} {t('events.tab')}
+        <span className="flex items-center gap-2">
+          {/* 回合徽章：日誌只顯示這一回合，所以徽章在標頭而不是每列 /
+              The round badge: the log shows one round, so the badge sits in the
+              header instead of on every row */}
+          <span className="font-display text-cyan-300/90 tracking-widest">
+            RND {String(round).padStart(4, '0')}
+          </span>
+          <span className="text-cyan-300/85 text-xs tracking-widest font-normal">
+            {/* 有篩選時顯示篩選後的數量，否則顯示總數 —— 數字要跟下面看到的列一致 /
+                Show the filtered count while filters are on, so the number matches
+                the rows actually listed below */}
+            {filtersActive ? filtered.length : events.length} {t('events.tab')}
+          </span>
         </span>
       </h3>
       {/* ── 篩選列 / Filter row ──
@@ -985,10 +1003,6 @@ export function EventLog({
         {shown.map((event) => (
           <div key={event.id} className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-white/5 transition-colors duration-150 [content-visibility:auto] [contain-intrinsic-size:auto_44px]">
             <EventGlyph type={event.type} />
-            {/* 回合徽章：所有回合的事件需標示來源回合 / Round badge: all-rounds events need their source round */}
-            <span className="font-display text-[10px] text-cyan-400/80 shrink-0 mt-1 tracking-wider">
-              {String(event.round).padStart(4, '0')}
-            </span>
             <span className="text-sm text-gray-400 leading-relaxed">{formatEvent(event)}</span>
             {(
               event.type === 'PLACE_CAPTURED' ||

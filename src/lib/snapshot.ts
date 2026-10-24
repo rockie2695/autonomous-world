@@ -13,6 +13,7 @@
 
 import { gzipSync, gunzipSync } from 'zlib';
 import { prisma } from '@/lib/prisma';
+import { type RoundPhaseTiming } from '@/lib/roundPhases';
 
 // ─── 型別 / Types ─────────────────────────────────────────────────────────
 
@@ -75,6 +76,33 @@ export interface WorldState {
   friendships: Array<{ aId: string; bId: string; sinceRound: number }>;
   /** 不滿（互相的）/ Discontent (mutual) */
   discontents: Array<{ aId: string; bId: string; sinceRound: number }>;
+  /**
+   * 這一回合的**量測**：各階段耗時與摘要。
+   * 回合檢查器（/api/world/inspect）讀它——以前要知道「上一回合哪一段最慢」只能
+   * 手寫 SQL 連資料庫查。
+   *
+   * This round's **measurements**: per-phase durations and a summary. The round
+   // inspector (/api/world/inspect) reads it - before, "which stage of the last
+   * round was slowest" meant hand-writing SQL against the database.
+   */
+  meta?: WorldStateMeta;
+}
+
+/** 快照帶的回合量測 / The round measurements a snapshot carries */
+export interface WorldStateMeta {
+  /** 各階段的耗時 / Per-phase durations */
+  phases?: RoundPhaseTiming[];
+  /** 整回合的耗時（毫秒）/ The whole round's duration (ms) */
+  durationMs?: number;
+  /** 回合摘要 / The round's summary */
+  summary?: {
+    events: number;
+    battlesFought: number;
+    defections: number;
+    charactersSpawned: number;
+    charactersDied: number;
+    charactersBorn: number;
+  };
 }
 
 // ─── 壓縮 / Compression ───────────────────────────────────────────────────
@@ -157,7 +185,8 @@ export function decompressSnapshot(compressed: Buffer): WorldState {
  * @returns 壓縮的快照緩衝區 / Compressed snapshot buffer
  */
 export async function createSnapshot(
-  worldId: string
+  worldId: string,
+  meta?: WorldStateMeta
 ): Promise<Buffer> {
   // 取得所有世界資料 / Fetch all world data
   const [world, places, factions, characters, roads, friendships, discontents] = await Promise.all([
@@ -234,6 +263,8 @@ export async function createSnapshot(
       sinceRound: d.sinceRound,
     })),
   };
+
+  if (meta) state.meta = meta;
 
   return compressSnapshot(state);
 }

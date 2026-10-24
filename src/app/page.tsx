@@ -34,10 +34,14 @@ import LiveStats from '@/components/home/LiveStats';
 import LiveWorld from '@/components/home/LiveWorld';
 import FactionNebula from '@/components/home/FactionNebula';
 import OrbitScene from '@/components/home/OrbitScene';
+import { RoundPipeline } from '@/components/home/RoundPipeline';
+import { EngineLabFigure } from '@/components/home/engine-lab/EngineLabFigure';
 import SagaConstellation from '@/components/home/SagaConstellation';
 import SignalFeed from '@/components/home/SignalFeed';
 import VoidCanvas from '@/components/home/VoidCanvas';
 import HeroReticle from '@/components/home/HeroReticle';
+import HeroVideo from '@/components/home/HeroVideo';
+import { webApplicationJsonLd } from '@/lib/seo';
 import { CTA_BASE, CTA_PRIMARY, CTA_SECONDARY, EYEBROW, HAIRLINE, PANEL } from '@/components/home/tokens';
 
 // ─── 導覽 / Navigation ─────────────────────────────────────────────────────
@@ -48,6 +52,7 @@ const NAV_LINKS = [
   { href: '#live', labelKey: 'home.nav.live' },
   { href: '#world', labelKey: 'home.nav.world' },
   { href: '#how', labelKey: 'home.nav.how' },
+  { href: '#orrery', labelKey: 'home.nav.orrery' },
   { href: '#saga', labelKey: 'home.nav.saga' },
 ] as const;
 
@@ -148,8 +153,18 @@ export default async function HomePage() {
 
   const navLinks = NAV_LINKS.map((link) => ({ href: link.href, label: t(link.labelKey) }));
 
+  // data-slide-deck 讓 globals.css 的簡報捲動規則只作用在這一頁：
+  // 其他頁面（遊戲、登入）完全不受 scroll-snap 影響。
+  // data-slide-deck scopes the slide-deck scroll rule in globals.css to this
+  // page alone; the game and sign-in pages are untouched by scroll-snap.
   return (
-    <div className="relative flex min-h-screen flex-col">
+    <div className="relative flex min-h-screen flex-col" data-slide-deck="">
+      {/* 結構化資料 / JSON-LD structured data for the application entity */}
+      <script
+        type="application/ld+json"
+        // JSON 作為純資料注入；引用鍵與上下文都由 @/lib/seo 固定
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(webApplicationJsonLd()) }}
+      />
       {/* ── 背景天體 / Backdrop body ─────────────────────────────────────────
           固定全視窗、純裝飾。VoidScene 自己用 IntersectionObserver 盯著
           #hero，捲出畫面就停幀。
@@ -178,7 +193,7 @@ export default async function HomePage() {
             id="hero" is the pause anchor for the backdrop scene, not styling */}
         <section
           id="hero"
-          className="relative z-10 scroll-mt-20 px-5 pt-12 pb-14 sm:px-6 md:pt-16 md:pb-20"
+          className="relative z-10 flex min-h-svh snap-start snap-always flex-col justify-center px-5 pt-12 pb-14 sm:px-6 md:pt-16 md:pb-20"
         >
           <div className="mx-auto grid max-w-6xl items-center gap-9 lg:grid-cols-2 lg:gap-12">
             {/* 文案欄 / copy column */}
@@ -195,7 +210,9 @@ export default async function HomePage() {
                 <div className="relative">
                   <p className={`${EYEBROW} mb-5`}>{t('home.hero.eyebrow')}</p>
 
-                  <h1 className="font-display mb-6 text-[clamp(2.5rem,7.5vw,4.5rem)] leading-[1.08] font-bold tracking-tight">
+                  {/* text-balance：標題換行時把兩行拉平，不留一個字的孤行
+                      text-balance evens the two lines instead of leaving a widow */}
+                  <h1 className="font-display mb-6 text-balance text-[clamp(2.5rem,7.5vw,4.5rem)] leading-[1.08] font-bold tracking-tight">
                     <span className="gradient-text-hero">{t('general.title')}</span>
                   </h1>
 
@@ -248,26 +265,24 @@ export default async function HomePage() {
                 這裡刻意沒有疊任何回合標籤。錄影是一段固定的歷史，而 LiveRound
                 顯示的是此刻的真實回合；兩者疊在一起會自相矛盾——一個寫著錄影
                 當時的 RND 0000，另一個寫著世界現在第幾回合。真實回合改由 #how
-                的軌道核心與 #live 的統計格呈現。
+                的軌道核心、#live 的統計格，以及 #orrery 的星儀錶盤呈現。
                 No round tag is overlaid here on purpose. The recording is a fixed
                 piece of history while the live round is the world's right now;
                 stacking them contradicts itself — one says the recorded RND 0000,
                 the other says which round it is now. The real round is carried by
-                the #how orbit core and the #live stat grid instead. */}
+                the #how orbit core, the #live stat grid and the dial over at
+                #orrery. */}
             <Parallax offset={110} className="min-w-0">
               <div className="relative aspect-[16/9] overflow-hidden rounded-ds-panel border border-ds-line bg-ds-void shadow-ds-hero">
-                <video
+                {/* 裝飾性循環影片的播放規則（reduced-motion 停下、離開視口暫停）
+                    收在 HeroVideo 一個地方，不寫在這裡。
+                    The decorative loop's playback rules (stop under reduced
+                    motion, pause off-screen) live once in HeroVideo. */}
+                <HeroVideo
                   className="block size-full object-cover"
-                  autoPlay
-                  muted
-                  loop
-                  playsInline
-                  preload="metadata"
+                  src="/hero.mp4"
                   poster="/hero-poster.jpg"
-                  aria-hidden="true"
-                >
-                  <source src="/hero.mp4" type="video/mp4" />
-                </video>
+                />
 
                 {/* 上重下輕的遮罩：HUD 標籤可讀，中段的產品畫面保持清楚
                     A top-weighted veil: the HUD tag stays readable while the
@@ -286,7 +301,7 @@ export default async function HomePage() {
         {/* ── 即時數字 / Live numbers ────────────────────────────────────── */}
         <section
           id="live"
-          className="relative z-10 scroll-mt-20 px-5 py-[var(--ds-section-y)] sm:px-6"
+          className="relative z-10 snap-start snap-always px-5 py-[var(--ds-section-y)] sm:px-6"
         >
           <div className="ds-grid-bg pointer-events-none absolute inset-0" aria-hidden="true" />
           {/* 星雲帶底部的星雲地面：星雲是扁的，所以用同樣扁的構圖當它的地面
@@ -310,7 +325,7 @@ export default async function HomePage() {
           <div className="relative mx-auto max-w-6xl">
             <Reveal className="mb-10 max-w-2xl">
               <p className={`${EYEBROW} mb-4`}>{t('home.live.eyebrow')}</p>
-              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl text-balance font-bold text-white md:text-4xl">
                 {t('home.live.title')}
               </h2>
               <div className={`${HAIRLINE} mt-5`} aria-hidden="true" />
@@ -337,7 +352,7 @@ export default async function HomePage() {
         {/* ── 真實世界圖譜 / Real world graph ────────────────────────────── */}
         <section
           id="world"
-          className="relative z-10 scroll-mt-20 border-y border-ds-inset-line bg-ds-inset px-5 py-[var(--ds-section-y)] sm:px-6"
+          className="relative z-10 flex min-h-svh snap-start snap-always flex-col justify-center border-y border-ds-inset-line bg-ds-inset px-5 py-[var(--ds-section-y)] sm:px-6"
         >
           <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
             <div className="order-1 min-w-0 lg:order-2">
@@ -348,7 +363,7 @@ export default async function HomePage() {
 
             <Reveal className="order-2 min-w-0 lg:order-1" delay={0.05}>
               <p className={`${EYEBROW} mb-4`}>{t('home.world.eyebrow')}</p>
-              <h2 className="font-display text-3xl leading-tight font-bold text-white md:text-[2.5rem]">
+              <h2 className="font-display text-3xl leading-tight text-balance font-bold text-white md:text-[2.5rem]">
                 {t('home.world.title')}
               </h2>
               <div
@@ -379,11 +394,14 @@ export default async function HomePage() {
         </section>
 
         {/* ── 特色 / Features ─────────────────────────────────────────────── */}
-        <section className="relative z-10 px-5 py-[var(--ds-section-y)] sm:px-6">
+        <section
+          id="features"
+          className="relative z-10 flex min-h-svh snap-start snap-always flex-col justify-center px-5 py-[var(--ds-section-y)] sm:px-6"
+        >
           <div className="mx-auto max-w-6xl">
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.featuresSection.eyebrow')}</p>
-              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl text-balance font-bold text-white md:text-4xl">
                 {t('home.featuresSection.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
@@ -415,7 +433,7 @@ export default async function HomePage() {
         {/* ── 運作方式 / How it works ──────────────────────────────────────── */}
         <section
           id="how"
-          className="relative z-10 scroll-mt-20 border-y border-ds-inset-line bg-ds-inset px-5 py-[var(--ds-section-y)] sm:px-6"
+          className="relative z-10 snap-start snap-always border-y border-ds-inset-line bg-ds-inset px-5 py-[var(--ds-section-y)] sm:px-6"
         >
           <div className="mx-auto max-w-6xl">
             {/* 照片地面：刻意壓到 0.18，只給軌道一個深度感，不搶軌道的線
@@ -434,7 +452,7 @@ export default async function HomePage() {
 
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.howItWorks.eyebrow')}</p>
-              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl text-balance font-bold text-white md:text-4xl">
                 {t('home.howItWorks.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
@@ -448,6 +466,22 @@ export default async function HomePage() {
                 by the HTML cards. */}
             <Reveal className="mb-14">
               <OrbitScene label={t('home.howItWorks.orbitLabel')} />
+            </Reveal>
+
+            {/* 回合管線：底下那三張卡是敘事，這一張是**真的** 18 個階段 /
+                The round pipeline: the three cards below are the narrative; this is
+                the **actual** 18 phases */}
+            <Reveal className="mb-10">
+              {/* 圖文合一：18 站分度台在清單正上方——機器講轉了幾圈、正過哪一站，
+                  清單講每一站叫什麼。兩者共用 ROUND_PHASES 單一來源。
+                  Text and machine as one: the 18-station table sits directly above the
+                  list — the machine says how many turns have run and which station is
+                  passing, the list says what each station is called. Both read the
+                  ROUND_PHASES single source. */}
+              <EngineLabFigure locale={locale} />
+            </Reveal>
+            <Reveal className="mb-10">
+              <RoundPipeline locale={locale} />
             </Reveal>
 
             <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
@@ -471,6 +505,93 @@ export default async function HomePage() {
                 </Reveal>
               ))}
             </div>
+
+            {/* 明確說出「不做什麼」：沒有劇本、沒有提示、沒有預設的勝負 /
+                Say plainly what it does not do: no script, no hints, no scripted
+                outcomes */}
+            <Reveal delay={0.1} className="mt-8">
+              <p className="mx-auto max-w-3xl text-center text-sm leading-relaxed text-gray-400">
+                {t('home.howItWorks.outOfScope')}
+              </p>
+            </Reveal>
+          </div>
+        </section>
+
+        {/* ── 發條星儀 / The Roundworks Orrery ────────────────────────────── */}
+        {/* 產品模型在這裡這一屏：運作方式講完 18 個階段，接著站到那台機器
+            面前看它走。兩欄排版與 #world 同構，地面刻意留空——左右都是有
+            照片地面的鄰居，中間需要一屏喘息。
+            The product model gets its own slide: after #how lists the 18 phases,
+            you stand in front of the machine and watch it turn. Two columns like
+            #world; the ground is deliberately left bare — both neighbours carry
+            photo grounds, so this slide is the breath between them. */}
+        <section
+          id="orrery"
+          className="relative z-10 flex min-h-svh snap-start snap-always flex-col justify-center px-5 py-[var(--ds-section-y)] sm:px-6"
+        >
+          <div className="mx-auto grid max-w-6xl items-center gap-10 lg:grid-cols-2 lg:gap-14">
+            <Reveal className="order-2 min-w-0 lg:order-1">
+              <p className={`${EYEBROW} mb-4`}>{t('home.orrery.eyebrow')}</p>
+              <h2 className="font-display text-3xl leading-tight text-balance font-bold text-white md:text-[2.5rem]">
+                {t('home.orrery.title')}
+              </h2>
+              <div
+                className="mt-5 h-px w-28 bg-[linear-gradient(90deg,transparent,var(--ds-line-cyan),transparent)]"
+                aria-hidden="true"
+              />
+              <p className="mt-6 max-w-xl text-base leading-relaxed text-slate-400 md:text-lg">
+                {t('home.orrery.body')}
+              </p>
+
+              <div className="mt-8">
+                <a
+                  href={`/orrery.html?lang=${locale}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={CTA_SECONDARY}
+                >
+                  {t('home.orrery.linkLabel')}
+                  {/* 開新視窗要講出來，否則螢幕閱讀器的使用者會被帶離這一頁而
+                      沒有任何預告。視覺上只留一個 sr-only。
+                      A new tab has to be announced, or a screen-reader user is
+                      taken away from this page with no warning. */}
+                  <span className="sr-only"> {t('home.orrery.linkHint')}</span>
+                  <svg
+                    className="size-4 transition-transform duration-300"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+                  </svg>
+                </a>
+              </div>
+            </Reveal>
+
+            {
+              // 互動模型：拖曳／方向鍵上弦；wheel 事件沒有在模型頁被攔截，
+              // 捲過框框時滾輪仍會鏈回簡報本體。遮罩只留 reticle——模型自己
+              // 的 RND 錶盤就是產品的一部分。
+              // The interactive model: drag / arrow keys to wind. The model page
+              // does not intercept wheel events, so scrolling over the frame
+              // still chains into the deck above it. Only the reticle veils it —
+              // the model's own RND dial is part of the product.
+            }
+            <div className="order-1 min-w-0 lg:order-2">
+              <Reveal>
+                <div className="relative aspect-[16/9] overflow-hidden rounded-ds-panel border border-ds-line bg-ds-void shadow-ds-hero">
+                  <iframe
+                    className="block size-full"
+                    src={`/orrery.html?embed=1&lang=${locale}`}
+                    title={t('home.orrery.frameTitle')}
+                    loading="lazy"
+                  />
+                  <HeroReticle />
+                </div>
+              </Reveal>
+            </div>
           </div>
         </section>
 
@@ -480,7 +601,7 @@ export default async function HomePage() {
              constellation alone, the backdrop does not parallax */}
         <section
           id="saga"
-          className="relative z-10 scroll-mt-20 overflow-hidden px-5 py-20 sm:px-6 md:py-28"
+          className="relative z-10 min-h-svh snap-start snap-always overflow-hidden px-5 py-20 sm:px-6 md:py-28"
         >
           <div className="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
             {/* 裝飾性背景，刻意裁切 / decorative backdrop, deliberately cropped */}
@@ -491,7 +612,7 @@ export default async function HomePage() {
           <div className="relative mx-auto max-w-6xl">
             <Reveal className="mb-12 text-center">
               <p className={`${EYEBROW} mb-4`}>{t('home.saga.eyebrow')}</p>
-              <h2 className="font-display text-3xl font-bold text-white md:text-4xl">
+              <h2 className="font-display text-3xl text-balance font-bold text-white md:text-4xl">
                 {t('home.saga.title')}
               </h2>
               <div className={`${HAIRLINE} mx-auto mt-5`} aria-hidden="true" />
@@ -502,7 +623,10 @@ export default async function HomePage() {
         </section>
 
         {/* ── 行動呼籲 / CTA ───────────────────────────────────────────────── */}
-        <section className="relative z-10 overflow-hidden px-5 py-20 text-center sm:px-6 md:py-28">
+        <section
+          id="cta"
+          className="relative z-10 flex min-h-svh snap-start snap-always flex-col justify-center overflow-hidden px-5 py-20 text-center sm:px-6 md:py-28"
+        >
           <div className="absolute inset-0 -z-10 overflow-hidden" aria-hidden="true">
             <Image src="/space/cosmic-cliffs.jpg" alt="" fill sizes="100vw" className="object-cover opacity-[0.32] saturate-[1.05]" />
             <div className="absolute inset-0 bg-gradient-to-b from-[#020617] via-[#020617]/80 to-[#020617]" />
@@ -510,7 +634,7 @@ export default async function HomePage() {
 
           <Reveal className="relative mx-auto max-w-3xl">
             <p className={`${EYEBROW} mb-5`}>{t('home.cta.eyebrow')}</p>
-            <h2 className="font-display text-3xl font-bold text-white md:text-5xl">
+            <h2 className="font-display text-3xl text-balance font-bold text-white md:text-5xl">
               {t('home.cta.title')}
             </h2>
             <p className="mx-auto mt-6 max-w-xl text-base leading-relaxed text-slate-200 md:text-lg">
@@ -540,7 +664,10 @@ export default async function HomePage() {
       </main>
 
       {/* ── 頁尾 / Footer ──────────────────────────────────────────────────── */}
-      <footer className="relative z-10 border-t border-white/5 px-5 py-10 sm:px-6">
+      {/* snap-end 讓「捲到文件最底」本身就是一個合法停點，簡報不會在最後一屏
+          彈回上一頁。snap-end makes "scrolled to the very end" itself a valid
+          rest point, so the deck cannot bounce off the closing slide. */}
+      <footer className="relative z-10 snap-end border-t border-white/5 px-5 py-10 sm:px-6">
         <div className="mx-auto max-w-6xl">
           <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             <div>

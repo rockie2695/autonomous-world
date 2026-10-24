@@ -81,6 +81,23 @@ export const en = {
       step3: 'Witness Evolution',
       step3Desc: 'Observe hundreds of rounds of evolution, witnessing the rise and fall of civilizations and the birth of legends.',
       orbitLabel: 'A 3D orbit diagram: the core carries the real round number, and the three satellites match the observe, analyze, and witness stages.',
+      pipelineTitle: 'What a round actually runs',
+      pipelineNote:
+        'Not a diagram of the idea: every capture, every defection and every coin on the map is computed by this sequence, in this order.',
+      outOfScope:
+        'What it does not do: no script, no hints, no scripted outcomes. Factions die, thrones empty, wars are lost - none of it is arranged.',
+    },
+    engineLab: {
+      fig: 'Fig 1',
+      title: 'Starship Assembly Line',
+      hint: 'Hover a hand · ← → changes station',
+      readoutIdle: 'Waiting for world data…',
+      rnd: 'RND',
+      keySelected: 'The hand you point at (the readout names its phase)',
+      keyFlame: 'The test-fire: lit when the engine is in and a round advances',
+      caption:
+        'An 18-station starship assembly line. Eighteen electronic hands stand at the back and the product rides a cradle between two guide rails, walking from station 1 to station 18 — one station per phase of the list on the left, with each tool head decided by that phase\u2019s group. When a round advances, the ship the last round finished rolls out, a bare keel enters, the 18 stations work through it, the engine goes in at station 17 and is test-fired at 18; meanwhile the back wall\u2019s 18-cell status strip fills cell by cell and the odometer rolls to the new round number (public endpoint, polled every 15 s). The ship\u2019s completeness *is* this pass\u2019s progress: when the work point reaches station n, batches 1..n are fitted.',
+      aria: 'A starship assembly line with 18 stations: hover, or use the arrow keys, to pick a station',
     },
     stats: {
       title: 'World Overview',
@@ -96,6 +113,7 @@ export const en = {
     nav: {
       world: 'World',
       how: 'How It Works',
+      orrery: 'Orrery',
       saga: 'Saga',
       live: 'Live',
       enter: 'Enter World',
@@ -127,6 +145,24 @@ export const en = {
       legendTitle: 'Factions still alive',
       graphLabel: 'A three-dimensional faction graph rendered from live world data: each point is a settlement, colored by the faction that holds it',
       graphEmpty: 'This world has no settlements yet.',
+    },
+
+    // ── 發條星儀 / The Roundworks Orrery ─────────────────────────────────
+    // 文案對齊模型頁的字幕：三勢力行星 4/6/8 回合一圈、衛星是據點、
+    // 錶盤記回合。不要在這裡介紹模型頁沒有的東西。
+    // The copy mirrors the model page's own captions: three faction planets
+    // orbiting in 4/6/8 rounds, moons as settlements, the dial logging rounds.
+    // Nothing may be advertised here that the model page does not have.
+    orrery: {
+      eyebrow: 'Roundworks Orrery',
+      title: 'One wind of the key, one round of the world',
+      body: 'Three sovereign planets ride the rings — Yanzhou orbits in 4 rounds, Shuangji in 6, Chenxing in 8. Moons circle them as settlements, and the dial logs every round completed. Drag the model or press an arrow key to wind it.',
+      // 星儀 iframe 的無障礙名稱 / accessible name of the orrery iframe
+      frameTitle: 'Roundworks Orrery — one wind of the key, one round of the world (interactive model)',
+      linkLabel: 'Open the full model page',
+      // 另開視窗的提示：只給輔助科技讀，畫面上不必再多一行字
+      // The new-tab hint is for assistive tech only; the visible line stays clean
+      linkHint: '(opens in a new tab)',
     },
 
     // ── 特色區段 / Features section ──────────────────────────────────────
@@ -196,6 +232,41 @@ export const en = {
     nextRound: 'Next Round',
     adminOnly: 'Admin Only',
     noData: 'No data for this round',
+    roundStale: 'The round already advanced — the view was stale and has been resynced; please try again',
+    roundDuration: 'Round time',
+    roundOverview: 'Round overview',
+    roundEvents: 'Events',
+    roundBattles: 'Battles',
+    roundDefections: 'Defections',
+    roundPhases: 'Phase timings',
+    roundPhaseTotal: 'Total',
+    roundEventMix: 'Event mix',
+    roundWorldScale: 'World scale (places / leaders / factions / roads)',
+    roundServedSnapshot: 'snapshot',
+    roundServedLive: 'live',
+    roundNoData: 'No round measurements yet',
+  },
+
+  // ── The round's phases ──
+  phases: {
+    spawnPlaces: 'Spawn places',
+    spawnCharacters: 'Spawn characters',
+    ageAndDeath: 'Age and death',
+    childbirth: 'Childbirth',
+    economy: 'Economy',
+    signals: 'Signals',
+    relationships: 'Relationships',
+    defectionEvents: 'Defection events',
+    loyaltyCheck: 'Loyalty check',
+    aiMove: 'AI movement',
+    battle: 'Battle',
+    build: 'Build',
+    assignAdmins: 'Assign administrators',
+    factionCollapse: 'Faction collapse',
+    factionDeath: 'Faction death',
+    layout: 'Layout recalc',
+    snapshot: 'Snapshot',
+    advance: 'Advance round',
   },
 
   // ── 地圖 / Map ──────────────────────────────────────────────────────────
@@ -351,6 +422,7 @@ export const en = {
     perLevel: 'Per level',
     perRound: 'Yield per round',
     nextLevelEffect: 'What the next level gives',
+    nextLevelStructure: 'Dashed: what the next level adds',
     recruitsToGarrison: 'Recruits (into the garrison)',
     incomeTotal: 'Total income',
     toAdmin: 'Administrator actually gets',

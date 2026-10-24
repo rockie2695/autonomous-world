@@ -308,6 +308,28 @@ body {
      body text, never an interaction state colour. */
   --color-ds-amber: #f5b544;
 
+  /* 建築等距圖的四階材料色（hi=受光面 / md=左側 / lo=右側 / line=描邊）。
+     BuildingFigure 的四階明暗只讀這裡——元件本身不寫死任何顏色。
+     Four-tone material palette for the isometric building figures
+     (hi=lit top / md=left face / lo=right face / line=outline).
+     BuildingFigure reads only these — the component hard-codes no colour. */
+  --color-ds-stone-hi: #c3cedd;
+  --color-ds-stone-md: #94a4b9;
+  --color-ds-stone-lo: #64748b;
+  --color-ds-stone-line: #334155;
+  --color-ds-wood-hi: #dcb27e;
+  --color-ds-wood-md: #b98b55;
+  --color-ds-wood-lo: #8f6a3d;
+  --color-ds-wood-line: #57422a;
+  --color-ds-cloth-hi: #ece0c4;
+  --color-ds-cloth-md: #c8b691;
+  --color-ds-cloth-lo: #9d8c6a;
+  --color-ds-cloth-line: #5f5440;
+  --color-ds-banner-hi: #7ce7f5;
+  --color-ds-banner-md: #2cc4d9;
+  --color-ds-banner-lo: #0e7490;
+  --color-ds-banner-line: #155e75;
+
   /* Tailwind 沒有對應色的半透明面板與線 / translucent panels and lines that
      have no built-in Tailwind equivalent */
   --color-ds-panel: rgba(15, 23, 42, 0.55);
@@ -399,8 +421,40 @@ body {
 }
 
 html {
+  /* color-scheme 讓瀏覽器把捲軸、原生表單控件、自動填入底色都當成深色——
+     `class="dark"` 只影響 Tailwind 的變體，不會改變這些原生外觀。
+     color-scheme makes the browser treat scrollbars, native controls and
+     autofill as dark; the `dark` class only drives Tailwind variants and
+     leaves those native surfaces light. */
+  color-scheme: dark;
   scroll-behavior: smooth;
   scroll-padding-top: 5rem;
+}
+
+/* 簡報式翻頁 / Slide-deck snapping.
+   只有自我宣告 data-slide-deck 的版面（首頁）啟用，其他頁面的捲動完全不變。
+   Snapping only switches on for the layout that opts in with data-slide-deck
+   (the homepage); every other page scrolls exactly as before.
+
+   依規範，snap 面積大於 snapport 時允許在其覆蓋範圍內任意停點——所以比一屏高
+   的區段（#live、#how）在區段內可以自由捲動，snap 只在區段邊界收束；一屏以內
+   的區段才像投影片那樣整頁翻。prefers-reduced-motion 不關閉 snap：它是停點規
+   則不是動畫，減少動態的使用者仍需要「一下翻一屏」。
+   Per spec, a snap area larger than the snapport may rest anywhere while it
+   covers the snapport — so sections taller than one screen (#live, #how) still
+   scroll freely inside, and snapping only lands on section boundaries. Sections
+   that fit one screen flip whole-page. prefers-reduced-motion does not disable
+   snap: it is a rest-point rule, not an animation, and the reduced-motion user
+   still wants one scroll = one slide.
+
+   滑動區段不再各自掛 scroll-mt-*：容器的 scroll-padding-top 已經同時處理
+   錨點跳轉與 snap 停點，兩者並用會相加（實測停點因此低了 80px）。偏移只留
+   上面那一個來源。
+   The slides carry no scroll-mt-* of their own: the container's scroll-padding-top
+   already covers both anchor jumps and snap rest points, and using both adds them
+   up (measured: every rest point landed 80px too low). Keep the single source. */
+html:has([data-slide-deck]) {
+  scroll-snap-type: y mandatory;
 }
 
 /* v3 的首頁 token（字級下限、區段地面、hero 遮罩、導覽選取態、媒體比例）
