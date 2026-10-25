@@ -31,6 +31,7 @@
 
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { selectFeedEvents } from '@/lib/feedSelection';
 import type {
   PublicEvent,
   PublicFaction,
@@ -62,8 +63,24 @@ const BUCKET_SIZE = 120;
 /** 送出的道路上限 / Max roads sent to the client */
 const MAX_ROADS = 600;
 
-/** 送出的近期事件數 / Recent events sent to the client */
-const EVENT_LIMIT = 14;
+/**
+ * 帶子窗口的抓取上限（**不含** INCOME / TROOPS_BOUGHT）。一個回合可以寫下上百筆
+ * 收益事件（一地一筆），不先排除的話，120 筆窗口會整個被「某某得 X 金」塞滿，
+ * 戰爭與叛變根本進不了鏡頭——所以主查詢先排除這兩類，再單獨補回最新的幾筆收益。
+ * The fetch window for the ticker (**excluding** INCOME / TROOPS_BOUGHT). One
+ * round can write a hundred-odd income events (one per place), and without
+ * excluding them up front a 120-row window fills with "某某 got X gold" while
+ * wars and defections never make the cut — so the main query excludes those two
+ * types and the newest few income rows come back separately.
+ */
+const FEED_FETCH_LIMIT = 120;
+
+/**
+ * 補回的收益事件筆數。收益是經濟的顏色，完全沒有也失真；兩三筆剛好。
+ * How many income rows come back. Income is the economy's colour — none at all
+ * distorts too, and two or three is the right tint.
+ */
+const FEED_INCOME_LIMIT = 3;
 
 /**
  * 方格輪流抽樣：每格內依駐軍排序，再一格一格各取一個，直到湊滿上限。
@@ -130,7 +147,8 @@ export async function GET() {
     allPlaces,
     factionPlaces,
     factionCharacters,
-    recentEvents,
+    feedWindow,
+    feedIncome,
   ] = await Promise.all([
     // ── 完整計數（首頁顯示的就是這些數字）────────────────────────────────
     // Complete counts — these are the numbers the homepage shows.
@@ -177,12 +195,25 @@ export async function GET() {
       _sum: { troops: true },
     }),
 
-    // 回合倒序抓最新事件，最後再翻正成時間正序給 ticker 用
-    // Fetch newest-first, then reverse into chronological order for the ticker.
+    // 帶子窗口：**新到舊**抓（含 `id` 決勝——同毫秒的事件順序未定義，沒有它
+    // 順序會時對時錯），排除會洗版的收益／購兵兩類，稍後補回收益並做挑選。
+    // The ticker window: fetched **newest-first** (with the `id` tiebreak —
+    // events written back to back share a millisecond and their order is
+    // undefined without it), excluding the flood-prone income / troop-purchase
+    // types; income comes back separately and the selection runs after.
     prisma.event.findMany({
-      where: { worldId },
-      orderBy: [{ round: 'desc' }, { createdAt: 'asc' }],
-      take: EVENT_LIMIT,
+      where: { worldId, type: { notIn: ['INCOME', 'TROOPS_BOUGHT'] } },
+      orderBy: [{ round: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: FEED_FETCH_LIMIT,
+      select: { type: true, round: true, data: true },
+    }),
+
+    // 補回最新的幾筆收益（經濟的顏色，見 FEED_INCOME_LIMIT）
+    // The newest few income rows (the economy's tint, see FEED_INCOME_LIMIT)
+    prisma.event.findMany({
+      where: { worldId, type: 'INCOME' },
+      orderBy: [{ round: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      take: FEED_INCOME_LIMIT,
       select: { type: true, round: true, data: true },
     }),
   ]);
@@ -244,7 +275,7 @@ export async function GET() {
   // ── 事件：補上移動事件的地名，前端免再查一次 ─────────────────────────
   // Events: resolve move place names once here so the client never re-queries.
   const movePlaceIds = new Set<string>();
-  for (const event of recentEvents) {
+  for (const event of feedWindow) {
     if (event.type !== 'CHARACTER_MOVED') continue;
     const data = event.data;
     if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -265,7 +296,7 @@ export async function GET() {
     }
   }
 
-  const events: PublicEvent[] = recentEvents.map((event) => {
+  const enriched: PublicEvent[] = feedWindow.map((event) => {
     if (event.type !== 'CHARACTER_MOVED') return event;
     const data = event.data;
     if (!data || typeof data !== 'object' || Array.isArray(data)) return event;
@@ -286,8 +317,29 @@ export async function GET() {
     };
   });
 
-  // 翻成時間正序，讓 ticker 直接順著播 / Chronological, so the ticker just plays on
-  events.reverse();
+  // 收益事件按回合插回主窗口：挑選的輸入契約是「新到舊」的**單一**序列，
+  // 補回的收益要落在它自己的回合位置，而不是整段接在後面。
+  // Income rows slot back into the main window by round: the selection's input
+  // contract is one **newest-first** sequence, so the returned income rows must
+  // land at their own round's position rather than append wholesale.
+  const merged: PublicEvent[] = [];
+  let cursor = 0;
+  for (const income of feedIncome) {
+    while (cursor < enriched.length && enriched[cursor].round >= income.round) {
+      merged.push(enriched[cursor]);
+      cursor += 1;
+    }
+    merged.push(income);
+  }
+  while (cursor < enriched.length) {
+    merged.push(enriched[cursor]);
+    cursor += 1;
+  }
+
+  // 挑選：顯著事件優先、每型設上限，輸出即時間正序——ticker 直接順著播。
+  // Select: notables first, per-type caps, and the output is already
+  // chronological — the ticker just plays it.
+  const events: PublicEvent[] = selectFeedEvents(merged);
 
   const payload: PublicWorldPayload = {
     world: { name: world.name, round: world.currentRound },

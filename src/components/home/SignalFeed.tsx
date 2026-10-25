@@ -15,89 +15,22 @@ import { useMemo } from 'react';
 import { usePublicWorld } from './usePublicWorld';
 import { createTranslator, type Locale } from '@/lib/i18n';
 import type { PublicEvent } from '@/lib/publicWorld';
+import { describeEventText, type Translator } from '@/lib/eventText';
 import { EYEBROW } from './tokens';
 
 type SignalFeedProps = {
   locale: Locale;
 };
 
-type Translator = (key: string, params?: Record<string, string | number>) => string;
-
-/** 從事件欄位安全取字串 / read a string out of an untyped event payload */
-function readString(source: unknown, key: string): string | null {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
-  const value = (source as Record<string, unknown>)[key];
-  return typeof value === 'string' && value.length > 0 ? value : null;
-}
-
 /**
- * 把事件轉成一句話。模板全部沿用既有的 t('events.*') 鍵，欄位名與
- * /api/world/events 及遊戲頁的 formatEvent 一致。
- * Turn an event into a sentence. Every template reuses the existing
- * t('events.*') keys; the field names match /api/world/events and the game
- * page's formatEvent.
+ * 事件的句子由 `eventText.ts` 統一供給——與遊戲頁事件日誌同一份規則。缺欄位
+ * 的語段整段省略、未知的事件類型回空字串，所以空字串在這裡就等於「這一列不存在」。
+ * Sentences come from `eventText.ts` — the same rule the game page's event log
+ * uses. Missing fields drop their clause and an unknown event type returns an
+ * empty string, so an empty string here simply means "no row".
  */
 function formatSignal(event: PublicEvent, t: Translator): string {
-  const fallback = t('home.live.eventFallback', { round: event.round });
-  const data = event.data;
-
-  const char = readString(data, 'charName');
-  const place = readString(data, 'placeName');
-  const faction = readString(data, 'factionName');
-  const from = readString(data, 'fromPlaceName');
-  const to = readString(data, 'toPlaceName');
-  const building = readString(data, 'building');
-  const character1 = readString(data, 'character1');
-  const character2 = readString(data, 'character2');
-
-  switch (event.type) {
-    case 'PLACE_CREATED':
-      return place ? t('events.newPlaceDesc', { place }) : fallback;
-    case 'PLACE_CAPTURED':
-      return char && place ? t('events.placeCaptureDesc', { character: char, place }) : fallback;
-    case 'CHARACTER_MOVED':
-      return char && from && to
-        ? t('events.moveDesc', { character: char, from, to })
-        : fallback;
-    case 'CHARACTER_SPAWNED':
-      return char ? t('events.spawnDesc', { character: char }) : fallback;
-    case 'FRIENDSHIP':
-      return character1 && character2
-        ? t('events.friendshipDesc', { character1, character2 })
-        : fallback;
-    case 'DEATH':
-      return char ? t('events.deathDesc', { character: char }) : fallback;
-    case 'BATTLE_DEATH':
-      return char && place ? t('events.battleDeathDesc', { character: char, place }) : fallback;
-    case 'ESCAPE_SUCCESS':
-      return char && place
-        ? t('events.escapeSuccessDesc', { character: char, place })
-        : fallback;
-    case 'DEFECTION':
-      return char ? t('events.defectionDesc', { character: char }) : fallback;
-    case 'FACTION_COLLAPSE':
-      return faction ? t('events.collapseDesc', { faction }) : fallback;
-    case 'FACTION_ELIMINATED':
-      return faction ? t('events.eliminationDesc', { faction }) : fallback;
-    case 'BUILDING_UPGRADE': {
-      if (!place || !building) return fallback;
-      const level = (data as Record<string, unknown> | null)?.newLevel;
-      return t('events.buildingDesc', {
-        place,
-        building: t(`map.${building}`),
-        level: typeof level === 'number' ? level : '—',
-      });
-    }
-    case 'ADMIN_ASSIGNED':
-      return char && place ? t('events.adminAssignedDesc', { character: char, place }) : fallback;
-    case 'ADMIN_REMOVED': {
-      if (!char || !place) return fallback;
-      const next = readString(data, 'newAdminName');
-      return t('events.adminRemovedDesc', { character: char, place, newAdmin: next ?? '—' });
-    }
-    default:
-      return fallback;
-  }
+  return describeEventText(event.type, event.data, t);
 }
 
 export default function SignalFeed({ locale }: SignalFeedProps) {
@@ -109,7 +42,10 @@ export default function SignalFeed({ locale }: SignalFeedProps) {
   // Formatting needs the translator, which is a new function on every render,
   // so this only recomputes when the payload changes.
   const lines = useMemo(
-    () => (payload?.recentEvents ?? []).map((event) => formatSignal(event, t)),
+    () =>
+      (payload?.recentEvents ?? [])
+        .map((event) => formatSignal(event, t))
+        .filter((line) => line.length > 0),
     [payload, locale] // eslint-disable-line react-hooks/exhaustive-deps
   );
 

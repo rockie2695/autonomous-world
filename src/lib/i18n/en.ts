@@ -90,13 +90,15 @@ export const en = {
     engineLab: {
       fig: 'Fig 1',
       title: 'Starship Assembly Line',
-      hint: 'Hover a hand · ← → changes station',
+      hint: 'Hover a hand · ← → changes station · Replay',
       readoutIdle: 'Waiting for world data…',
       rnd: 'RND',
+      replay: 'Replay the assembly animation',
+      replayButton: 'Replay',
       keySelected: 'The hand you point at (the readout names its phase)',
       keyFlame: 'The test-fire: lit when the engine is in and a round advances',
       caption:
-        'An 18-station starship assembly line. Eighteen electronic hands stand at the back and the product rides a cradle between two guide rails, walking from station 1 to station 18 — one station per phase of the list on the left, with each tool head decided by that phase\u2019s group. When a round advances, the ship the last round finished rolls out, a bare keel enters, the 18 stations work through it, the engine goes in at station 17 and is test-fired at 18; meanwhile the back wall\u2019s 18-cell status strip fills cell by cell and the odometer rolls to the new round number (public endpoint, polled every 15 s). The ship\u2019s completeness *is* this pass\u2019s progress: when the work point reaches station n, batches 1..n are fitted.',
+        'An 18-station starship assembly line laid out on a gentle S curve: the eighteen electronic hands sit in two rows (odd stations in the far row, even in the near row, and stations 3/6/9/12/15/18 each on a raised plinth), reaching in from their own flank toward the product riding its cradle — one station per phase of the list on the left, with each tool head decided by that phase\u2019s group. When a round advances, the ship the last round finished rolls out along the curve, a bare keel enters, the 18 stations work through it, the engine goes in at station 17 and is test-fired at 18; meanwhile the back wall\u2019s 18-cell status strip fills cell by cell and the odometer rolls to the new round number (public endpoint, polled every 15 s). The ship\u2019s completeness *is* this pass\u2019s progress: when the work point reaches station n, batches 1..n are fitted.',
       aria: 'A starship assembly line with 18 stations: hover, or use the arrow keys, to pick a station',
     },
     stats: {
@@ -116,6 +118,14 @@ export const en = {
       orrery: 'Orrery',
       saga: 'Saga',
       live: 'Live',
+      // The three sections that only the right-hand dot rail names: the header
+      // row does not carry them, but every screen of the deck needs a name or
+      // the dots are decoration with no meaning
+      hero: 'Home',
+      features: 'Features',
+      cta: 'Start',
+      // The dot rail's accessible name
+      slidesLabel: 'Section navigation',
       enter: 'Enter World',
       openMenu: 'Open menu',
       closeMenu: 'Close menu',
@@ -199,7 +209,6 @@ export const en = {
       updated: 'Read at {time}',
       unavailable: 'World data is unavailable',
       unavailableHint: 'The world may not have started yet, or the data source is temporarily unreachable.',
-      eventFallback: 'Something happened in round {round}',
     },
 
     // ── 行動呼籲 / Call to action ────────────────────────────────────────
@@ -245,6 +254,8 @@ export const en = {
     roundServedSnapshot: 'snapshot',
     roundServedLive: 'live',
     roundNoData: 'No round measurements yet',
+    // The panel's System tab: the round overview (phase timings and summary)
+    systemTab: 'System',
   },
 
   // ── The round's phases ──
@@ -459,6 +470,8 @@ export const en = {
       reportOpen: 'Report',
     title: 'Event Log',
     tab: 'Events',
+    // The log's own round selector (separate from the map's displayed round)
+    roundSelect: 'Select round',
     filterFaction: 'Faction',
     filterAll: 'All',
     filterByLeader: 'Leader',
@@ -586,6 +599,8 @@ export const en = {
   // ── 排行 / Ranking ──────────────────────────────────────────────────────
   ranking: {
     title: 'Faction Ranking',
+    // The panel's Factions tab
+    tab: 'Factions',
     rank: 'Rank',
     territories: 'Territories',
     troops: 'Troops',

@@ -1,30 +1,40 @@
-'use client';
+ 'use client';
 
 // ============================================================================
 // 裝配線的活體 / The assembly line's live half
 // ============================================================================
 // 只有一個 rAF 迴圈、只寫 transform / 透明度 / display，絕不逐帧 setState。回合數
-// 來自 usePublicWorld（模組單例 poller）：回合 +1 時，完工的船滑出廠房、新龍骨進
-// 站、18 隻電子手逐站施工（指到的那隻手探向工作點、工具頭亮起、火花濺到船面）、
-// 第 17 站裝上引擎、第 18 站試車——同一時間里程計滾到新數、後牆的 18 格狀態燈條
-// 逐格亮起、工作點正上方那盞工位燈點亮。離開視口或頁籤隱藏即停；
-// prefers-reduced-motion 直接落到靜止的一帧（末端完工的船，火光只剩餘燼）。
+// 來自 usePublicWorld（模組單例 poller）：回合 +1 時，完工的船沿曲線滑出廠房、
+// 新龍骨進站、18 隻電子手分兩列逐站施工（遠列從後舷、近列從前舷探向工作點，
+// 工具頭亮起、火花濺到船面）、第 17 站裝上引擎、第 18 站試車——同一時間里程計
+// 滾到新數、後牆的 18 格狀態燈條逐格亮起、工作點正上方那盞工位燈點亮。離開視口
+// 或頁籤隱藏即停；prefers-reduced-motion 直接落到靜止的一帧（末端完工的船，火光
+// 只剩餘燼）。「重播」按鈕重啟的是**這張圖的走線**，不動世界的資料。
 //
 // One rAF loop, writing only transforms / opacities / display — never a per-frame
 // setState. The round comes from usePublicWorld (the module-singleton poller): when
-// the round advances, the finished ship rolls out of the hall, a bare keel enters,
-// the 18 electronic hands work through it station by station (the pointed-at hand
-// reaches for the work point, its tool lights, sparks land on the hull), the engine
-// is fitted at station 17 and test-fired at station 18 — while the odometer rolls
-// to the new number, the back wall's 18-cell status strip fills cell by cell, and
-// the station lamp directly over the work point comes on. The loop stops offscreen
-// or on a hidden tab; prefers-reduced-motion lands straight on one still frame.
+// the round advances, the finished ship rolls out along the curve, a bare keel
+// enters, the 18 electronic hands work through it station by station in two rows
+// (the far row reaching from the far flank, the near row from the near flank; the
+// tool lights and sparks land on the hull), the engine is fitted at station 17 and
+// test-fired at station 18 — while the odometer rolls to the new number, the back
+// wall's 18-cell status strip fills cell by cell, and the station lamp directly
+// over the work point comes on. The loop stops offscreen or on a hidden tab;
+// prefers-reduced-motion lands straight on one still frame. The replay button
+// restarts **this figure's pass**, never the world's data.
 //
-// 靜止形狀在 geometry.ts 算好、這裡只搬；靜態畫在 art.tsx。這一檔負責三件只有
-// 客戶端能做的事：逐帧的位移與透明度、`usePublicWorld` 的回合、以及指標／鍵盤。
+// 靜止形狀在 geometry.ts 算好、這裡只搬；靜態畫在 art.tsx。這一檔負責四件只有
+// 客戶端能做的事：逐帧的位移與透明度、usePublicWorld 的回合、指標／鍵盤、以及
+// 重播。a11y **分三層**：外層 .el 只是容器，包著 role="slider" 的互動層，真正的
+// `<button>`（重播）是它的兄弟——按鈕不能嵌在 slider 裡，那樣兩個角色會互相吃掉
+// 對方的互動語義。
 // Rest shapes live in geometry.ts and are only moved here; static art is art.tsx.
-// This file does the three things only a client can: per-frame transforms and
-// opacities, the round from usePublicWorld, and pointer/keyboard.
+// This file does the four things only a client can: per-frame transforms and
+// opacities, the round from usePublicWorld, pointer/keyboard, and replay. The
+// a11y tree is **split three ways**: the outer .el is only a container wrapping
+// the role="slider" interactive layer, and the real `<button>` (replay) is its
+// sibling — a button must not nest inside the slider, or the two roles eat each
+// other's interaction semantics.
 // ============================================================================
 
 import * as React from 'react';
@@ -53,11 +63,14 @@ import {
   shipPartVisible,
   sparkDots,
 } from './frame';
-import { HEIGHT, STATIONS, WIDTH, shift, spin } from './view';
+import { HEIGHT, STATIONS, WIDTH, shipTransform, spin } from './view';
 import {
   CABINET_EL,
+  CEILING_EL,
+  CRATE_EL,
+  CRUCIBLE_EL,
   CRADLE_EL,
-  FLOOR_FRONT_EL,
+  FLOOR_BACK_EL,
   HALL_EL,
   HAND_BASES,
   HITS_EL,
@@ -67,12 +80,12 @@ import {
   RAIL_FAR_EL,
   RAIL_NEAR_EL,
   SHIP_PARTS,
-  WORKS_EL,
   OdoStripGlyphs,
 } from './art';
 
 const BURN_SECONDS = 0.25;
-const DIGIT_SECONDS = 0.5;
+/** 數位滾動的鬆弛常數（放慢與走線同一節奏）/ The digit strip's relaxation constant (slowed to the pass's rhythm) */
+const DIGIT_SECONDS = 0.8;
 const pad2 = (value: number) => String(value).padStart(2, '0');
 const pad4 = (value: number) => String(Math.max(0, Math.floor(value))).padStart(4, '0');
 
@@ -97,6 +110,54 @@ interface HandNodes {
 const EMPTY_HANDS = (): HandNodes[] =>
   Array.from({ length: STATIONS }, () => ({ shoulder: null, elbow: null, tool: null, faces: null }));
 const EMPTY_NODES = <T,>(count: number): (T | null)[] => Array.from({ length: count }, () => null);
+
+type HandAttach = (index: number, part: keyof HandNodes, node: SVGGElement | null) => void;
+
+/** 一列手的 JSX（遠列或近列）。做成**元件**而不是 render 期間呼叫的 helper：refs
+    只在 ref callback 裡寫入，而 props 不算「render 中讀 ref」——helper 直接呼叫會
+    讓 React Compiler 的 refs 規則把 attach 連參數一起當成 render 中的 ref 讀取。
+    One row's hands as JSX (the far row or the near row). It is a **component**,
+    not a helper called during render: the refs are written only inside ref
+    callbacks, and prop passing is not a read during render — calling a plain
+    helper during render makes the React Compiler's refs rule treat the attach
+    argument itself as a ref read in render. */
+function HandRow(props: { row: 'far' | 'near'; bases: React.ReactNode[]; attach: HandAttach }): React.ReactElement {
+  return (
+    <>
+      {HAND_ART.filter((hand) => hand.row === props.row).map((hand) => {
+        const index = hand.index - 1;
+        const attach = props.attach;
+        return (
+          <g key={hand.index}>
+            {props.bases[index]}
+            <g ref={(node) => attach(index, 'shoulder', node)}>
+              {/* 上臂與前臂是最大的兩個面：保留四色階，並用 hi 讓他們從暗色的廠房
+                  裡跳出來——18 隻「電子手」是這張圖的主角。肘、腕、工具零件小，改
+                  flat（理由見 art.tsx 的 HAND_BASES）*/}
+              <Solid paths={hand.upper} tone="mid" crease="faint" />
+              <Solid paths={hand.elbow} tone="hi" crease="none" flat />
+              <g ref={(node) => attach(index, 'elbow', node)}>
+                <Solid paths={hand.forearm} tone="mid" crease="faint" />
+                <Solid paths={hand.wrist} tone="hi" crease="none" flat />
+                <g ref={(node) => attach(index, 'tool', node)}>
+                  <Solid paths={hand.toolBody} tone="hi" crease="faint" />
+                  {hand.toolParts.map((paths, part) => (
+                    <Solid key={part} paths={paths} tone="mid" crease="none" flat />
+                  ))}
+                  <g ref={(node) => attach(index, 'faces', node)}>
+                    {hand.toolFaces.map((face, part) => (
+                      <path key={part} className="el-hot" d={face.fill} />
+                    ))}
+                  </g>
+                </g>
+              </g>
+            </g>
+          </g>
+        );
+      })}
+    </>
+  );
+}
 
 export function EngineLabLive(props: { locale: Locale; label: string }) {
   // 翻譯函式以 locale 為鍵穩定住：draw() 是 rAF 路徑的依賴之一，每次 render 換一
@@ -159,10 +220,16 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
     const pass = passAt(elapsed.current);
     const sweeping = elapsed.current < TOTAL_SECONDS;
 
-    // 產品：整條船（含托架）沿線平移；滑出時淡掉 / The product: the whole ship (cradle
-    // included) translates along the line, and fades as it rolls out
+    // 產品：整條船（含托架）沿曲線走——平移加一個小的切線旋轉（shipTransform，
+    // view.ts 定義），滑出時淡掉。旋轉是螢幕 rotate，跟手的關節同一種近似，最大
+    // 約 6°；樞在船自身的原點上，不會把船抬離滑靴的軌道。
+    // The product: the whole ship (cradle included) rides the curve — a translation
+    // plus one small tangent rotation (shipTransform, defined in view.ts), fading
+    // as it rolls out. The rotation is a screen rotate, the same approximation as a
+    // hand's joints, and tops out near 6°; it pivots on the ship-local origin so
+    // the hull cannot lift off its skids.
     if (ship.current) {
-      const transform = shift(pass.shipX, 0, 0);
+      const transform = shipTransform(pass.shipX);
       if (ship.current.getAttribute('transform') !== transform) ship.current.setAttribute('transform', transform);
       const alpha = pass.alpha.toFixed(3);
       if (ship.current.style.opacity !== alpha) ship.current.style.opacity = alpha;
@@ -368,6 +435,25 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
     setSelected(next);
   }, []);
 
+  /** 一隻手的三個關節群組＋能量面寫進 hands.current。穩定的 callback：handRow 的
+      ref callback 每次引用同一份，不會把掛好的節點洗掉。
+      Writes one hand's three joint groups plus its energy faces into
+      hands.current. A stable callback: handRow's ref callbacks keep quoting the
+      same function, so already-mounted nodes are never wiped. */
+  const attachHand = React.useCallback((index: number, part: keyof HandNodes, node: SVGGElement | null) => {
+    const hand = hands.current[index];
+    if (hand) hand[part] = node;
+  }, []);
+
+  /** 重播：這張圖自己的走線重頭再走一趟——不動世界資料、不動回合數。
+      Replay: this figure's own pass runs again from the top — the world's data
+      and its round number are untouched. */
+  const replay = React.useCallback(() => {
+    elapsed.current = 0;
+    burn.current = 0;
+    run();
+  }, [run]);
+
   /**
    * 指到哪隻手：螢幕上最近的命中圈。距離上限是命中圈半徑的 1.4 倍——再寬，游標停
    * 在兩隻手之間就會亂跳。命中圈是 DOM 裡最後一組，任何零件都蓋不掉。
@@ -403,38 +489,48 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
         root.current = node;
       }}
       className="el"
-      role="slider"
-      tabIndex={0}
-      aria-label={props.label}
-      aria-valuemin={1}
-      aria-valuemax={STATIONS}
-      aria-valuenow={selected}
-      aria-valuetext={`${pad2(selected)}/18 · ${phaseName(t, selected)}`}
-      onPointerMove={(event) => {
-        if (event.pointerType !== 'mouse') return;
-        const station = xToStation(event.clientX, event.clientY);
-        if (station !== null) select(station);
-      }}
-      onPointerDown={(event) => {
-        const station = xToStation(event.clientX, event.clientY);
-        if (station !== null) select(station);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
-          event.preventDefault();
-          select(selectedRef.current + 1);
-        } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
-          event.preventDefault();
-          select(selectedRef.current - 1);
-        } else if (event.key === 'Home') {
-          event.preventDefault();
-          select(1);
-        } else if (event.key === 'End') {
-          event.preventDefault();
-          select(STATIONS);
-        }
-      }}
     >
+      {/* a11y 三層：外層 .el 只是容器；互動層是 role="slider" 的內層 div（指標與
+          鍵盤都掛在它身上）；「重播」是它的**兄弟**——按鈕不能嵌進 slider，兩個
+          角色會互相吃掉對方的互動語義。
+          The a11y tree, split three ways: the outer .el is only a container; the
+          interactive layer is the inner role="slider" div (pointer and keyboard
+          both live on it); and the replay button is its **sibling** — a button
+          must not nest inside the slider, or the two roles eat each other's
+          interaction semantics. */}
+      <div
+        role="slider"
+        tabIndex={0}
+        aria-label={props.label}
+        aria-valuemin={1}
+        aria-valuemax={STATIONS}
+        aria-valuenow={selected}
+        aria-valuetext={`${pad2(selected)}/18 · ${phaseName(t, selected)}`}
+        onPointerMove={(event) => {
+          if (event.pointerType !== 'mouse') return;
+          const station = xToStation(event.clientX, event.clientY);
+          if (station !== null) select(station);
+        }}
+        onPointerDown={(event) => {
+          const station = xToStation(event.clientX, event.clientY);
+          if (station !== null) select(station);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowRight' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            select(selectedRef.current + 1);
+          } else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') {
+            event.preventDefault();
+            select(selectedRef.current - 1);
+          } else if (event.key === 'Home') {
+            event.preventDefault();
+            select(1);
+          } else if (event.key === 'End') {
+            event.preventDefault();
+            select(STATIONS);
+          }
+        }}
+      >
       <IsoFigure width={WIDTH} height={HEIGHT} label={props.label} className="el-stage">
         <defs>
           <clipPath id="el-odo-clip">
@@ -464,7 +560,7 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
           />
         ))}
         {CABINET_EL}
-        {WORKS_EL}
+        {CRUCIBLE_EL}
         {/* 熔金塔的澆口窗與澆口面：第 17 站（裝引擎）亮起 */}
         <path
           ref={(node) => {
@@ -482,7 +578,10 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
           d={CRUCIBLE_ART.pour.fill}
           opacity={0}
         />
-        {/* 18 盞工位燈：工作點正上方那盞最亮 */}
+        {/* 後側走道與料件：遠側導軌之外，機器的後面（見 art.tsx 的 FLOOR_BACK_EL）*/}
+        {FLOOR_BACK_EL}
+        {CEILING_EL}
+        {/* 18 盞工位燈：工作點正上方那盞最亮（燈殼在天花板層，亮面畫在其後）*/}
         {LAMP_ART.faces.map((face, index) => (
           <path
             key={index}
@@ -496,52 +595,10 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
         ))}
         {RAIL_FAR_EL}
 
-        {/* 18 隻電子手：基座（靜態）→ 肩 → 肘 → 工具頭（反向轉回水平）
-            The 18 electronic hands: base (static) → shoulder → elbow → tool
-            (counter-rotated back to level) */}
-        {HAND_ART.map((hand, index) => (
-          <g key={hand.index}>
-            {HAND_BASES[index]}
-            <g
-              ref={(node) => {
-                hands.current[index]!.shoulder = node;
-              }}
-            >
-              {/* 上臂與前臂是最大的兩個面：保留四色階，並用 hi 讓他們從暗色的廠房
-                  裡跳出來——18 隻「電子手」是這張圖的主角。肘、腕、工具零件小，改
-                  flat（理由見 art.tsx 的 HAND_BASES）*/}
-              <Solid paths={hand.upper} tone="mid" crease="faint" />
-              <Solid paths={hand.elbow} tone="hi" crease="none" flat />
-              <g
-                ref={(node) => {
-                  hands.current[index]!.elbow = node;
-                }}
-              >
-                <Solid paths={hand.forearm} tone="mid" crease="faint" />
-                <Solid paths={hand.wrist} tone="hi" crease="none" flat />
-                <g
-                  ref={(node) => {
-                    hands.current[index]!.tool = node;
-                  }}
-                >
-                  <Solid paths={hand.toolBody} tone="hi" crease="faint" />
-                  {hand.toolParts.map((paths, part) => (
-                    <Solid key={part} paths={paths} tone="mid" crease="none" flat />
-                  ))}
-                  <g
-                    ref={(node) => {
-                      hands.current[index]!.faces = node;
-                    }}
-                  >
-                    {hand.toolFaces.map((face, part) => (
-                      <path key={part} className="el-hot" d={face.fill} />
-                    ))}
-                  </g>
-                </g>
-              </g>
-            </g>
-          </g>
-        ))}
+        {/* ── 遠列手（站在 S 曲線後舷，單數站；雙數站在近列，見近景）／ the far row
+            (odd stations, on the far flank of the S curve; even stations sit in the
+            near row, painted below) */}
+        <HandRow row="far" bases={HAND_BASES} attach={attachHand} />
 
         {/* ── 產品 / product ─────────────────────────────────────────────── */}
         <g
@@ -607,7 +664,11 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
 
         {/* ── 近景 / near plane ─────────────────────────────────────────── */}
         {RAIL_NEAR_EL}
-        {FLOOR_FRONT_EL}
+        {/* 近側料箱：近列手之間的間隙（見 art.tsx 的 CRATE_EL）*/}
+        {CRATE_EL}
+        {/* ── 近列手（雙數站，站在前舷、向後探）／ the near row (even stations, on
+            the near flank reaching back) */}
+        <HandRow row="near" bases={HAND_BASES} attach={attachHand} />
         {ODO_EL}
         <g clipPath="url(#el-odo-clip)">
           {ODO_ART.digitSlots.map((matrix, slot) => (
@@ -642,6 +703,15 @@ export function EngineLabLive(props: { locale: Locale; label: string }) {
         ))}
         {HITS_EL}
       </IsoFigure>
+      </div>
+      <button
+        type="button"
+        className="el-replay"
+        onClick={replay}
+        aria-label={t('home.engineLab.replay')}
+      >
+        {t('home.engineLab.replayButton')}
+      </button>
     </div>
   );
 }

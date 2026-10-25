@@ -431,10 +431,20 @@ events survived, and says so when all of them were filtered out.
 **The log shows ONE round at a time** (Oct 2026). It used to fetch *every* round at once
 (`/api/world/events` with no `round`), which by round 26 was four thousand rows and
 grew by a hundred-odd every round, with no ceiling — and the filters then ran over
-that pile. Now the log follows the **displayed round** (the timeline picks it), the
-header carries the `RND 0000` badge, and the fetch is bounded (`?round=N&limit=500`).
+that pile. Now the log follows the **displayed round**, the header carries the
+`RND 0000` badge, and the fetch is bounded (`?round=N&limit=500`).
 The server keeps the oldest-to-newest order it always had: with a limit it takes the
 **newest** N and flips them back, so the client never reverses anything.
+
+- **The round dropdown (`#gm-evt-round`) is not a sixth filter** — it changes *which round
+  is fetched*, sharing `selectedRound` with the timeline outside the panel, so both
+  controls always read the same round. It lists **1..lastRound only**: round 0 is the seed
+  snapshot with no events at all, and "all rounds" does not exist in this design (the fetch
+  is per round; history is the timeline's job). The row is omitted when there is nothing
+  to pick rather than rendered as an empty select. Its options are
+  `availableRounds`, derived on `page.tsx` — **both props must be passed**; the selector
+  once shipped using them without destructuring, which compiled as bare globals and threw
+  `ReferenceError: availableRounds is not defined` at runtime.
 
 - **Faction** — a `<select>` (`#gm-evt-faction`) plus 全部. `factionOfEvent()` resolves an event's faction through **`charId` first, then `placeId`**. `charId` is the reliable link (every character-bearing event carries it, backfilled at read time — see above), so a `CHARACTER_MOVED` row filters under the mover's faction rather than the destination's
 - **Leader** — a `<select>` (`#gm-evt-leader`) listing every character in the world, name-sorted (`localeCompare`), the dead suffixed `†` (their events remain in the log). The semantics are "events **involving** this leader": `eventLeaderIds()` (`src/app/game/eventFilter.ts`, pure and tested) collects **every** leader id an event's data carries — `charId`, `fatherId`, `friendId`, `kingId`, `adminId`, `newAdminId` — and a match on any counts. Without that, filtering by a leader would drop the rows where they appear as a father, a friend, the king or an `INCOME` recipient
@@ -1255,9 +1265,10 @@ reading the "Slide view" section below — a slide owns one idea.
 
 ### 星艦裝配線圖 / The starship assembly line figure (`src/components/home/engine-lab/`)
 
-`#how`'s figure beside `RoundPipeline`: **18 electronic hands** on an assembly line, building a
-starship. It replaced an earlier "engine deck with 18 pods on an orbiting ring" (Oct 2026) — a
-ring is a rotation, and the figure's job is to make the round's **ordered** 18 phases visible.
+`#how`'s figure beside `RoundPipeline`: **18 electronic hands** in **two rows along a gentle S
+curve** (odd stations in the far row, even in the near row; stations 3/6/9/12/15/18 stand on a
+raised plinth), building a starship. The ring was replaced by a line (Oct 2026) and the line has
+since been bent into an S with two flanks so the reach reads depth as well as order.
 
 **What it claims, and where each claim comes from**
 
@@ -1270,32 +1281,64 @@ ring is a rotation, and the figure's job is to make the round's **ordered** 18 p
 | The round number on the odometer | `usePublicWorld().world.round` (public endpoint) |
 
 - **The resting state is a real state, not a blank**: the ship the last round finished sits at the
-  end bay (station 18) with its engine in. The next advance rolls it out, resets the hull while it
-  is invisible, and builds the next one. That is why the machine can be read at a glance: idle =
-  one completed ship, sweep = its construction.
-- **Painter's order is three fixed planes** (far: hall, wall, cabinets, crucible, ceiling, the **18
-  hands** → product: cradle + ship → near: front rail, walkway and stock, odometer, label plate).
-  An assembly line never re-layers a part the way the old orbiting ring did, so no frame ever
-  rebuilds a path: **a hand only rotates its joints, the ship only translates**.
+  end bay (station 18) with its engine in. The next advance rolls it out **along the curve**, resets
+  the hull while it is invisible, and builds the next one. That is why the machine can be read at a
+  glance: idle = one completed ship, sweep = its construction.
+- **The S curve is a contract, not a wiggle.** `CURVE_AMP` (11 world units) and
+  `CURVE_WAVE` (~690) in `view.ts` — `frame.test.ts` asserts `|lineY| ≤ CURVE_AMP` and every
+  station's tangent spin ≤ 6°, so the ship's screen rotation stays small. The rails are **segmented
+  along the curve** (a step every `RAIL_STEP`, each segment a convex quad; a single straight rail
+  would detach from the line mid-curve). The ship rides with `shipTransform`: translate along
+  `EX`/`lineY` plus the small screen tangent spin, pivoting at the ship-local origin so the hull
+  cannot lift off its skids.
+- **Two rows, one plinth rule.** `plinthAt(index) = index % 3 === 0` puts stations 3/6/9/12/15/18
+  higher (`seatY`/`seatZ` read it). The rows split `HandRow` (in `live.tsx`) — a **component**, not
+  a helper called during render: the React Compiler's read-ref rule counts a plainly called helper's
+  `attach` callback as a ref access during render (lint error), while prop passing does not.
+- **The pass's rhythm is fixed and slow on purpose**: exit 1.2 s → sweep 4.0 s → fire 1.2 s
+  (`EXIT_SECONDS`/`SWEEP_SECONDS`/`FIRE_SECONDS`, total asserted ≈ 6.4 in `frame.test.ts`); each
+  station stop ≥ 150 ms so "reach → tool lights → sparks" reads across two rows, and
+  `DIGIT_SECONDS` (0.8) rolls the odometer at the same tempo. The **重播 / Replay button** (under
+  the figure) resets only this pass's clock (`elapsed`/`burn`), never the world's data or round.
+- **a11y is three layers**: the outer `.el` is only a container; the interactive layer is the inner
+  `role="slider"` div (pointer move/down and the arrow/Home/End keys live on it); the replay button
+  is that slider's **sibling** — a button must not nest inside a slider or the two roles eat each
+  other's interaction semantics.
+- **Painter's order is four fixed planes** (far: hall, wall, cabinets, the **crucible at the
+  outfeed end**, ceiling, far rail, **far-row hands** → product: cradle + ship → near: near rail,
+  the small crates in the near row's gaps, **near-row hands**, odometer, label plate → sparks →
+  hit circles). An assembly line never re-layers a part the way the old orbiting ring did, so no
+  frame ever rebuilds a path: **a hand only rotates its joints, the ship only translates**.
+- **The walkway and the pallets live on the FAR side** (`FLOOR_BACK_EL`, painted with the far
+  plane, before the ship): stock staged beside the line, never between the machine and the viewer.
+  Only a few small crates remain in the near row's gaps (`CRATE_EL`). The crucible sits at the
+  outfeed end (its melt pours across the arrival of the finished ship's engine test).
 - **Joint angles are screen rotations, and that is a stated approximation.** A rotation about the
   view axis is exactly rigid under orthographic projection; a rotation about the world z axis
   projects to an ellipse. Arm joints move ≤24° (asserted in `frame.test.ts`) and the figure is a
   stylised isometric drawing, so the trade is one transform per joint per frame. Widen the angles
   and the deviation shows.
 - **Two fire signals, both honest**: a hand's tool lights and throws sparks while the work point is
-  at it (`reach`), and the **engine test-fires only after station 18** and only once the bell's
-  batch exists (`burn`, and the flame group's display is tied to batch 18 — a flame before the
-  engine is fitted would be a lie).
+  at it (`reach`, sparks land line-aware against the curve), and the **engine test-fires only after
+  station 18** and only once the bell's batch exists (`burn`, and the flame group's display is tied
+  to batch 18 — a flame before the engine is fitted would be a lie).
 - **`--reduced` is the only stable way to run the lines audit.** The figure sits inside a `Reveal`,
   so a live capture measures the fade: the same code reported 44, 60, 20 and 27 floating ends on
   consecutive runs, and 20/20 twice under `--reduced`. The gate:
   ```bash
   node ~/.agents/skills/anatomy/scripts/drive.mjs http://localhost:3000/ \
     --actions <[["wait",3000],["scroll","#how .iso-plate"],["wait",900],["lines",out,"#how .iso-plate"]]> \
-    --width 1440 --height 1100 --reduced      # → line ends: 0 of 272 … float
+    --width 1440 --height 1100 --reduced      # → line ends: 0 of 366 … float
   ```
-  Run it at `--width 390` too: `.el-fine` is hidden there, so fewer lines are checked (0 of 178) and
+  Run it at `--width 390` too: `.el-fine` is hidden there, so fewer lines are checked (0 of 278) and
   a floating end cannot hide behind detail that is no longer drawn.
+- **The audit's ink is strokes, not fills.** `line-ends.mjs` measures an end against *stroked*
+  geometry (and filled circles / opaque cover); shade facets do not count. This bit at the
+  crucible's move to the outfeed end (Oct 2026): the old back-face **support ribs were removed**
+  there — they sat on a never-lit back face whose ends, at the open floor, touched no stroked ink
+  at all (nearest stroke 1.8–4.5 user px away), and a mark that cannot root is deleted, not
+  re-anchored on another face's ink. The pour window, its rim and the screws carry the body's
+  detail. Do not reintroduce unrooted decoration there.
 - **`free` is used exactly as the kit documents it — for marks, not for structure.** A stencil on a
   face (walkway tread, lane stops, bay doors, wall kick/transom, cabinet vents, pallet bands,
   bearing ticks, plating seams, livery stripes, machined seams, and the tube-like ducts) ends in the
@@ -1303,7 +1346,8 @@ ring is a rotation, and the figure's job is to make the round's **ordered** 18 p
   standing for printed text". Everything structural is still rooted and still audited — the first
   pass of that audit (44 floats) found real ones, and the fixes were geometry: a mark that stops
   mid-face is extended to span the face it is drawn on.
-- **Node budget**: 1,303 paths at desktop (down from 2,203 in the first draft). Small cylinders and
+- **Node budget**: 1,786 paths at desktop (up from 1,303 — the segmented S rails and the two-row
+  plinths more than pay for the old single-row bar; the first draft was 2,203). Small cylinders and
   thin plates are drawn `flat crease="none"` — four shade bands on a 14px-wide cylinder are 2px each
   and smear, so the outline reads better *and* it halves the 18 hands' cost. Keep it that way; the
   big surfaces (floor, wall, hull, shoulders) keep the kit's four-tone language.
@@ -1311,10 +1355,13 @@ ring is a rotation, and the figure's job is to make the round's **ordered** 18 p
   reasons: the floor, walkway, wall and hull overlap at one depth and all at `#131313` muddled
   together (the ship was nearly invisible), and a mark on a face that is nearly the background
   colour is one the audit is *right* to call a floating end.
-- **Files**: `view.ts` (layout, projection fit, canvas 1040×480), `geometry.ts` (every path, once at
-  module load), `art.tsx` (static painter's-order fragments; `SHIP_PARTS` is the 18 batches),
-  `frame.ts` (**pure** motion: pass timeline, poses, lamps, sparks — `frame.test.ts` runs it under
-  node), `live.tsx` (one rAF loop, pointer/keyboard, the readout).
+- **Files**: `view.ts` (layout, projection fit, canvas 1040×480, and the S-curve / two-row
+  constants — `lineY`/`lineDy`/`tangentSpin`/`shipTransform`/`seatY`), `geometry.ts` (every path
+  once at module load; rails sparked along the curve; hands seat-relative), `art.tsx` (static
+  painter's-order fragments; `SHIP_PARTS` is the 18 batches), `frame.ts` (**pure** motion: pass
+  timeline, poses, lamps, sparks — `frame.test.ts` runs it under node), `live.tsx` (one rAF loop,
+  the `HandRow` rows, the a11y slider + replay, the readout), `engine-lab.css` (the `.el-replay`
+  button is sized here; i18n keys under `home.engineLab.*` in `src/lib/i18n/`).
 - **Editing these files: use the editor, never a shell round-trip.** `Get-Content`/`WriteAllText` in
   Windows PowerShell reads UTF-8 as the ANSI codepage and writes the mojibake back — it destroyed
   every Chinese comment in `geometry.ts` and `view.ts` once, and the loss is not recoverable
@@ -1352,8 +1399,10 @@ The homepage scrolls **one screen at a time**, like a deck: `#hero`, `#live`,
   rule, not an animation; the reduced-motion visitor is the one who least wants a
   page that slides half a screen. Every *animated* thing on the page still has its
   own reduced-motion path — the deck adds no motion of its own.
-- The seam between `#hero` and `#live` carries `SignalFeed`, which is deliberately
-  **not** a slide: it is a 49px ticker strip that rides above the live slide.
+- `SignalFeed` is the **last element inside `#hero`**, pinned to the slide's bottom
+  edge with `mt-auto` (the hero is a flex column) and bled full-width with a
+  negative margin over the hero's `px-5` gutters. It is deliberately **not** a
+  slide: it is a 49px ticker strip that closes the hero screen.
 
 ### 首頁的語系是 prop，不是環境的 `t()` / A homepage locale is a prop, never the ambient `t()`
 
@@ -1671,6 +1720,25 @@ instead of scattering.
   Migration `20261012000000_add_character_ti` adds the column and backfills **17**, not 0: a flat 0
   would make every pre-existing leader helpless in defence and lose nearly every fight they were
   about to win. Do not run `prisma migrate reset` against this database.
+
+### The economy phase commits once (batched transaction)
+
+**The whole `economy` phase writes inside ONE `inTransaction`** (Oct 2026; it used to open one
+per place). The split, the recruits, the purchases and their events all land together or not at
+all: every amount is computed rather than derived from a stored total, so a half-written phase
+would leave part of the world's gold absent with nothing to reconcile it against. A per-place
+transaction protected the same per-place invariant at the cost of hundreds of commits a round.
+
+- **It is NOT concurrency.** The transaction wraps only the DB writes. Income, purchase batches
+  and every `rng.float` draw happen in exactly the same order as before — one seed still grows
+  one world. Reaching for `Promise.all` inside the loop would make the draw order depend on
+  scheduling, which is the one thing a seeded simulation cannot survive.
+- **Only `tx` inside the callback.** The reads (`place.findMany`, `character.findMany`) stay
+  outside on purpose; the module-level `prisma` called inside the callback would escape the
+  transaction and not roll back with it (`server/tx.ts`).
+- **`TX_TIMEOUT_MS` is 60s** (raised from 20s). The clock starts when the transaction does, so a
+  timeout discards the phase's entire write and reruns it; at `PLACE_MAX_COUNT` (2000) places ×
+  5–8 sequential writes each, 20s was tight against a remote database.
 
 ### Building effects — one definition, four consumers
 

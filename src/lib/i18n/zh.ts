@@ -88,13 +88,15 @@ export const zh = {
     engineLab: {
       fig: '圖 1',
       title: '星艦裝配線',
-      hint: '滑過電子手 · ← → 換工位',
+      hint: '滑過電子手 · ← → 換工位 · 重播',
       readoutIdle: '等待世界資料…',
       rnd: '回合',
+      replay: '重播裝配動畫',
+      replayButton: '重播',
       keySelected: '指到的那隻手（讀出槽正讀它的階段）',
       keyFlame: '試車焰：引擎裝上、回合推進時點燃',
       caption:
-        '一條 18 工位的星艦裝配線。18 隻電子手站在後側，產品坐在兩條導軌之間的托架上，從第 1 站走到第 18 站——一個工位對應左表的一個階段，工具頭由那個階段的分組決定。回合推進時，上一艘完工的船滑出廠房、新龍骨進站、18 站逐站施工、第 17 站裝上引擎、第 18 站試車；同一時間後牆的 18 格狀態燈條逐格亮起、里程計滾到新的回合數（公開端點，每 15 秒輪詢一次）。船的完成度就是這趟走線的進度：走到第 n 站，前 n 批零件才裝上。',
+        '一條 18 工位的星艦裝配線，排在一條平緩的 S 曲線上：18 隻電子手分兩列（單數站在後列、雙數站列在前列，第 3/6/9/12/15/18 站各自立在凸起的地台上），從自己的舷側探向坐在托架上的產品——一個工位對應左表的一個階段，工具頭由那個階段的分組決定。回合推進時，上一艘完工的船沿曲線滑出廠房、新龍骨進站、18 站逐站施工、第 17 站裝上引擎、第 18 站試車；同一時間後牆的 18 格狀態燈條逐格亮起、里程計滾到新的回合數（公開端點，每 15 秒輪詢一次）。船的完成度就是這趟走線的進度：走到第 n 站，前 n 批零件才裝上。',
       aria: '18 工位星艦裝配線：滑鼠滑過或用左右方向鍵選擇工位',
     },
     stats: {
@@ -114,6 +116,16 @@ export const zh = {
       orrery: '星儀',
       saga: '傳奇',
       live: '即時',
+      // 只在右側圓點導覽上出現的三段：標頭列不放這幾項，但簡報的每一屏
+      // 都必須有自己的名字，否則圓點只是沒有意義的裝飾
+      // The three sections that only the right-hand dot rail names: the header
+      // row does not carry them, but every screen of the deck needs a name or
+      // the dots are decoration with no meaning
+      hero: '首頁',
+      features: '特色',
+      cta: '開始',
+      // 圓點導覽的無障礙名稱 / the dot rail's accessible name
+      slidesLabel: '區段導覽',
       enter: '進入系統',
       openMenu: '開啟選單',
       closeMenu: '關閉選單',
@@ -197,7 +209,6 @@ export const zh = {
       updated: '資料擷取於 {time}',
       unavailable: '目前無法讀取世界資料',
       unavailableHint: '世界可能還沒啟動，或資料來源暫時無法連線。',
-      eventFallback: '第 {round} 回合發生了一件事',
     },
 
     // ── 行動呼籲 / Call to action ────────────────────────────────────────
@@ -243,6 +254,9 @@ export const zh = {
     roundServedSnapshot: '快照',
     roundServedLive: '即時',
     roundNoData: '尚無回合量測資料',
+    // 右側面板的「系統」分頁：回合概覽（階段耗時與摘要）住在這裡
+    // The panel's 系統 tab: the round overview (phase timings and the summary)
+    systemTab: '系統',
   },
 
   // ── 回合的階段 / The round's phases ──
@@ -448,10 +462,10 @@ connections: '連接道路',
       incomeDesc: '{place} 收益 {gold} 金、徵兵 {recruits}（駐軍 {total}）',
       incomeLeader: '{leader} 得 {gold} 金（現有 {total} 金）',
       troopsBought: '{leader} 於 {place} 購兵 {bought} 名，花費 {cost} 金（餘 {gold} 金，兵 {troops}）',
-      childBornDesc: '{father}的子喣出生：{character}',
-      loadOlder: '載入更早的 {count} 絆',
+      childBornDesc: '{father}的子嗣出生：{character}',
+      loadOlder: '載入更早的 {count} 筆',
       newEvents: '新消息 ▼',
-      kingInheritedDesc: '{character}接任了父亲 {father} 的王位',
+      kingInheritedDesc: '{character}接任了父親 {father} 的王位',
       reportTitle: '戰報',
       reportAttack: '進攻',
       reportDefence: '防守',
@@ -463,6 +477,9 @@ connections: '連接道路',
       reportOpen: '戰報',
     title: '事件日誌',
     tab: '事件',
+    // 日誌自己的回合選擇（與地圖顯示的回合分開，見 EventLog）/
+    // the log's own round selector (separate from the map's displayed round)
+    roundSelect: '選擇回合',
     filterFaction: '勢力',
     filterAll: '全部',
     filterByLeader: '將領',
@@ -592,6 +609,8 @@ connections: '連接道路',
   // ── 排行 / Ranking ──────────────────────────────────────────────────────
   ranking: {
     title: '勢力排行',
+    // 右側面板的「勢力」分頁 / the panel's 勢力 tab
+    tab: '勢力',
     rank: '排名',
     territories: '領地',
     troops: '兵力',

@@ -10,15 +10,16 @@
 // fires, lamps, part display, sparks) is assembled by live.tsx from the same
 // geometry.
 //
-// 畫家序是三層，順序不能動（view.ts 說明了為什麼這條線不需要每帧換層）：
-//   遠景 → 產品 → 近景
-// 遠景：地面 → 地面刻線 → 後牆（貨架、艙門、燈條槽）→ 配電櫃 → 熔金塔 → 天花板
-//       （樑、吊架、燈殼）→ 遠側導軌 → **18 隻手**（見 live.tsx）
+// 畫家序是**四層**，順序不能動（view.ts 說明了為什麼這條線不需要每帧換層）：
+//   遠列手 → 產品 → 近導軌 → 近列手（+ 料箱、里程計、銘牌）
+// 遠景：地面 → 地面刻線 → 後牆（貨架、艙門、燈條槽）→ 配電櫃 → 熔金塔 →
+//       遠側走道與料件 → 天花板（樑、吊架、燈殼）→ 遠側導軌 → **遠列的手**
 // 產品：托架 + 星艦（18 批零件，見 SHIP_PARTS）
-// 近景：近側導軌 → 里程計 → 銘牌 → 火花 → 命中圈
+// 近景：近側導軌 → 近側料箱 → **近列的手** → 里程計 → 銘牌 → 火花 → 命中圈
 //
-// The painter's order is three planes and the sequence is load-bearing (view.ts
-// explains why this line never re-layers a part): far → product → near.
+// The painter's order is **four planes** and the sequence is load-bearing (view.ts
+// explains why this line never re-layers a part): far hands → product → near rail
+// → near hands (+ crates, odometer, plate).
 // ============================================================================
 
 import * as React from 'react';
@@ -95,11 +96,17 @@ export const CABINET_EL = (
   </g>
 );
 
-export const WORKS_EL = (
-  <g key="works">
-    {/* 熔金塔：本體靜態，澆口窗與澆口面會亮（live.tsx）*/}
+export const CRUCIBLE_EL = (
+  <g key="crucible">
+    {/* 熔金塔：本體靜態，澆口窗與澆口面會亮（live.tsx）。之前的背側支撐肋已移除：
+        搬到出料端後它們畫在受不到光的背面，兩端搭不到任何描線墨（稽核 floating）；
+        塔身細節由澆口窗、窗框、螺絲釘承擔。
+        Crucible: the body is static; the pour window and lip light up (live.tsx).
+        The old back-face ribs are gone: since the tower moved to the outfeed end
+        they sat on a never-lit back face whose ends touched no stroked ink at all,
+        so the audit floats them; the window, its rim and the screws carry the
+        body's detail now. */}
     <Solid paths={CRUCIBLE_ART.tower} tone="mid" crease="faint" />
-    <Line d={CRUCIBLE_ART.ribs} tone="faint" className="el-fine" />
     <Line d={CRUCIBLE_ART.windowRim} tone="lo" />
     <Solid paths={CRUCIBLE_ART.lid} tone="mid" crease="faint" />
     <Line d={CRUCIBLE_ART.lidRing} tone="lo" />
@@ -108,37 +115,16 @@ export const WORKS_EL = (
     <g className="el-fine">
       <Dots points={CRUCIBLE_ART.screws} size={0.5} tone="mid" />
     </g>
-    {/* 天花板：樑、吊架、燈殼（燈的發光面在 live.tsx）*/}
-    <Solid paths={BEAM_ART.slab} tone="mid" crease="faint" />
-    <Line d={BEAM_ART.underside} tone="lo" />
-    <Line d={BEAM_ART.way} tone="faint" free />
-    {BEAM_ART.hangers.map((hanger, index) => (
-      <Solid key={index} paths={hanger} tone="lo" crease="none" flat />
-    ))}
-    <g className="el-fine">
-      <Dots points={BEAM_ART.hangerDots} size={0.5} tone="mid" />
-    </g>
   </g>
 );
 
-export const RAIL_FAR_EL = (
-  <g key="rail-far">
-    <Solid paths={RAIL_ART.far} tone="mid" crease="faint" />
-    <Line d={RAIL_ART.farTop} tone="lo" />
-    <Line d={RAIL_ART.farTicks} tone="lo" />
-    <g className="el-fine">
-      <Dots points={RAIL_ART.rollerDots.filter((_, index) => index % 2 === 0)} size={0.45} tone="mid" />
-    </g>
-  </g>
-);
-
-/** 地板前緣：走道與料件。**近景**——它們在近側導軌之外，也就是離觀眾更近的那半
-    地面，所以要在產品之後畫。
-    The floor's front strip: the walkway and the stock. **Near plane** — they sit out
-    beyond the near rail, the half of the floor closest to the viewer, so they are
-    painted after the product. */
-export const FLOOR_FRONT_EL = (
-  <g key="floor-front">
+/** 地板後側：走道與料件。**遠景**——它們在遠側導軌之外，機器的後面；工廠把料
+    件放在輸送線旁，擋在人前是構圖錯誤。
+    The floor's back strip: walkway and stock. **Far plane** — out beyond the far
+    rail, behind the machine; a factory stages its stock beside the conveyor,
+    never between the machine and the viewer. */
+export const FLOOR_BACK_EL = (
+  <g key="floor-back">
     <Solid paths={FLOOR_ART.walkway} tone="lo" crease="none" flat />
     <Line d={FLOOR_ART.walkwayEdge} tone="faint" />
     <Line d={FLOOR_ART.tread} tone="faint" className="el-fine" />
@@ -155,14 +141,59 @@ export const FLOOR_FRONT_EL = (
   </g>
 );
 
-export const RAIL_NEAR_EL = (
-  <g key="rail-near">
-    <Solid paths={RAIL_ART.near} tone="mid" crease="faint" />
-    <Line d={RAIL_ART.nearTop} tone="lo" />
-    <Line d={RAIL_ART.nearTicks} tone="lo" />
+export const CEILING_EL = (
+  <g key="ceiling">
+    {/* 天花板：樑、吊架、燈殼（燈的發光面在 live.tsx）*/}
+    <Solid paths={BEAM_ART.slab} tone="mid" crease="faint" />
+    <Line d={BEAM_ART.underside} tone="lo" />
+    <Line d={BEAM_ART.way} tone="faint" free />
+    {BEAM_ART.hangers.map((hanger, index) => (
+      <Solid key={index} paths={hanger} tone="lo" crease="none" flat />
+    ))}
     <g className="el-fine">
-      <Dots points={RAIL_ART.rollerDots.filter((_, index) => index % 2 === 1)} size={0.45} tone="mid" />
+      <Dots points={BEAM_ART.hangerDots} size={0.5} tone="mid" />
     </g>
+  </g>
+);
+
+export function RAIL_EL(far: boolean): React.ReactNode {
+  const art = far ? RAIL_ART.far : RAIL_ART.near;
+  return (
+    <g key={far ? 'rail-far' : 'rail-near'}>
+      {art.segs.map((paths, index) => (
+        <Solid key={index} paths={paths} tone="mid" crease="faint" />
+      ))}
+      {art.tops.map((d, index) => (
+        <Line key={index} d={d} tone="lo" />
+      ))}
+      <Line d={art.ticks} tone="lo" />
+      <g className="el-fine">
+        <Dots points={art.rollerDots} size={0.45} tone="mid" />
+      </g>
+    </g>
+  );
+}
+
+export const RAIL_FAR_EL = RAIL_EL(true);
+export const RAIL_NEAR_EL = RAIL_EL(false);
+
+/** 近側料箱：近列手之間的間隙。**近景**——它們在近側導軌之外，跟近列的手同層
+    之後、前緣的里程計之前。
+    The near-side crates: the gaps between the near-row hands. **Near plane** —
+    out beyond the near rail, painted with the near plane after the hands. */
+export const CRATE_EL = (
+  <g key="crates">
+    {FLOOR_ART.crates.map((paths, index) => (
+      <g key={index}>
+        <Solid paths={paths} tone="mid" crease="faint" />
+        <Line d={FLOOR_ART.crateLids[index] ?? ''} tone="lo" />
+        <g className="el-fine">
+          <Dots points={FLOOR_ART.crateDots.slice(index * 2, index * 2 + 2)} size={0.45} tone="mid" />
+        </g>
+      </g>
+    ))}
+    {/* 箱側的綁帶合成一條路徑 / The crates' side bands joined into one path */}
+    <Line d={FLOOR_ART.crateBands} tone="faint" className="el-fine" free />
   </g>
 );
 
@@ -384,6 +415,7 @@ export function OdoStripGlyphs(): React.ReactNode {
 // four-tone language, which is the kit's solid language.
 export const HAND_BASES: React.ReactNode[] = HAND_ART.map((hand) => (
   <g key={hand.index}>
+    {hand.plinth ? <Solid paths={hand.plinth} tone="lo" crease="none" flat /> : null}
     <Solid paths={hand.pedestal} tone="mid" crease="faint" />
     <Solid paths={hand.column} tone="mid" crease="none" flat />
     <Line d={hand.seams} tone="faint" className="el-fine" free />

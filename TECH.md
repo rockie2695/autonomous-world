@@ -2731,10 +2731,15 @@ any later code path repair this?**
   ever scheduled, so the deduction is simply permanent. Revoking moves no seat — its risk is the
   mirror image, a `+1` landing while the pending reduction is not cleared, so the scheduled
   revert would credit a second `+1`.
-- `economy` 的單一地點發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以在兩次
-  `increment` 之間崩潰，不會有任何一筆錢移動到別處：它就是消失了，而沒有任何階段會對帳。
-  `splitIncome` is exact, so a crash between two increments moves the missing gold nowhere. It
-  ceases to exist, and no later phase reconciles totals.
+- `economy` 的**整階段**發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以寫到一半
+  崩潰，不會有任何一筆錢移動到別處：部分世界的金幣就是消失了，而沒有任何階段會對帳（每
+  個金額都是算出來的，不是從某個總帳扣的，所以無從對回）。整階段一筆交易同時解決了成本：
+  舊制每地點一筆，一回合數百次提交。
+  The economy phase's payout is atomic because `splitIncome` is exact: a half-written phase
+  moves the missing gold nowhere - part of the world's gold simply ceases to exist, and no
+  later phase reconciles totals (every amount is computed, not derived from a stored total,
+  so there is nothing to reconcile against). Batched into one transaction it also costs less:
+  the old per-place version committed hundreds of times a round.
 
 **刻意排除 / Deliberately excluded**
 
@@ -2745,7 +2750,29 @@ any later code path repair this?**
 **陷阱 / The trap.** `inTransaction` 的 `fn` **只**能使用傳進去的 `tx`。在 `fn` 裡呼叫模組層級的
 `prisma` 會逃出這筆交易，不會隨之回滾——這個輔助存在的理由就是把這個陷阱寫在程式碼裡。
 
-逾時是 `TX_TIMEOUT_MS`（20 秒），比 Prisma 預設的 5 秒寬，因為一個地點的發放可能超過它。
+逾時是 `TX_TIMEOUT_MS`（**60 秒**，2026-10 由 20 秒提高），比 Prisma 預設的 5 秒寬——
+一個地點的發放就可能超過 5 秒，而 economy 現在是**整階段一筆交易**，時鐘覆蓋最多
+2000 個地點 × 每地 5–8 次依序寫入（見下一節）。
+
+### 經濟階段只提交一次（批量交易）/ The economy phase commits once (batched transaction)
+
+**每個地點一筆交易改成整階段一筆。** 舊制對每個地點各開一筆 `inTransaction`：一回合數百
+次提交，保護的卻是同一條逐地點成立的不變量（君王／行政官／其他人的三份加總剛好等於
+`income`）。交易的成本是 round trip，不變量又不依賴「一次提交」——所以現在整階段的發錢、
+徵兵、購兵與事件全部落在同一筆交易裡，2000 個地點的世界仍然只提交一次。
+One transaction **per place** became one transaction **per phase**. The old rule opened an
+`inTransaction` around each place — hundreds of commits a round protecting the same
+per-place invariant (king / administrator / others summing exactly to `income`). A
+transaction costs a round trip and the invariant does not need a commit, so the whole
+phase's writes now share one transaction: a 2000-place world still commits once.
+
+**計算順序完全沒變，這不是併發化。** 交易只包住 DB 寫入；收益、購買批次與每一次
+`rng.float` 的抽取順序與昔日逐一相同，同一個種子仍然長出同一個世界。把寫入改成併發會讓
+rng 的順序取決於排程——那是模擬的災難，所以刻意不做。
+**The computation order is unchanged — this is not concurrency.** The transaction wraps only
+the DB writes; income, purchase batches and every `rng.float` draw happen in exactly the same
+order as before, so one seed still grows one world. Making the writes concurrent would let
+scheduling decide the draw order, which is a simulation disaster.
 
 ### 顯示字型與前臂 / The display face and the forearm
 

@@ -18,7 +18,16 @@ import {
   shipPartVisible,
   sparkDots,
 } from './frame';
-import { STATIONS, TOOL, at, atStation, stationX } from './view';
+import {
+  CURVE_AMP,
+  STATIONS,
+  emitPoint,
+  at,
+  lineDy,
+  lineY,
+  stationX,
+  tangentSpin,
+} from './view';
 
 // 運動模型是純函數，所以這一組測試在 node 環境跑，不需要 DOM（與
 // buildingFigure.test.ts 同一個做法）。它們守的是這張圖**說真話**的那幾條規則：
@@ -75,6 +84,34 @@ describe('assembly line motion model', () => {
       expect(passBusy(TOTAL_SECONDS - 0.01)).toBe(true);
       expect(passBusy(TOTAL_SECONDS)).toBe(false);
       expect(passBusy(TOTAL_SECONDS + 10)).toBe(false);
+    });
+
+    it('reads slowly enough to follow — the slow-down is a contract', () => {
+      // 每站停留 ≥ 150ms：再快，兩列手的「探向 → 工具亮 → 火花」就讀不出來
+      // Each stop ≥ 150 ms: any faster and "reach → tool lights → sparks" is
+      // unreadable, the more so across two rows
+      expect(SWEEP_SECONDS / (STATIONS - 1)).toBeGreaterThanOrEqual(0.15);
+      // 整趟 ≈ 6.4 s（出口 1.2 + 掃描 4.0 + 試車 1.2）
+      expect(TOTAL_SECONDS).toBeCloseTo(6.4, 6);
+    });
+  });
+
+  describe('the S curve', () => {
+    it('stays gentle everywhere — amplitude and slope are both capped', () => {
+      const at6 = Math.tan((6 * Math.PI) / 180);
+      for (let x = -400; x <= 400; x += 4) {
+        expect(Math.abs(lineY(x))).toBeLessThanOrEqual(CURVE_AMP);
+        // 斜率的上限就是「船螢幕旋轉 ≤ 6°」：切線轉角是 atan(斜率) 去掉 EX 的基角
+        // The slope cap *is* "the ship's screen spin ≤ 6°": the tangent angle is
+        // atan(slope) minus the EX baseline
+        expect(Math.abs(lineDy(x))).toBeLessThanOrEqual(at6);
+      }
+    });
+
+    it('keeps every tangent spin within 6 degrees', () => {
+      for (let station = 1; station <= STATIONS; station++) {
+        expect(Math.abs(tangentSpin(stationX(station)))).toBeLessThanOrEqual(6);
+      }
     });
   });
 
@@ -165,7 +202,7 @@ describe('assembly line motion model', () => {
       // 工具梢的**螢幕**點：與 frame.ts 的算式相同（火花是螢幕座標，世界點不能直接比）
       // The tool tip in **screen** space, the same expression frame.ts uses (sparks are
       // screen points; a world point cannot be compared with them directly)
-      const tip = at(atStation(9, [TOOL[0], TOOL[1], TOOL[2] - 17]));
+      const tip = at(emitPoint(9));
       expect(dots.some(([, alpha, radius]) => alpha > 0 && radius > 0)).toBe(true);
       // 每個亮點都落在工具梢與船面之間的一小段裡（不會噴到畫布外）
       // Every lit dot stays in the short span between the tool tip and the hull

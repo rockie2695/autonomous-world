@@ -31,22 +31,30 @@ import {
   LINE_END,
   ODO_DIGITS,
   ODO_STEP,
-  SHIP_DECK_Z,
   SHIP_EXIT,
   STATIONS,
-  TOOL,
   at,
-  atStation,
+  emitPoint,
+  sparkLand,
   stationX,
 } from './view';
 
 // ── 一趟走線的時間軸（秒）/ One pass's timeline (seconds) ───────────────────
+// 放慢是有意識的選擇：舊節奏（0.8 / 2.1 / 0.7 ≈ 3.6 s）快得像預覽，兩列手的
+// 施工細節根本來不及讀。現在 1.2 / 4.0 / 1.2 ≈ 6.4 s——掃描段 4 s 攤在 17 個站
+// 距上，每站停留 ≈ 235 ms，長到足以看清「探向工作點 → 工具亮 → 火花」這一串，
+// 又不至於讓人在等整趟跑完。
+// The slow-down is deliberate: the old rhythm (0.8 / 2.1 / 0.7 ≈ 3.6 s) read as a
+// preview, and a two-row line's construction detail never got a chance. Now
+// 1.2 / 4.0 / 1.2 ≈ 6.4 s — the 4 s sweep spreads over 17 station gaps, ≈ 235 ms
+// per stop, long enough to read "reach → tool lights → sparks" and short enough
+// that nobody waits on the pass.
 /** 完工的船滑出 + 新龍骨進站 / The finished ship rolls out, the bare keel enters */
-export const EXIT_SECONDS = 0.8;
+export const EXIT_SECONDS = 1.2;
 /** 18 站逐站施工 / The 18 stations working through it */
-export const SWEEP_SECONDS = 2.1;
+export const SWEEP_SECONDS = 4;
 /** 第 18 站試車 / The test-fire at station 18 */
-export const FIRE_SECONDS = 0.7;
+export const FIRE_SECONDS = 1.2;
 export const TOTAL_SECONDS = EXIT_SECONDS + SWEEP_SECONDS + FIRE_SECONDS;
 
 /** 一次走線的狀態 / One pass's state */
@@ -200,13 +208,18 @@ export function sparkDots(
   const working = proximity(index, station);
   const hover = selected === index && working < 0.2 ? 1 : 0;
   const level = Math.max(working, hover * 0.62);
-  if (level <= 0.02) return Array.from({ length: SPARK_COUNT }, () => [at(atStation(index, TOOL)), 0, 0] as [Flat, number, number]);
-  const tip = at(atStation(index, [TOOL[0], TOOL[1], TOOL[2] - 17]));
+  if (level <= 0.02) return Array.from({ length: SPARK_COUNT }, () => [at(emitPoint(index)), 0, 0] as [Flat, number, number]);
+  // 火花是**線感知**的：源頭與落點都由 view.ts 的曲線幾何算（emitPoint / sparkLand）
+  // ——兩列手各自從自己的舷側探進來，源頭與落點自然分在船的兩側。
+  // The sparks are **line-aware**: their source and landing point both come from
+  // view.ts's curve geometry (emitPoint / sparkLand) — the two rows reach in from
+  // their own flanks, so the source and the landing sit on either side of the hull.
+  const tip = at(emitPoint(index));
   const out: Array<[Flat, number, number]> = [];
   for (let k = 0; k < SPARK_COUNT; k++) {
     const cycle = calm ? k / SPARK_COUNT : (now * 1.15 + k / SPARK_COUNT) % 1;
     const spread = (k - (SPARK_COUNT - 1) / 2) * 1.9;
-    const land = at([stationX(index) + TOOL[0] + spread, TOOL[1] + 2.5, SHIP_DECK_Z]);
+    const land = at(sparkLand(index, spread));
     const point: Flat = [tip[0] + (land[0] - tip[0]) * cycle, tip[1] + (land[1] - tip[1]) * cycle + cycle * cycle * 3];
     const alpha = level * Math.max(0, 1 - cycle) * (calm ? 0.75 : wobble(now, k * 1.7, false, 0.3));
     out.push([point, clamp01(alpha), 0.8 + (1 - cycle) * 0.6]);

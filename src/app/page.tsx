@@ -30,6 +30,7 @@ import Image from 'next/image';
 import { createTranslator, DEFAULT_LOCALE, LOCALES, type Locale } from '@/lib/i18n';
 import { Parallax, Reveal } from '@/components/home/Motion';
 import HomeNav from '@/components/home/HomeNav';
+import SlideDots from '@/components/home/SlideDots';
 import LiveStats from '@/components/home/LiveStats';
 import LiveWorld from '@/components/home/LiveWorld';
 import FactionNebula from '@/components/home/FactionNebula';
@@ -47,14 +48,31 @@ import { CTA_BASE, CTA_PRIMARY, CTA_SECONDARY, EYEBROW, HAIRLINE, PANEL } from '
 // ─── 導覽 / Navigation ─────────────────────────────────────────────────────
 // 錨點順序 = 敘事順序：先證明世界在動，再看世界本身
 // Anchor order follows the narrative: prove it is running, then show it
+//
+// **這份清單是簡報的目錄，不是標頭列的目錄。** 首頁是一疊一屏一屏的簡報，
+// 右側的圓點導覽需要每一屏的名字（含標頭列不放的 hero / features / cta），
+// 所以一份清單管兩件事：`inHeader` 決定哪幾項同時出現在標頭列，全部都是圓點。
+// 分成兩份清單會讓「多了／少了一屏」變成兩邊各自維護的問題。
+//
+// **This list is the deck's table of contents, not the header row's.** The
+// homepage is a deck of one-screen slides, and the right-hand dot rail needs a
+// name for every screen — including hero / features / cta, which the header
+// row does not carry — so one list serves both: `inHeader` decides which
+// entries also appear in the header row, and all of them are dots. Two lists
+// would make "a screen was added" a problem to maintain twice.
 
-const NAV_LINKS = [
-  { href: '#live', labelKey: 'home.nav.live' },
-  { href: '#world', labelKey: 'home.nav.world' },
-  { href: '#how', labelKey: 'home.nav.how' },
-  { href: '#orrery', labelKey: 'home.nav.orrery' },
-  { href: '#saga', labelKey: 'home.nav.saga' },
+const SLIDE_LINKS = [
+  { href: '#hero', labelKey: 'home.nav.hero', inHeader: false },
+  { href: '#live', labelKey: 'home.nav.live', inHeader: true },
+  { href: '#world', labelKey: 'home.nav.world', inHeader: true },
+  { href: '#features', labelKey: 'home.nav.features', inHeader: false },
+  { href: '#how', labelKey: 'home.nav.how', inHeader: true },
+  { href: '#orrery', labelKey: 'home.nav.orrery', inHeader: true },
+  { href: '#saga', labelKey: 'home.nav.saga', inHeader: true },
+  { href: '#cta', labelKey: 'home.nav.cta', inHeader: false },
 ] as const;
+
+const NAV_LINKS = SLIDE_LINKS.filter((link) => link.inHeader);
 
 // ─── 特色資料 / Feature data ────────────────────────────────────────────────
 
@@ -152,6 +170,11 @@ export default async function HomePage() {
   const t = createTranslator(locale);
 
   const navLinks = NAV_LINKS.map((link) => ({ href: link.href, label: t(link.labelKey) }));
+  // 圓點導覽吃整份目錄 / the dot rail reads the whole table of contents
+  const slideLinks = SLIDE_LINKS.map((link) => ({
+    href: link.href,
+    label: t(link.labelKey),
+  }));
 
   // data-slide-deck 讓 globals.css 的簡報捲動規則只作用在這一頁：
   // 其他頁面（遊戲、登入）完全不受 scroll-snap 影響。
@@ -187,15 +210,25 @@ export default async function HomePage() {
         brandLabel={t('general.title')}
       />
 
+      {/* 右側的圓點導覽：這一疊簡報的書籤（md 以上）/
+          The right-hand dot rail: this deck's bookmarks (md and up) */}
+      <SlideDots slides={slideLinks} label={t('home.nav.slidesLabel')} />
+
       <main id="main-content" tabIndex={-1} className="flex-1 focus:outline-none">
         {/* ── 主視覺 / Hero ───────────────────────────────────────────────── */}
         {/* id="hero" 是給背景場景的暫停錨點，不是樣式用途
             id="hero" is the pause anchor for the backdrop scene, not styling */}
         <section
           id="hero"
-          className="relative z-10 flex min-h-svh snap-start snap-always flex-col justify-center px-5 pt-12 pb-14 sm:px-6 md:pt-16 md:pb-20"
+          className="relative z-10 flex min-h-svh snap-start snap-always flex-col px-5 pt-12 pb-10 sm:px-6 md:pt-16 md:pb-12"
         >
-          <div className="mx-auto grid max-w-6xl items-center gap-9 lg:grid-cols-2 lg:gap-12">
+          {/* my-auto 把文案欄在「扣掉底緣跑馬燈」後的空間裡垂直置中：最下緣的
+              訊號流吃 mt-auto，所以中央標高不是 justify-center 的數學，是 margin
+              的分配。
+              my-auto centers the copy column within the space left over after the
+              bottom ticker: the feed takes mt-auto, so the centre height is margin
+              distribution, not justify-content's arithmetic. */}
+          <div className="mx-auto my-auto grid max-w-6xl items-center gap-9 lg:grid-cols-2 lg:gap-12">
             {/* 文案欄 / copy column */}
             <Parallax offset={20} className="min-w-0">
               {/* 天體的輝光會漫到文案後方，這層局部遮罩把可讀性拿回來
@@ -293,10 +326,16 @@ export default async function HomePage() {
               </div>
             </Parallax>
           </div>
-        </section>
 
-        {/* ── 訊號流（真實事件）/ Signal feed, real events ──────────────────── */}
-        <SignalFeed locale={locale} />
+          {/* ── 訊號流（真實事件）：主視覺投影片的底緣。帶子本身滿版出血——
+                 影片欄左右原本有 px-5 的留白，這裡用負 margin 蓋回去。
+                 ─ The signal feed: the hero slide's bottom edge. The band is
+                 full-bleed: the hero carries px-5 page gutters, and a negative
+                 margin takes them back. */}
+          <div className="-mx-5 mt-auto sm:-mx-6">
+            <SignalFeed locale={locale} />
+          </div>
+        </section>
 
         {/* ── 即時數字 / Live numbers ────────────────────────────────────── */}
         <section

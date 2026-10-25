@@ -56,6 +56,23 @@ const INCLINATIONS = [0.34, -0.52, 0.86] as const;
 /** 軌道半徑 / ring radii */
 const RADII = [3.05, 3.85, 4.65] as const;
 
+/**
+ * 整個軌道系統的縮放：核心、環與衛星一起縮，相對構圖不變。
+ *
+ * 垂直方向才是真正的約束，不是水平：透視相機的垂直 fov 固定，不論容器多寬，
+ * 畫面上下的世界範圍都是 ±(tan19° × DISTANCE) ≈ ±3.17；外環半徑 4.65 乘上這個
+ * 係數後，傾角讓它的垂直投影落在 ~3.4，而衛星還會沿著環平面走到環的最高／最低
+ * 點——所以留的邊界要夠衛星不被切掉。0.68 讓環只佔容器高度約 72%。
+ * The vertical is the real constraint, not the horizontal: a perspective
+ * camera's vertical fov is fixed, so the world range top-to-bottom is always
+ * ±(tan19° × DISTANCE) ≈ ±3.17 whatever the container's width; the outer ring's
+ * 4.65 × this factor projects ~3.4 vertically through its inclinations, and a
+ * satellite travels along the ring plane to the ring's highest and lowest point
+ * — so the margin has to clear the satellite, not just the ring. 0.68 leaves
+ * the ring at about 72% of the container's height.
+ */
+const SYSTEM_SCALE = 0.68;
+
 /** 衛星角速度（弧度／秒），各環不同速才有層次 / angular speed per ring, rad/s */
 const SPEEDS = [0.34, -0.23, 0.16] as const;
 
@@ -134,6 +151,7 @@ export default function OrbitScene({ label }: OrbitSceneProps) {
 
     const group = new THREE.Group();
     group.rotation.x = 0.16;
+    group.scale.setScalar(SYSTEM_SCALE);
     scene.add(group);
 
     // ── 核心：真實回合數所在的球 / the core that carries the real round
@@ -337,8 +355,18 @@ export default function OrbitScene({ label }: OrbitSceneProps) {
     }
   }, [round]);
 
+  // 桌面 16:10 而非 2:1，容器加寬到 max-w-3xl：16:10 給了外環與衛星需要的
+  // 高度，3xl 讓圖真的變大；軌道系統本身則由 SYSTEM_SCALE 縮小，兩者一起留出
+  // 呼吸空間。手機維持 5:4——更寬會把手機版的面板擠壓，而 5:4 本來就給了
+  // 足夠的垂直空間。
+  // Desktop is 16:10 rather than 2:1 and the container widens to max-w-3xl:
+  // 16:10 gives the outer ring and its satellites the height they need, 3xl
+  // makes the figure genuinely bigger — while SYSTEM_SCALE shrinks the orbit
+  // system itself, so the two together leave breathing room. Mobile keeps 5:4:
+  // wider would squeeze the phone layout, and 5:4 already gives enough vertical
+  // room.
   return (
-    <div className="relative mx-auto aspect-[5/4] w-full max-w-xl sm:aspect-[2/1]">
+    <div className="relative mx-auto aspect-[5/4] w-full max-w-3xl sm:aspect-[16/10]">
       <div ref={containerRef} className="absolute inset-0" role="img" aria-label={label} />
 
       {/* 回合數是 HTML 文字，不是畫布上的字：它在 375px 仍然讀得清楚

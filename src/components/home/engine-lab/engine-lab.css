@@ -128,3 +128,30 @@
     0 0 0 1px var(--color-ds-line),
     0 0 44px rgba(2, 6, 23, 0.55);
 }
+
+/* 重播按鈕：圖自己的走線重跑。用 lit 代幣勾邊接這張圖的強調色，hover 只把底
+   提亮一階——按鈕要小、要安靜，才有「儀器旁那顆鍵」的份量。
+   The replay button: this figure's own pass runs again. The lit token wires the
+   border to the figure's accent, and hover nudges only the background — a small,
+   quiet key, the way an instrument's side button reads. */
+.el-replay {
+  display: block;
+  margin: 0.5rem 0 0;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--anatomy-lit) 45%, transparent);
+  border-radius: 9999px;
+  background: transparent;
+  color: var(--anatomy-lit);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.el-replay:hover {
+  background: color-mix(in oklab, var(--anatomy-lit) 12%, transparent);
+}
+
+.el-replay:focus-visible {
+  outline: 1px solid var(--anatomy-lit);
+  outline-offset: 2px;
+}

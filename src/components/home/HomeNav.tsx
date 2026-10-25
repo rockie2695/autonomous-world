@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createTranslator, setLocale, type Locale } from '@/lib/i18n';
 import { CTA_BASE, CTA_PRIMARY, EYEBROW } from './tokens';
+import { useActiveSection } from './useActiveSection';
 
 type HomeNavProps = {
   locale: Locale;
@@ -35,34 +36,12 @@ const MENU_LINK =
 
 export default function HomeNav({ locale, links, enterLabel, brandLabel }: HomeNavProps) {
   const t = createTranslator(locale);
-  const [active, setActive] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // ── Scroll-spy：盯著每個錨點對應的區段 ────────────────────────────────
-  useEffect(() => {
-    const sections = links
-      .map((link) => document.querySelector<HTMLElement>(link.href))
-      .filter((section): section is HTMLElement => section !== null);
-    if (sections.length === 0) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        // 取最靠上的可見區段，避免下半屏的區段搶走選取態
-        // The topmost visible section wins, so a lower one cannot steal the state
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-        const first = visible[0];
-        if (first) setActive(`#${(first.target as HTMLElement).id}`);
-      },
-      // 只在視窗中間那條帶子上判定，捲動時選取態才不會來回跳
-      // Judge inside a narrow band so the state cannot flicker while scrolling
-      { rootMargin: '-25% 0px -60% 0px', threshold: 0 }
-    );
-
-    for (const section of sections) observer.observe(section);
-    return () => observer.disconnect();
-  }, [links]);
+  // Scroll-spy：判定規則與右側的圓點導覽共用同一支 hook，兩處的選取態永遠一致
+  // Scroll-spy: the rule lives in the same hook the right-hand dot rail uses, so
+  // the two can never disagree about which section is selected
+  const active = useActiveSection(links.map((link) => link.href));
 
   // ── 行動版選單：Esc 關閉 + 鎖住背景捲動 ─────────────────────────────────
   useEffect(() => {

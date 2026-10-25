@@ -4,17 +4,21 @@
 // 事件日誌 / Event Log
 // ============================================================================
 // 依回合抓取事件，並提供五種篩選：勢力下拉、**將領下拉**、**地點下拉**、
-// 事件分類（可複選）、資訊種類（人物 / 地點 / 其他）。分類對應 EVENT_CATEGORY，
-// 資訊種類則看事件 data 裡帶的是角色還是地點，決定名字要不要做成可點的按鈕。
+// 事件分類（可複選）、資訊種類（人物 / 地點 / 其他）。另有**回合下拉**切換抓取
+// 哪一回合（與面板外的時間軸是同一個 state）。分類表與「事件 → 一句話」
+// 的規則都住在 eventText.ts（與首頁 ticker 共用）；資訊種類則看事件 data 裡帶的
+// 是角色還是地點，決定名字要不要做成可點的按鈕。
 // 將領 / 地點的匹配規則（一個事件可能帶多個 id）住在 eventFilter.ts（純、有測試）。
 //
 // Fetches a round's events and offers five filters: a faction dropdown, a
 // **leader dropdown**, a **place dropdown**, a multi-select of event categories,
-// and info-kind toggles (people / place / other). Categories come from
-// EVENT_CATEGORY; the info kind is derived from whether the event's data carries
-// a character or a place, which is what decides if a name becomes a clickable
-// button. The leader / place matching rule (one event can carry several ids)
-// lives in eventFilter.ts (pure, tested).
+// and info-kind toggles (people / place / other). A **round dropdown** switches
+// which round is fetched (the same state as the timeline outside the panel).
+// Both the category table and the event-to-sentence rules live in eventText.ts
+// (shared with the homepage ticker); the info kind is derived from whether the
+// event's data carries a character or a place, which is what decides if a name
+// becomes a clickable button. The leader / place matching rule (one event can
+// carry several ids) lives in eventFilter.ts (pure, tested).
 // ============================================================================
 
 import { useState, useMemo, useRef, useEffect, useLayoutEffect, Fragment, type ReactNode } from 'react';
@@ -26,6 +30,7 @@ import { CONFIG } from '@/lib/gameConfig';
 import { apiFetch } from '@/lib/api';
 import { EventGlyph } from './icons';
 import { eventLeaderIds, eventPlaceIds } from './eventFilter';
+import { describeEvent, EVENT_CATEGORY, type EventCategory, type EventParam } from '@/lib/eventText';
 import type { GameEvent, WorldState } from './types';
 import { GM_BTN, GM_PANEL, GM_SKEL, GM_TITLE } from './styles';
 /**
@@ -63,44 +68,16 @@ export function fillTemplate(template: string, parts: Record<string, ReactNode>)
 const GM_EVENT_LINK =
   'text-cyan-300 hover:text-cyan-100 hover:underline underline-offset-2 transition-colors';
 
-/** 事件日誌的篩選 / Event log filters ────────────────────────────────────────── */
-
-/** 事件類別 / Event categories */
-type EventCategory = 'battle' | 'character' | 'economy' | 'faction' | 'admin' | 'place';
+/** 事件帶的是「人」「地」還是其他資訊 / Which kind of information an event carries */
+type EventInfo = 'people' | 'place' | 'other';
 
 /**
- * 事件類型 → 類別。篩選器直接吃這張表，所以新增事件類型時只要在這裡補一行，
- * 不會忘記把事件放進某一類。
- * Event type to category. The filter reads this table directly, so a new event
- * type only has to be added here — there is no way to forget to file it somewhere.
- *
- * 判斷依據是語意，不是畫面：戰死與逃脫都是戰鬥的結果，地方易主也是。 /
- * Assigned by meaning rather than by appearance: deaths and escapes are outcomes
- * of battle, and so is a place changing hands.
+ * 類別的**顯示順序**（篩選 chips 的排列）——純 UI，與 `eventText.ts` 的正典表
+ * 分開放：正典表回答「每種事件屬於哪一類」，這裡只回答「chip 由左到右怎麼排」。
+ * The categories' **display order** (the filter chips) — pure UI, kept apart
+ * from the canonical table in `eventText.ts`: the table answers "which category
+ * does an event belong to", this only answers "how do the chips read".
  */
-const EVENT_CATEGORY: Record<string, EventCategory> = {
-  BATTLE_DEATH: 'battle',
-  ESCAPE_SUCCESS: 'battle',
-  PLACE_CAPTURED: 'battle',
-  CHARACTER_SPAWNED: 'character',
-  CHARACTER_MOVED: 'character',
-  DEATH: 'character',
-  CHILD_BORN: 'character',
-  FRIENDSHIP: 'character',
-  DEFECTION: 'character',
-  BUILDING_UPGRADE: 'economy',
-  INCOME: 'economy',
-  TROOPS_BOUGHT: 'economy',
-  FACTION_COLLAPSE: 'faction',
-  FACTION_ELIMINATED: 'faction',
-  KING_INHERITED: 'faction',
-  SIGNAL_ISSUED: 'faction',
-  ADMIN_ASSIGNED: 'admin',
-  ADMIN_REMOVED: 'admin',
-  PLACE_CREATED: 'place',
-};
-
-/** 類別顯示順序 / Display order for the categories */
 const EVENT_CATEGORIES: readonly EventCategory[] = [
   'battle',
   'character',
@@ -109,18 +86,6 @@ const EVENT_CATEGORIES: readonly EventCategory[] = [
   'admin',
   'place',
 ];
-
-/** 事件帶的是「人」「地」還是其他資訊 / Which kind of information an event carries */
-type EventInfo = 'people' | 'place' | 'other';
-
-/**
- * 事件的數值欄位一律可能是 `unknown`（資料來自資料庫的 JSON 欄），所以統一套一個讀法。
- * A numeric field on an event is always `unknown` in practice — it comes out of a JSON
- * column — so every case reads it through this one helper.
- */
-function eventNum(value: unknown): number {
-  return typeof value === 'number' ? value : 0;
-}
 
 /**
  * 判斷一個事件屬於哪一類資訊：`data` 裡有人名就是人物、有地名就是地點，
@@ -148,6 +113,8 @@ export function EventLog({
   places,
   onFocusPlace,
   onOpenLeaderDetail,
+  onRoundChange,
+  availableRounds,
 }: {
   /** 正在看的回合：日誌只顯示這一回合的事件 / The round on view: the log shows only this round's events */
   round: number;
@@ -162,6 +129,10 @@ export function EventLog({
   onFocusPlace: (placeId: string) => void;
   /** 點人名 → 開啟該將領的單一詳情 / Clicking a leader name opens their detail */
   onOpenLeaderDetail: (key: string) => void;
+  /** 點回合選項 → 切換顯示的回合 / Clicking a round option switches the displayed round */
+  onRoundChange: (round: number) => void;
+  /** 可選的回合清單（1..最新回合）/ The selectable rounds (1..latest) */
+  availableRounds: number[];
 }) {
   const { data, isLoading } = useQuery<{ events: GameEvent[] }>({
     // **只看一回合**：日誌是「正在看的那一回合」的紀錄（時間軸選哪一回合就看哪一回合），
@@ -408,13 +379,6 @@ export function EventLog({
   }, [shown]);
 
   /**
-  /**
-   * 謹到底郣一端。只有該者本来就贴在底郣時才認。
-   *
-   * 這里不能只做「初始捷一次」：事實測得到初次記憶化時只有部分列深度。
-   * 那時們就把「已捷到底」錯定下來，欄知暂時舊寫樣的卷高墝則讓該者停在太高的位置。
-   正確的是依於 pinnedToBottom：就算列綊綊到來，就算每一次都重新跟下去。
-   *
    * Keep the reader at the bottom. Only when they are already pinned there.
    *
    * This deliberately does NOT fire just once: measured, the first paint had only some
@@ -509,283 +473,76 @@ export function EventLog({
     !infoFilter.place ||
     !infoFilter.other;
 
+  /**
+   * 一列事件的敘述。**句子的規則住在 eventText.ts**（事件日誌與首頁 ticker 共用
+   * 同一份），這裡只負責把語段畫出來：每個語段灌進 fillTemplate，NameRef 依
+   * kind 變成可點的按鈕（將領 → 詳情、地點 → 聚焦地圖）或純文字（勢力沒有彈窗）。
+   * describeEvent 對缺欄位的語段整段省略、對未知類型回空陣列，所以收到空陣列
+   * 時退回顯示事件類型本身——冷靜地印一個代號，好過印出 `{place}` 字面值或
+   * 一句假話。
+   *
+   * One event row's sentence. **The wording rules live in eventText.ts** (the
+   * event log and the homepage ticker share the one source); this only renders
+   * segments: each goes through fillTemplate, and a NameRef becomes a clickable
+   * button by kind (leader → detail, place → focus the map) or plain text
+   * (factions have no popup). describeEvent drops segments on missing fields
+   * and returns an empty array for unknown types, so on an empty array this
+   * falls back to the event type itself — a calm code beats a `{place}` literal
+   * or an invented sentence.
+   */
   function formatEvent(event: GameEvent): ReactNode {
-    const p = event.data;
-    // 地名帶 placeId，可直接聚焦地圖。缺 id 時退回純文字——寧可不可點也不要壞掉 /
-    // Leader names are always clickable (events only store charName, so the page
-    // resolves by name); places carry placeId and focus the map directly. Without
-    // an id we fall back to plain text — inert beats broken.
-    const leaderNode = (id: unknown, name: unknown): ReactNode => {
-      const label = typeof name === 'string' ? name : '?';
-      // 有 id 就用 id（名字可能被沿用），舊事件由 API 讀時回填 /
-      // Prefer the id — names get reused. The API backfills it for legacy rows.
-      const key = typeof id === 'string' && id ? id : label;
+    const segments = describeEvent(event.type, event.data, t);
+    if (segments.length === 0) return event.type;
+
+    // NameRef → 節點：kind 決定可不可以點。id 永遠優先（名字可能被沿用，舊事件
+    // 由 API 讀時回填）；沒有 id 就退回純文字——寧可不可點也不要開錯。
+    // NameRef → node: kind decides clickability. The id always wins (names get
+    // reused, and the API backfills it for legacy rows); without one we fall
+    // back to plain text — inert beats opening the wrong thing.
+    const nodeFor = (param: EventParam): ReactNode => {
+      if (typeof param === 'string' || typeof param === 'number') return String(param);
+      if (param.kind === 'faction') return param.name;
+      if (param.kind === 'place') {
+        // 先解構：屬性的 narrowing 進不了 callback，const 可以 /
+        // Destructure first: property narrowing does not survive into a
+        // callback, a const does
+        const { id, name } = param;
+        if (!id) return name;
+        return (
+          <button type="button" onClick={() => onFocusPlace(id)} className={GM_EVENT_LINK}>
+            {name}
+          </button>
+        );
+      }
+      const key = param.id ?? param.name;
       return (
         <button type="button" onClick={() => onOpenLeaderDetail(key)} className={GM_EVENT_LINK}>
-          {label}
+          {param.name}
         </button>
       );
     };
-    /**
-     * 勢力名稱。勢力沒有可點擊的彈窗，所以純文字即可——但**必須**用存下來的名字，
-     * 絕不能退回顯示 id：那會把 `cmus...` 這種原始字串洩漏到介面上。
-     * A faction name, as plain text: there is no faction popup to open. It must use the
-     * stored name, never fall back to an id — that would leak a raw `cmus...` string
-     * into the UI.
-     */
-    const factionNode = (_id: unknown, name: unknown): ReactNode => text(name);
 
-    const placeNode = (id: unknown, name: unknown): ReactNode => {
-      const label = typeof name === 'string' ? name : '?';
-      if (typeof id !== 'string') return label;
-      return (
-        <button type="button" onClick={() => onFocusPlace(id)} className={GM_EVENT_LINK}>
-          {label}
-        </button>
-      );
-    };
-    const text = (v: unknown): string => (typeof v === 'string' ? v : '?');
-
-    switch (event.type) {
-      case 'PLACE_CREATED':
-        return fillTemplate(t('events.newPlaceDesc'), {
-          place: placeNode(p.placeId, p.placeName),
-        });
-      case 'CHARACTER_SPAWNED':
-        // 「在哪裡誕生」是讀者接下來一定會問的問題：這個勢力多了一個人，而那個人的位置
-        // 決定了他下一回合能做什麼。只印名字等於要讀者自己去地圖上找。
-        // 缺 `placeName`（本次改動之前的事件）時退回只有名字，而不是印出一個空白的地名。
-        //
-        // "Where" is the obvious next question: this faction has gained a person, and where that
-        // person stands decides what they can do next round. Printing the name alone sends the
-        // reader hunting across the map for it. Rows written before this change carry no
-        // `placeName`, so they fall back to the name alone rather than rendering a blank place.
-        return fillTemplate(t('events.spawnDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-        });
-      case 'CHARACTER_MOVED':
-        return fillTemplate(t('events.moveDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          from: placeNode(p.fromPlaceId, p.fromPlaceName),
-          to: placeNode(p.toPlaceId, p.toPlaceName),
-        });
-      case 'CHILD_BORN':
-        return fillTemplate(t('events.childBornDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          father: leaderNode(p.fatherId, p.fatherName),
-        });
-      case 'FRIENDSHIP':
-        // 兩個名字都是可點的：友誼是雙向的，而 `charId` 只帶了其中一人（`character1`），
-        // 所以另一邊只能純文字——寧可不可點也不要開錯的人 /
-        // Both names are clickable: friendship is bidirectional, but `charId` only carries
-        // one of the two (`character1`), so the other side can only be plain text —
-        // inert beats opening the wrong leader
-        return fillTemplate(t('events.friendshipDesc'), {
-          character1: leaderNode(p.charId, p.charName),
-          character2: leaderNode(p.friendId, p.character2),
-        });
-      case 'KING_INHERITED':
-        return fillTemplate(t('events.kingInheritedDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          father: leaderNode(p.fatherId, p.fatherName),
-        });
-      case 'DEATH':
-        return fillTemplate(t('events.deathDesc'), { character: leaderNode(p.charId, p.charName) });
-      case 'BATTLE_DEATH':
-        return fillTemplate(t('events.battleDeathDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-        });
-      // 「逃離」要說實話：有友方（或無主）鄰居可退才是真的逃離；無路可退時只是
-      // 撿回一命、留駐原地（troops 歸 0）。舊事件沒有 `escaped` 欄位，預設 true
-      // 維持原措辭。
-      // The wording has to tell the truth: escaping means a friendly (or unowned)
-      // neighbour actually took them in; with no way out they merely survived in
-      // place (troops zeroed). Legacy rows predate `escaped` and default to the
-      // original wording.
-      case 'ESCAPE_SUCCESS': {
-        const key =
-          p.escaped === false ? 'events.escapeSurvivedDesc' : 'events.escapeSuccessDesc';
-        return fillTemplate(t(key), {
-          character: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-        });
-      }
-      case 'SIGNAL_ISSUED': {
-        // 號令是勢力層唯一的動員紀錄：誰下的令、令全軍去哪、是進攻還是馳援。
-        // 沒有這一行，君王在戰略上完全隱形。
-        // The call is the only faction-level mobilisation record: who commanded it,
-        // where the host is sent, and whether it is an assault or a relief. Without
-        // the row the king is strategically invisible.
-        const key =
-          p.intent === 'defend'
-            ? 'events.signalDefendDesc'
-            : 'events.signalAttackDesc';
-        return fillTemplate(t(key), {
-          character: leaderNode(p.charId, p.charName),
-          faction: factionNode(p.factionId, p.factionName),
-          place: placeNode(p.placeId, p.placeName),
-        });
-      }
-      case 'DEFECTION': {
-        // 叛離要說清楚三件事：**離開哪個勢力**、**人在哪個地方**、**加入了哪個勢力**
-        // （加入既有勢力，或自己建立一個新的）。原本只寫「某某 叛離了原勢力」，等於
-        // 把最關鍵的資訊留給玩家自己猜。
-        //
-        // A defection has to answer three things: which faction was **left**, which **place**
-        // they left from, and which faction they **joined** — an existing one, or a brand-new
-        // one they founded. The row used to say only "某某 defected", leaving the most useful
-        // part for the player to guess.
-        const oldName = typeof p.oldFactionName === 'string' ? p.oldFactionName : null;
-        const newName = typeof p.newFactionName === 'string' ? p.newFactionName : null;
-        const founded = p.reason === 'created_new_faction' || (p.reason === 'admin_defection' && !!newName);
-        return (
-          <>
-            {fillTemplate(t('events.defectionDesc'), {
-              character: leaderNode(p.charId, p.charName),
-            })}
-            {oldName && (
-              <>
-                {' · '}
-                {fillTemplate(t('events.defectionLeft'), {
-                  faction: factionNode(p.oldFactionId, oldName),
-                })}
-              </>
-            )}
-            {typeof p.placeName === 'string' && p.placeName && (
-              <>
-                {' · '}
-                {fillTemplate(t('events.defectionAt'), {
-                  place: placeNode(p.placeId, p.placeName),
-                })}
-              </>
-            )}
-            {newName && (
-              <>
-                {' · '}
-                {fillTemplate(
-                  founded ? t('events.defectionFounded') : t('events.defectionJoined'),
-                  { faction: factionNode(p.newFactionId, newName) }
-                )}
-              </>
-            )}
-          </>
-        );
-      }
-      case 'FACTION_COLLAPSE':
-        return fillTemplate(t('events.collapseDesc'), { faction: text(p.factionName) });
-      case 'FACTION_ELIMINATED':
-        return fillTemplate(t('events.eliminationDesc'), { faction: text(p.factionName) });
-      case 'BUILDING_UPGRADE':
-        return fillTemplate(t('events.buildingDesc'), {
-          place: placeNode(p.placeId, p.placeName),
-          building: t(`map.${p.building as string}`),
-          level: String(p.newLevel),
-        });
-      case 'ADMIN_ASSIGNED':
-        return fillTemplate(t('events.adminAssignedDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-        });
-      case 'ADMIN_REMOVED':
-        return fillTemplate(t('events.adminRemovedDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-          newAdmin: text(p.newAdminName),
-        });
-      case 'PLACE_CAPTURED':
-        return fillTemplate(t('events.placeCaptureDesc'), {
-          character: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-        });
-      case 'INCOME': {
-        // 一個地方一筆：收益、徵兵，以及錢進了誰的口袋。
-        //
-        // **增加量與總量都要**（「得 3 金」不夠，要能看出「現在有多少」），而且當君王
-        // 與行政官是**同一個人**時必須合併成一行 —— 他一開始會拿到兩份（40% + 30%），
-        // 分成兩行就會出現「黎志 得 3 金 · 黎志 得 2 金」這種像是重複的紀錄。
-        //
-        // One row per place: income, recruitment, and who was paid.
-        //
-        // **Both the increase and the total** ("got 3 gold" is not enough — you need to see the
-        // new balance), and when the king *is* the administrator the two shares must merge into
-        // one row: he legitimately receives both (40% + 30%), but split across two lines it reads
-        // as a duplicate — "黎志 得 3 金 · 黎志 得 2 金".
-        const gold = eventNum(p.income);
-        const recruits = eventNum(p.recruits);
-        const garrisonAfter = eventNum(p.garrisonAfter);
-        const kingId = typeof p.kingId === 'string' ? p.kingId : null;
-        const adminId = typeof p.adminId === 'string' ? p.adminId : null;
-        const kingGold = eventNum(p.kingGold);
-        const adminGold = eventNum(p.adminGold);
-        // 同一個人坐兩個位子 / one person holding both seats
-        const sameLeader = kingId !== null && kingId === adminId;
-        const leadId = sameLeader ? kingId : null;
-
-        return (
-          <>
-            {fillTemplate(t('events.incomeDesc'), {
-              place: placeNode(p.placeId, p.placeName),
-              gold: String(gold),
-              recruits: String(recruits),
-              total: String(garrisonAfter),
-            })}
-            {sameLeader && kingGold + adminGold > 0 && (
-              <>
-                {' · '}
-                {fillTemplate(t('events.incomeLeader'), {
-                  leader: leaderNode(leadId, p.kingName),
-                  gold: String(kingGold + adminGold),
-                  total: String(eventNum(p.adminGoldAfter)),
-                })}
-              </>
-            )}
-            {!sameLeader && kingGold > 0 && (
-              <>
-                {' · '}
-                {fillTemplate(t('events.incomeLeader'), {
-                  leader: leaderNode(kingId, p.kingName),
-                  gold: String(kingGold),
-                  total: String(eventNum(p.kingGoldAfter)),
-                })}
-              </>
-            )}
-            {!sameLeader && adminGold > 0 && (
-              <>
-                {' · '}
-                {fillTemplate(t('events.incomeLeader'), {
-                  leader: leaderNode(adminId, p.adminName),
-                  gold: String(adminGold),
-                  total: String(eventNum(p.adminGoldAfter)),
-                })}
-              </>
-            )}
-          </>
-        );
-      }
-      case 'TROOPS_BOUGHT':
-        // 一筆購兵 = 誰、在哪、花多少、買到幾個，以及**換完之後**剩下什麼。
-        // `INCOME` 只說明地方發了多少錢，所以單看它會看到「某某 得 5 金」卻看不到那筆錢
-        // 變成了幾個兵 —— 金錢流向會斷掉。餘額與兵力都要，否則只說得出花了多少，
-        // 說不出他現在手上還有沒有錢。
-        //
-        // One purchase per row: who, where, what it cost, how many troops it bought, and what
-        // is left afterwards. `INCOME` only reports what a place paid out, so on its own the log
-        // shows "某某 got 5 gold" and never says how many troops that became — the money's
-        // path just stops. The balance and the troop count are both needed: the cost alone
-        // cannot answer whether he can afford another batch.
-        return fillTemplate(t('events.troopsBought'), {
-          leader: leaderNode(p.charId, p.charName),
-          place: placeNode(p.placeId, p.placeName),
-          bought: String(eventNum(p.bought)),
-          cost: String(eventNum(p.cost)),
-          gold: String(eventNum(p.goldAfter)),
-          troops: String(eventNum(p.troopsAfter)),
-        });
-      default:
-        return event.type;
-    }
+    // 複合事件（叛變、收益）是多個語段，段與段之間以 ' · ' 相連——與 ticker 的
+    // 純文字版本用同一個分隔符，兩邊讀起來是同一種句子。
+    // Compound events (defection, income) are several segments joined with
+    // ' · ' — the same separator the ticker's plain-text rendering uses, so
+    // both surfaces read as the same sentence.
+    return (
+      <>
+        {segments.map((segment, index) => {
+          const parts: Record<string, ReactNode> = {};
+          for (const [key, value] of Object.entries(segment.params)) {
+            parts[key] = nodeFor(value);
+          }
+          return (
+            <Fragment key={index}>
+              {index > 0 && ' · '}
+              {fillTemplate(t(segment.key), parts)}
+            </Fragment>
+          );
+        })}
+      </>
+    );
   }
 
   return (
@@ -848,11 +605,45 @@ export function EventLog({
           )}
         </div>
 
+        {/* ── 回合選擇器 / Round selector ──
+            與左邊的時間軸同一個 state（selectedRound）：兩邊選的是同一個「正在看的回合」，
+            這個下拉只是讓人不用離開面板就能跳回合。「全部回合」不會出現在這裡——日誌一次
+            只抓一回合，要看歷史是時間軸的事。沒有可選回合（種子世界，一回合都還沒跑）時
+            整列不出現，而不是顯示一個空下拉。
+            The same state as the timeline on the left (selectedRound): both pick the one
+            "round on view", and this dropdown only saves the reader from leaving the panel
+            to jump rounds. "All rounds" is deliberately absent - the log fetches one round
+            at a time and history is the timeline's job. With no rounds to pick (a seeded
+            world, nothing run yet) the whole row is omitted rather than shown empty. */}
+        {availableRounds.length > 0 && (
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-400 shrink-0" htmlFor="gm-evt-round">
+              {t('events.roundSelect')}
+            </label>
+            <select
+              id="gm-evt-round"
+              value={round}
+              onChange={(e) => {
+                const next = parseInt(e.target.value, 10);
+                if (!Number.isNaN(next)) onRoundChange(next);
+              }}
+              className="min-w-0 flex-1 rounded-md border border-white/10 bg-gray-900/80 px-2 py-1 text-xs text-gray-200 focus:border-cyan-400/50 focus:outline-none"
+            >
+              {availableRounds.map((r) => (
+                <option key={r} value={r}>
+                  RND {String(r).padStart(4, '0')}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         {/* 將領 / 地點下拉：一列放兩組（label + select 各半）。全世界的將領與
-            地點都在選項裡——日誌抓的是**所有回合**，任何人任何地的歷史都篩得到。
+            地點都在選項裡（清單來自 page 傳進來的 worldState，不是這一回合的事件），
+            語意是「與此人（此地）相關的事件」。
             Leader / place dropdowns: two pairs on one row (each label + select takes
-            half). Every leader and place in the world is an option — the log fetches
-            **all** rounds, so anyone's or anywhere's history is filterable. */}
+            half). Every leader and place in the world is an option — the list comes from
+            the worldState the page passes in, not from this round's events — and the
+            semantics are "events **involving** this leader (or place)". */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="flex min-w-0 flex-1 items-center gap-1.5">
             <label className="text-xs text-gray-400 shrink-0" htmlFor="gm-evt-leader">
@@ -968,7 +759,7 @@ export function EventLog({
             loadOlder();
           }
         }}
-        className="space-y-0.5 max-h-80 overflow-y-auto ds-gm-scroll"
+        className="space-y-0.5 overflow-y-auto ds-gm-scroll"
       >
         {isLoading && (
           <div className="space-y-1.5 pt-1" aria-busy="true" aria-label={t('general.loading')}>

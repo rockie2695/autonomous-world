@@ -30,6 +30,11 @@
 //
 // 使用方式 / Usage:
 //   await economy(worldId, round, rng);
+//
+// 寫入方式 / How it writes:
+//   整階段（所有地點）的寫入落在**同一筆交易**裡（inTransaction + tx），讀取在交易外。
+//   The whole phase's writes land in **one transaction** (inTransaction + tx); the
+//   reads stay outside it.
 // ============================================================================
 
 import { prisma } from '@/lib/prisma';
@@ -43,7 +48,7 @@ import {
   othersOf,
 } from '../income';
 import { spendingPosture, troopReserveRate } from '@/lib/spending';
-import { inTransaction, type TxClient } from '../tx';
+import { inTransaction } from '../tx';
 import { placeRecruits } from '@/lib/placeEffects';
 
 /**
@@ -53,6 +58,12 @@ import { placeRecruits } from '@/lib/placeEffects';
  * @param worldId - 要處理的世界 ID / World to process
  * @param round - 當前回合數 / Current round number
  * @param rng - 用於購兵的種子 RNG / Seeded RNG for troop purchases
+ *
+ * @remarks 整階段的所有寫入落在**同一筆交易**裡（見函式下方的 inTransaction）：
+ *   全部落地，或全部不落地。讀取在交易外，計算順序與昔日逐筆交易時完全相同。
+ *   Every write in this phase lands in **one transaction** (see inTransaction below):
+ *   all of them or none. The reads stay outside it, and the computation order is
+ *   byte-for-byte the one the per-place version had.
  */
 export async function economy(
   worldId: string,
@@ -102,7 +113,32 @@ export async function economy(
     }
   }
 
-  for (const place of places) {
+  // ── 整個階段一筆交易 / ONE TRANSACTION FOR THE WHOLE PHASE ──
+  // 曾經是**每個地點一筆**交易：一回合數百次提交，保護的卻是同一條不變量（三份加總
+  // 剛好等於 income）。交易的成本是 round trip，而那個不變量逐地點都成立——一次提交
+  // 就夠，所以現在整階段的發錢、徵兵、購兵與事件全部落在同一筆交易裡。
+  //
+  // **計算順序完全沒變**：交易只包住 DB 寫入。收益、購買批次、每一次 rng.float 的抽取
+  // 順序與昔日逐筆交易時逐一相同——同一個種子仍然長出同一個世界。這裡只是把寫入排到
+  // 同一條連線上，不是把計算改成併發（併發會讓 rng 的順序取決於排程，那是模擬的災難）。
+  //
+  // 讀取（上面的 findMany）刻意留在交易外：只做寫入的交易才會短。
+  //
+  // It used to be ONE TRANSACTION PER PLACE: hundreds of commits a round protecting the
+  // same per-place invariant ("the three shares sum exactly to income"). One commit is
+  // enough, so every write in this phase - the splits, the recruits, the purchases and
+  // their events - now lands in a single transaction.
+  //
+  // **The computation order is unchanged**: the transaction wraps only the DB writes.
+  // Income, purchase batches and every rng.float draw happen in exactly the same order
+  // as before, so one seed still grows one world. This routes the writes down one
+  // connection - it does NOT make the computation concurrent (a concurrent draw order
+  // would depend on scheduling, which is a simulation disaster).
+  //
+  // The reads (the findMany calls above) stay outside on purpose: a transaction that
+  // only writes is a short one.
+  await inTransaction(async (tx) => {
+    for (const place of places) {
     // 計算地點收入 / Calculate place income
     // ── 無主之地：完全不進入經濟循環 ──
     // 不產出、不徵兵、也不寫事件。無主之地沒有勢力在其上收稅或養兵，讓它出現在事件日誌
@@ -174,51 +210,42 @@ export async function economy(
     let adminGoldAfter = 0;
     let othersGold = 0;
 
-    await inTransaction(async (tx: TxClient) => {
-      if (kingId && split.king > 0) {
-        const king = await tx.character.update({
-          where: { id: kingId },
-          data: { gold: { increment: split.king } },
-        });
-        kingGold = split.king;
-        kingGoldAfter = king.gold;
-      }
+    // ── 分配收益（在同一筆交易內）──
+    if (kingId && split.king > 0) {
+      const king = await tx.character.update({
+        where: { id: kingId },
+        data: { gold: { increment: split.king } },
+      });
+      kingGold = split.king;
+      kingGoldAfter = king.gold;
+    }
 
-      if (adminId && split.admin > 0) {
-        const admin = await tx.character.update({
-          where: { id: adminId },
-          data: { gold: { increment: split.admin } },
-        });
-        adminGold = split.admin;
-        adminGoldAfter = admin.gold;
-      }
+    if (adminId && split.admin > 0) {
+      const admin = await tx.character.update({
+        where: { id: adminId },
+        data: { gold: { increment: split.admin } },
+      });
+      adminGold = split.admin;
+      adminGoldAfter = admin.gold;
+    }
 
-      // 「其他人」平分剩下的 30%。splitIncome 已經保證三份加起來等於 income，所以這裡
-      // 不會多發錢。沒有行政官時三份都是 0，整段自然跳過。
-      //
-      // "Everyone else" splits the remaining 30%. splitIncome already guarantees the three
-      // shares sum to `income`, so this cannot pay out extra. With no administrator all three
-      // are 0 and this whole block is skipped, which is the point.
-      if (otherChars.length > 0 && split.others > 0) {
-        const perChar = Math.floor(split.others / otherChars.length);
-        if (perChar > 0) {
-          for (const char of otherChars) {
-            await tx.character.update({
-              where: { id: char.id },
-              data: { gold: { increment: perChar } },
-            });
-          }
-          // 只記真正發出去的金額；除不盡的餘數留在地方上 /
-          // Record only what was actually paid; the remainder stays with the place
-          othersGold = perChar * otherChars.length;
+    if (otherChars.length > 0 && split.others > 0) {
+      const perChar = Math.floor(split.others / otherChars.length);
+      if (perChar > 0) {
+        for (const char of otherChars) {
+          await tx.character.update({
+            where: { id: char.id },
+            data: { gold: { increment: perChar } },
+          });
         }
+        othersGold = perChar * otherChars.length;
       }
-    });
+    }
 
     // ── 徵兵，同樣記下增加量與總量 ──
     // Recruit for the garrison, keeping both the increment and the new total.
     const recruits = placeRecruits(place.barracks);
-    const updatedPlace = await prisma.place.update({
+    const updatedPlace = await tx.place.update({
       where: { id: place.id },
       data: { garrison: { increment: recruits } },
     });
@@ -230,7 +257,7 @@ export async function economy(
     //
     // One INCOME event per place rather than per leader: a world holds hundreds of places
     // and per-leader rows would be hundreds of events a round for no extra information.
-    await prisma.event.create({
+    await tx.event.create({
       data: {
         worldId,
         round,
@@ -302,7 +329,7 @@ export async function economy(
 
         const cost = buyCount * CONFIG.CHAR_BUY_TROOP_PRICE;
 
-        const updatedChar = await prisma.character.update({
+        const updatedChar = await tx.character.update({
           where: { id: char.id },
           data: {
             gold: { decrement: cost },
@@ -324,7 +351,7 @@ export async function economy(
         //
         // `charId` (not just the name) so the row links back to the leader, and `placeId` so the
         // camera can jump to where the trade happened.
-        await prisma.event.create({
+        await tx.event.create({
           data: {
             worldId,
             round,
@@ -348,4 +375,5 @@ export async function economy(
       }
     }
   }
+  });
 }

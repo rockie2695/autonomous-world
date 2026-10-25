@@ -3,14 +3,14 @@
 // ============================================================================
 // 全部路徑在模組載入時算一次（server 與 client 各算一次，結果一致，hydration
 // 安全）。會動的只有 transform 與透明度：手的關節是螢幕旋轉（見 frame.ts 對
-// 「螢幕旋轉」的說明）、整條船的移動是平移、火光與燈是透明度、零件的出現是
-// display——沒有任何一帧重建路徑。
+// 「螢幕旋轉」的說明）、整條船的移動是平移加一個小切線旋轉、火光與燈是透明度、
+// 零件的出現是 display——沒有任何一帧重建路徑。
 //
 // Every path is computed once at module load (server and client each compute them;
 // identical results, so hydration is safe). Only transforms and opacities move: a
 // hand's joints are screen rotations (see frame.ts on screen rotations), the ship
-// travels by translation, fires and lamps ride opacities, and parts appear by
-// display — no frame ever rebuilds a path.
+// travels by translation plus one small tangent rotation, fires and lamps ride
+// opacities, and parts appear by display — no frame ever rebuilds a path.
 //
 // 自建的形體：hullPath（凸包描輪廓）、facet（立面矩形的四角投影）、prism（世界兩
 // 點之間的矩形樑：兩個端面各四角，取凸包就是它的剪影）、revolveX（繞 x 軸的迴轉
@@ -49,7 +49,6 @@ import {
   ARM_FORE,
   ARM_HIT_R,
   ARM_SEG,
-  ARM_Y,
   at,
   atStation,
   BEAM,
@@ -60,6 +59,8 @@ import {
   CABINET_X,
   CRADLE,
   CRADLE_H,
+  CRATES,
+  CRATE_H,
   CRUCIBLE,
   CRUCIBLE_H,
   CRUCIBLE_WIN_Z,
@@ -72,6 +73,7 @@ import {
   LABEL_PLATE,
   LAMP,
   LAMP_Z,
+  lineY,
   ODO,
   ODO_FIRST_X,
   ODO_H,
@@ -80,12 +82,22 @@ import {
   P,
   PALLETS,
   PALLET_H,
+  plinthAt,
+  PLINTH,
+  PLINTH_H,
   RACK,
   RACK_H,
-  RAIL_FAR,
   RAIL_H,
-  RAIL_NEAR,
+  RAIL_IN,
+  RAIL_OUT,
+  RAIL_STEP,
+  RAIL_X0,
+  RAIL_X1,
+  emitPoint,
+  railBand,
   ROLLER_STEP,
+  seatY,
+  seatZ,
   SHIP_HALF,
   SHIP_LEN,
   SHIP_STERN,
@@ -95,7 +107,7 @@ import {
   SPOUT_FROM,
   SPOUT_TO,
   STATIONS,
-  TOOL,
+  toolPoint,
   WALKWAY,
   WALKWAY_H,
   WRIST,
@@ -221,8 +233,13 @@ const HALL_SCREWS: Plane[] = [
   [HALL.x + HALL.w - 10, HALL.y + HALL.d - 10],
 ];
 
-/** 車道線：兩條沿線的長線（在導軌外側）+ 兩端的橫擋 / Lane markings: two long lines outside the rails plus end stops */
-const LANE_Y = [-44, 44] as const;
+/** 車道線：跟著 S 曲線走的兩條長線（在導軌外側、料箱帶的裡面）+ 兩端的橫擋。
+    直線車道在彎曲的輸送線旁讀起來像量錯了——漆線跟著線彎，它才是畫給這條線的。
+    Lane markings: two long lines that follow the S curve (outside the rails,
+    inside the crates' band) plus the end stops. Straight lane marks beside a bent
+    conveyor read as mis-surveyed — paint that follows the line is paint *for* it. */
+const LANE_LY = 44;
+const LANE_SEG = 36;
 const LANE_END_TICKS: Plane[][] = [-424, 424].map((x) =>
   [0, 1, 2, 3, 4, 5].map((row): Plane => [x + (row % 2 ? 12 : 0), HALL.y + (row / 5) * HALL.d]),
 );
@@ -238,14 +255,27 @@ export const FLOOR_ART = {
       return lineFrom([x, WALKWAY.y, WALKWAY_H + 0.3], [x, WALKWAY.y + WALKWAY.d, WALKWAY_H + 0.3]);
     }),
   ),
-  pallets: PALLETS.map((plan, index) => solid(plan, 0, PALLET_H[index] ?? 8, 4, 0.6)),
-  palletLids: PALLETS.map((plan, index) => planOutline(insetPlan(plan, 2), PALLET_H[index] ?? 8, P, 4)),
+  /** 料件踩在走道上：z 從 WALKWAY_H 算起，不再從地面 / Stock stands on the walkway: its z starts at WALKWAY_H, not at the floor */
+  pallets: PALLETS.map((plan, index) => solid(plan, WALKWAY_H, PALLET_H[index] ?? 8, 4, 0.6)),
+  palletLids: PALLETS.map((plan, index) => planOutline(insetPlan(plan, 2), WALKWAY_H + (PALLET_H[index] ?? 8), P, 4)),
   palletBands: PALLETS.map((plan, index) =>
-    lineFrom([plan.x + plan.w / 2, plan.y, (PALLET_H[index] ?? 8) - 3], [plan.x + plan.w / 2, plan.y + plan.d, (PALLET_H[index] ?? 8) - 3]),
+    lineFrom([plan.x + plan.w / 2, plan.y, WALKWAY_H + (PALLET_H[index] ?? 8) - 3], [plan.x + plan.w / 2, plan.y + plan.d, WALKWAY_H + (PALLET_H[index] ?? 8) - 3]),
   ),
   palletDots: PALLETS.flatMap((plan, index) => [
-    dot([plan.x + 4, plan.y + 4, PALLET_H[index] ?? 8]),
-    dot([plan.x + plan.w - 4, plan.y + plan.d - 4, PALLET_H[index] ?? 8]),
+    dot([plan.x + 4, plan.y + 4, WALKWAY_H + (PALLET_H[index] ?? 8)]),
+    dot([plan.x + plan.w - 4, plan.y + plan.d - 4, WALKWAY_H + (PALLET_H[index] ?? 8)]),
+  ]),
+  /** 料箱：近列手之間的間隙 / The crates: the gaps between the near-row hands */
+  crates: CRATES.map((plan, index) => solid(plan, 0, CRATE_H[index] ?? 10, 4, 0.6)),
+  crateLids: CRATES.map((plan, index) => planOutline(insetPlan(plan, 1.6), CRATE_H[index] ?? 10, P, 4)),
+  crateBands: joinPaths(
+    CRATES.map((plan, index) =>
+      lineFrom([plan.x + plan.w / 2, plan.y, (CRATE_H[index] ?? 10) - 2.4], [plan.x + plan.w / 2, plan.y + plan.d, (CRATE_H[index] ?? 10) - 2.4]),
+    ),
+  ),
+  crateDots: CRATES.flatMap((plan, index) => [
+    dot([plan.x + 4, plan.y + 4, CRATE_H[index] ?? 10]),
+    dot([plan.x + plan.w - 4, plan.y + plan.d - 4, CRATE_H[index] ?? 10]),
   ]),
 };
 
@@ -254,7 +284,16 @@ export const HALL_ART = {
   feet: HALL_FEET.map(([x, y]) => [cyl(x, y, 7, -FOOT_H - HALL_H, 1.8, 16), cyl(x, y, 5.4, -FOOT_H - HALL_H + 1.8, FOOT_H - 1.8, 16)]),
   slab: solid(HALL, -HALL_H, HALL_H, 8, 1.6),
   groove: planOutline(insetPlan(HALL, 5), 0, P),
-  lanes: joinPaths(LANE_Y.map((y) => lineFrom([HALL.x + 10, y, 0], [HALL.x + HALL.w - 10, y, 0]))),
+  lanes: joinPaths(
+    ([-1, 1] as const).flatMap((side) => {
+      const out: string[] = [];
+      for (let x = HALL.x + 10; x < HALL.x + HALL.w - 10; x += LANE_SEG) {
+        const next = Math.min(x + LANE_SEG, HALL.x + HALL.w - 10);
+        out.push(lineFrom([x, lineY(x) + side * LANE_LY, 0], [next, lineY(next) + side * LANE_LY, 0]));
+      }
+      return out;
+    }),
+  ),
   laneTicks: joinPaths(LANE_END_TICKS.map((column) => pathOf(column.map(([x, y]) => at([x, y, 0]))))),
   screws: HALL_SCREWS.map(([x, y]) => dot([x, y, 0])),
   screwRings: joinPaths(HALL_SCREWS.map(([x, y]) => screwRing(x, y, 0))),
@@ -347,22 +386,62 @@ export const LAMP_ART = {
 };
 
 // ── 導軌與滾子 / The rails and their rollers ──────────────────────────────
+// 導軌**沿曲線分段**：每 32 個世界單位一段，四角取自 railBand——兩端的 y 不同，
+// 段是凸四邊形，一節節拼出彎的軌。直軌在 S 曲線里會在船底穿幫（滑靴踩不到的地方
+// 一覽無遺），分段讓軌與靴永遠同在曲線上。
+// The rails are **segmented along the curve**: one convex quad every 32 world
+// units, its corners from railBand — the y differs at each end, so a chain of them
+// bends. A straight rail under an S curve shows through wherever the skids are not
+// standing on it; segmented, the rail and the skids share one curve.
 
-const ROLLERS: number[] = (() => {
-  const out: number[] = [];
-  for (let x = RAIL_FAR.x + 16; x <= RAIL_FAR.x + RAIL_FAR.w - 16; x += ROLLER_STEP) out.push(x);
+const RAIL_STEPS: Array<[number, number]> = (() => {
+  const out: Array<[number, number]> = [];
+  for (let x = RAIL_X0; x < RAIL_X1; x += RAIL_STEP) out.push([x, Math.min(x + RAIL_STEP, RAIL_X1)]);
   return out;
 })();
 
+/** 一段軌的平面四角（band 的外緣 → 內緣，兩端各一對）/ One rail segment's four plan corners (outer edge → inner edge, one pair per end) */
+const railQuad = (from: number, to: number, far: boolean): [Plane, Plane, Plane, Plane] => {
+  const [fOut, fIn] = railBand(from, far);
+  const [tOut, tIn] = railBand(to, far);
+  return [
+    [from, fOut],
+    [to, tOut],
+    [to, tIn],
+    [from, fIn],
+  ];
+};
+
+const railBandRow = (far: boolean) => RAIL_STEPS.map(([from, to]) => railQuad(from, to, far));
+
+/** 滾子的位置（跨兩端內縮）/ The rollers' positions (inset from both ends) */
+const ROLLERS: number[] = (() => {
+  const out: number[] = [];
+  for (let x = RAIL_X0 + 16; x <= RAIL_X1 - 16; x += ROLLER_STEP) out.push(x);
+  return out;
+})();
+
+const rollerArt = (far: boolean) => ({
+  /** 每段軌立的實體 / One solid per rail segment */
+  segs: railBandRow(far).map((quad) => plate(quad, 0, RAIL_H, 0.5)),
+  /** 每段頂面的輪廓 / Each segment's top contour */
+  tops: railBandRow(far).map((quad) => pathOf(quad.map(([x, y]) => at([x, y, RAIL_H + 0.3])))),
+  /** 軸承刻線：在滾子的 x 上跨過槽 / The bearing ticks: across the trough at each roller's x */
+  ticks: joinPaths(
+    ROLLERS.map((x) => {
+      const [y0, y1] = railBand(x, far);
+      return lineFrom([x, y0, RAIL_H + 0.3], [x, y1, RAIL_H + 0.3]);
+    }),
+  ),
+  rollerDots: ROLLERS.map((x) => {
+    const [y0, y1] = railBand(x, far);
+    return dot([x, (y0 + y1) / 2, RAIL_H + 0.3]);
+  }),
+});
+
 export const RAIL_ART = {
-  far: solid(RAIL_FAR, 0, RAIL_H, 4, 0.6),
-  near: solid(RAIL_NEAR, 0, RAIL_H, 4, 0.6),
-  farTop: planOutline(RAIL_FAR, RAIL_H, P, 4),
-  nearTop: planOutline(RAIL_NEAR, RAIL_H, P, 4),
-  /** 軸承：兩條長槽裡的短刻（合成一條路徑）/ The bearings: ticks in both troughs (one joined path) */
-  farTicks: joinPaths(ROLLERS.map((x) => lineFrom([x, RAIL_FAR.y, RAIL_H + 0.3], [x, RAIL_FAR.y + RAIL_FAR.d, RAIL_H + 0.3]))),
-  nearTicks: joinPaths(ROLLERS.map((x) => lineFrom([x, RAIL_NEAR.y, RAIL_H + 0.3], [x, RAIL_NEAR.y + RAIL_NEAR.d, RAIL_H + 0.3]))),
-  rollerDots: ROLLERS.flatMap((x) => [dot([x, RAIL_FAR.y + 4, RAIL_H + 0.3]), dot([x, RAIL_NEAR.y + 4, RAIL_H + 0.3])]),
+  far: rollerArt(true),
+  near: rollerArt(false),
 };
 
 // ── 熔金塔 / The crucible ─────────────────────────────────────────────────
@@ -379,8 +458,6 @@ export const CRUCIBLE_ART = {
     [CRUCIBLE.x + CRUCIBLE.w, CRUCIBLE.y + 6, CRUCIBLE_WIN_Z[1]],
   ]),
   windowRim: planOutline({ x: CRUCIBLE.x + CRUCIBLE.w - 1.6, y: CRUCIBLE.y + 4, w: 3.2, d: CRUCIBLE.d - 8, r: 1 }, CRUCIBLE_WIN_Z[0] - 1, P, 4),
-  /** 支撐肋 / The buttress ribs on the back face */
-  ribs: joinPaths([0, 1, 2].map((row) => lineFrom([CRUCIBLE.x, CRUCIBLE.y + CRUCIBLE.d, 6 + row * 8], [CRUCIBLE.x + CRUCIBLE.w, CRUCIBLE.y + CRUCIBLE.d, 6 + row * 8]))),
   /** 澆槽：從塔頂伸向裝配線的斜樑 / The spout: an angled beam from the tower's top toward the line */
   spout: prism(SPOUT_FROM, SPOUT_TO, 9, 6),
   spoutLip: prism([SPOUT_TO[0] - 3, SPOUT_TO[1], SPOUT_TO[2]], [SPOUT_TO[0] + 3, SPOUT_TO[1] + 3, SPOUT_TO[2] + 4], 9, 6),
@@ -403,8 +480,10 @@ export const CRADLE_ART = {
   clamps: ([-1, 1] as const).flatMap((side) =>
     ([-1, 1] as const).map((end) => cyl(CRADLE.x + 14 + (end > 0 ? CRADLE.w - 28 : 0), CRADLE.y + (side > 0 ? CRADLE.d - 9 : 9), 3.4, CRADLE_H, 8, 14)),
   ),
-  /** 兩條滑靴：踩在導軌上 / Two skids: they ride the rails */
-  skids: ([-1, 1] as const).map((side) => solid({ x: CRADLE.x + 6, y: side > 0 ? RAIL_NEAR.y + 1.5 : RAIL_FAR.y + 3.5, w: CRADLE.w - 12, d: 3, r: 1.4 }, 0, CRADLE_H - 1, 4, 0.4)),
+  /** 兩條滑靴：踩在新導軌帶上（沿曲線；帶的內外緣由 RAIL_IN / RAIL_OUT 定）
+      Two skids: they ride the new rail bands (along the curve; the bands' inner and
+      outer edges come from RAIL_IN / RAIL_OUT) */
+  skids: ([-1, 1] as const).map((side) => solid({ x: CRADLE.x + 6, y: side > 0 ? RAIL_IN + 1.5 : -RAIL_OUT + 3.5, w: CRADLE.w - 12, d: 3, r: 1.4 }, 0, CRADLE_H - 1, 4, 0.4)),
   clampDots: ([-1, 1] as const).flatMap((side) =>
     ([-1, 1] as const).map((end) => dot([CRADLE.x + 14 + (end > 0 ? CRADLE.w - 28 : 0), CRADLE.y + (side > 0 ? CRADLE.d - 9 : 9), CRADLE_H + 8])),
   ),
@@ -608,7 +687,11 @@ export const TOOL_SCHEDULE: ToolKind[] = [
 
 export interface HandArt {
   index: number;
+  /** 哪一列：工具頭從這一舷伸進來 / which row: the tool reaches in from this flank */
+  row: 'far' | 'near';
   kind: ToolKind;
+  /** 凸起的地台（只有第 3/6/9/12/15/18 站有）/ The raised plinth (stations 3/6/9/12/15/18 only) */
+  plinth: SolidPaths | null;
   pedestal: SolidPaths;
   column: SolidPaths;
   columnRing: string;
@@ -636,10 +719,10 @@ export interface HandArt {
   hitR: number;
 }
 
-/** 工具頭：以 TOOL 為中心，往 −z 出一個頭部；各種工具的零件不同
-    The tool: a head centred on TOOL, reaching −z; the parts differ per kind */
-function toolArt(kind: ToolKind, x: number) {
-  const [tx, ty, tz] = [x + TOOL[0], TOOL[1], TOOL[2]];
+/** 工具頭：以工具樞軸（世界點）為中心，往 −z 出一個頭部；各種工具的零件不同
+    The tool: a head centred on its world pivot, reaching −z; the parts differ per kind */
+function toolArt(kind: ToolKind, pivot: Point3) {
+  const [tx, ty, tz] = pivot;
   const bodyPlan: Plan = { x: tx - 7, y: ty - 5.5, w: 14, d: 11, r: 2.4 };
   const body = solid(bodyPlan, tz - 4, 7, 4, 0.8);
   const parts: SolidPaths[] = [];
@@ -712,18 +795,27 @@ export const HAND_ART: HandArt[] = Array.from({ length: STATIONS }, (_, index) =
   const station = index + 1;
   const x = stationX(station);
   const kind = TOOL_SCHEDULE[index]!;
-  const shoulder: Point3 = [x, ARM_Y, SHOULDER_Z[1] - 2.5];
+  // 座位相對的一切：肩正上方、肘腕乘上 reachSign 决定伸向哪一舷、地台把整組抬高
+  // Everything seat-relative: the shoulder straight above, elbow and wrist times
+  // reachSign pick the flank, and a plinth lifts the whole group
+  const seat = seatY(station);
+  const lift = seatZ(station);
+  const pivot = toolPoint(station);
+  const shoulder: Point3 = [x, seat, lift + SHOULDER_Z[1] - 2.5];
   const elbow = atStation(station, ELBOW);
   const wrist = atStation(station, WRIST);
-  const tool = toolArt(kind, x);
+  const tool = toolArt(kind, pivot);
+  const basePlan: Plan = { ...ARM_BASE, x: x + ARM_BASE.x, y: seat + ARM_BASE.y };
   return {
     index: station,
+    row: station % 2 === 1 ? 'far' : 'near',
     kind,
-    pedestal: solid({ ...ARM_BASE, x: x + ARM_BASE.x }, 0, ARM_BASE_H, 4, 0.8),
-    column: cyl(x, ARM_Y, ARM_COL_R, ARM_COL_Z[0], ARM_COL_Z[1] - ARM_COL_Z[0], 18),
-    columnRing: ring(x, ARM_Y, ARM_COL_R - 0.8, ARM_COL_Z[1], P, 18),
-    shoulder: cyl(x, ARM_Y, SHOULDER_R, SHOULDER_Z[0], SHOULDER_Z[1] - SHOULDER_Z[0], 20),
-    shoulderCap: cyl(x, ARM_Y, SHOULDER_R - 1.6, SHOULDER_Z[1], 1.8, 20),
+    plinth: plinthAt(station) ? solid({ ...PLINTH, x: x + PLINTH.x, y: seat + PLINTH.y }, 0, PLINTH_H, 4, 0.8) : null,
+    pedestal: solid(basePlan, lift, ARM_BASE_H, 4, 0.8),
+    column: cyl(x, seat, ARM_COL_R, lift + ARM_COL_Z[0], ARM_COL_Z[1] - ARM_COL_Z[0], 18),
+    columnRing: ring(x, seat, ARM_COL_R - 0.8, lift + ARM_COL_Z[1], P, 18),
+    shoulder: cyl(x, seat, SHOULDER_R, lift + SHOULDER_Z[0], SHOULDER_Z[1] - SHOULDER_Z[0], 20),
+    shoulderCap: cyl(x, seat, SHOULDER_R - 1.6, lift + SHOULDER_Z[1], 1.8, 20),
     upper: prism(shoulder, elbow, ARM_SEG[0], ARM_SEG[1]),
     elbow: cyl(elbow[0], elbow[1], 5.7, elbow[2] - 2.9, 5.8, 16),
     forearm: prism(elbow, wrist, ARM_FORE[0], ARM_FORE[1]),
@@ -732,14 +824,14 @@ export const HAND_ART: HandArt[] = Array.from({ length: STATIONS }, (_, index) =
     toolParts: tool.parts,
     toolFaces: tool.faces,
     seams: joinPaths([
-      planOutline({ ...ARM_BASE, x: x + ARM_BASE.x }, ARM_BASE_H, P, 4),
-      lineFrom([x, ARM_Y, ARM_COL_Z[1]], [x, ARM_Y, SHOULDER_Z[0]]),
+      planOutline(basePlan, lift + ARM_BASE_H, P, 4),
+      lineFrom([x, seat, lift + ARM_COL_Z[1]], [x, seat, lift + SHOULDER_Z[0]]),
     ]),
     shoulderPivot: at(shoulder),
     elbowPivot: at(elbow),
-    toolPivot: at([x + TOOL[0], TOOL[1], TOOL[2] - 4]),
-    emit: at([x + TOOL[0], TOOL[1], TOOL[2] - 17]),
-    hit: at([x + ARM_BASE.x + ARM_BASE.w / 2, ARM_Y, 0]),
+    toolPivot: at([pivot[0], pivot[1], pivot[2] - 4]),
+    emit: at(emitPoint(station)),
+    hit: at([x, seat, lift]),
     hitR: ARM_HIT_R,
   };
 });

@@ -445,6 +445,23 @@ export default function GamePage() {
   const errorMessage = error instanceof Error ? error.message : null;
   /** 已執行的最大回合：快照存在 0..currentRound-1，currentRound 是尚未執行的下一回合 → 時間軸不顯示未來回合 / Last run round: snapshots exist for 0..currentRound-1, currentRound is the next (un-run) round → never show future rounds on the timeline */
   const lastRound = Math.max(0, (worldState?.world.currentRound ?? 1) - 1);
+  /**
+   * 事件日誌「回合」下拉的清單：1..lastRound。
+   *
+   * 0 不在清單裡：它是種子快照，一個事件都沒有，選過去只是一個空畫面。「全部回合」
+   * 也不存在 —— 日誌一次只抓一回合（`?round=N&limit=500`），要瀏覽歷史用的是左邊的
+   * 時間軸；這個下拉只是讓人在面板裡直接跳回合，不用離開日誌。
+   *
+   * The event log's round selector: 1..lastRound. Round 0 is excluded - it is the seed
+   * snapshot and holds no events, so choosing it would only offer an empty screen.
+   * "All rounds" does not exist either: the log fetches one round at a time
+   * (`?round=N&limit=500`) and browsing history is the timeline's job - this dropdown
+   * only lets the reader jump rounds without leaving the panel.
+   */
+  const availableRounds = useMemo(
+    () => Array.from({ length: lastRound }, (_, i) => i + 1),
+    [lastRound]
+  );
 
   useEffect(() => {
     async function checkAdmin() {
@@ -1090,31 +1107,41 @@ onTabChange={(tab) => {
               places={worldState?.places ?? []}
               onFocusPlace={focusPlaceFromLog}
               onOpenLeaderDetail={openLeaderDetail}
+              onRoundChange={handleRoundSelect}
+              availableRounds={availableRounds}
             />
           )}
           {rightTab === 'stats' && (
-            <>
-              {/* 勢力排行從左欄搬到这里：它本來就在統計語境裡，獨立在左欄只會一直
-                  吃掉地圖寬度。兩個面板各自帶自己的 GM_PANEL，所以會自然堆疊 /
-                  The faction ranking moved here from the left column: it was always a
-                  statistics view, and sitting in its own column it just ate map width
-                  permanently. Each keeps its own GM_PANEL so they stack cleanly. */}
-              <FactionRanking
-                factions={worldState?.factions ?? []}
-                characters={worldState?.characters ?? []}
-                places={worldState?.places ?? []}
-              />
-              <StatsCharts
-                worldId={worldState?.world.id ?? ''}
-                currentRound={worldState?.world.currentRound ?? 0}
-                characters={worldState?.characters ?? []}
-                worldFactions={worldState?.factions ?? []}
-              />
-              {/* 回合檢查器：這一回合的階段耗時與摘要。以前要手寫 SQL 才看得到 /}
-              {/* The round inspector: this round's phase timings and summary. Before,
-                  it took hand-written SQL to see any of it. */}
-              <RoundInspector round={round} data={roundInspect ?? null} />
-            </>
+            <StatsCharts
+              worldId={worldState?.world.id ?? ''}
+              currentRound={worldState?.world.currentRound ?? 0}
+              characters={worldState?.characters ?? []}
+              worldFactions={worldState?.factions ?? []}
+            />
+          )}
+          {rightTab === 'factions' && (
+            // 勢力排行有**自己的分頁**（原本塞在統計裡）：名次表與趨勢圖是兩種
+            // 不同的讀法，混在一欄只會讓兩者互相干擾。它自己帶 GM_PANEL，
+            // 所以在分頁裡就是唯一的內容。
+            //
+            // The faction ranking has **its own tab** (it used to sit inside
+            // 統計): a rank table and a trend chart are two different readings,
+            // and sharing a column only made them interfere. It carries its own
+            // GM_PANEL, so inside a tab it is the only content.
+            <FactionRanking
+              factions={worldState?.factions ?? []}
+              characters={worldState?.characters ?? []}
+              places={worldState?.places ?? []}
+            />
+          )}
+          {rightTab === 'system' && (
+            // 回合檢查器：這一回合的階段耗時與摘要。以前要手寫 SQL 才看得到。
+            // 它跟著**顯示中的回合**（時間軸選哪一回合就看哪一回合）。
+            //
+            // The round inspector: this round's phase timings and summary. It
+            // used to take hand-written SQL to see any of it. It follows the
+            // **displayed round** — the timeline picks which one.
+            <RoundInspector round={round} data={roundInspect ?? null} />
           )}
           {rightTab === 'places' && (
             // The place detail is now the 地點 tab's content rather than a floating
@@ -1277,7 +1304,19 @@ function useLoadMoreOnScroll(
   return sentinelRef;
 }
 
-type SideTab = 'characters' | 'events' | 'stats' | 'places';
+/**
+ * 右側面板的分頁。**每個分頁只回答一個問題**：誰在這裡（將領）、發生了什麼
+ * （事件）、數據長什麼樣（統計）、誰在贏（勢力）、這一回合怎麼跑的（系統）、
+ * 這塊地在哪（地點）。勢力排行與回合概覽原本擠在「統計」裡，兩種完全不同的
+ * 讀法（趨勢圖 vs. 名次表 vs. 階段耗時）共用一個分頁。
+ *
+ * The right panel's tabs. **Each tab answers one question**: who is here
+ * (characters), what happened (events), what the data looks like (stats), who
+ * is winning (factions), how this round ran (system), where this place is
+ * (places). The faction ranking and the round overview used to sit inside
+ * 統計, so one tab had to carry three unrelated readings at once.
+ */
+type SideTab = 'characters' | 'events' | 'stats' | 'factions' | 'system' | 'places';
 
 /** 將領表可排序的欄位 / the sortable columns of the leader table */
 type LeaderSortKey =
@@ -1359,6 +1398,27 @@ function useSideTabs(): Array<{ key: SideTab; label: string; icon: ReactNode }> 
         <>
           <path d="M5 20V11M12 20V5M19 20v-7" />
           <path d="M3.5 20.5h17" />
+        </>
+      ),
+    },
+    {
+      key: 'factions' as const,
+      label: t('ranking.tab'),
+      icon: (
+        <>
+          <path d="M7 4.5h10l3 5.5-8 9.5-8-9.5z" />
+          <path d="M10 4.5 12 10l2-5.5" />
+        </>
+      ),
+    },
+    {
+      key: 'system' as const,
+      label: t('game.systemTab'),
+      icon: (
+        <>
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M12 7.5V12l3 2" />
+          <path d="M12 3.5V2M20.5 12H22M12 22v-1.5M3.5 12H2" />
         </>
       ),
     },
