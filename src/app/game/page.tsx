@@ -248,9 +248,8 @@ function TelemetryStrip({
       <div className={`${GM_STRIP_VEIL}`} aria-hidden="true" />
 
       <div
-        className={`relative flex items-center gap-4 md:gap-6 px-4 md:px-6 py-3 overflow-x-auto ds-gm-noscroll ${
-          inline ? 'px-0 py-0' : ''
-        }`}
+        className={`relative flex items-center gap-4 md:gap-6 px-4 md:px-6 py-3 overflow-x-auto ds-gm-noscroll ${inline ? 'px-0 py-0' : ''
+          }`}
       >
         <div className="hidden sm:block shrink-0 pr-4 md:pr-6 border-r border-cyan-400/20 max-w-[12rem]">
           <div className="ds-eyebrow">{t('home.stats.title')}</div>
@@ -488,9 +487,9 @@ export default function GamePage() {
 
   const [isPlaying, setIsPlaying] = useState(false);
   // 註解型別：CONFIG 是 `as const`，不加會把 state 鎖成字面值 5000 /
-// Annotated: CONFIG is `as const`, which would otherwise pin the state to the
-// literal 5000 and reject any other speed
-const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
+  // Annotated: CONFIG is `as const`, which would otherwise pin the state to the
+  // literal 5000 and reject any other speed
+  const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
   const [leftSidebarOpen, setLeftSidebarOpen] = useState(false);
   /** 右側地圖面板：頁籤列常駐，內容可收合；null = 尚未手動開合過，走預設 /
    *  Map side panel: the rail is always present and the content collapses;
@@ -679,7 +678,7 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
             <div className={`${GM_HUD_LEGEND}`}>
               <div className={`${GM_SKEL} h-5 w-48`} />
             </div>
-<div className={GM_HUD_CONTROLS_CLOSED}>
+            <div className={GM_HUD_CONTROLS_CLOSED}>
               <div className={`${GM_SKEL} w-9 h-9`} />
               <div className={`${GM_SKEL} w-9 h-9`} />
               <div className={`${GM_SKEL} w-9 h-9`} />
@@ -1065,102 +1064,108 @@ const [playSpeed, setPlaySpeed] = useState<number>(CONFIG.AUTOPLAY_DEFAULT_MS);
               </button>
             </div>
           </div>
-        {/* ── 右側面板：疊在地圖上，不再佔用版面 / Right panel: overlaid on the
+          {/* ── 右側面板：疊在地圖上，不再佔用版面 / Right panel: overlaid on the
             map so it no longer consumes layout width ──────────────────────────── */}
-        <MapSidePanel
-          activeTab={rightTab}
-onTabChange={(tab) => {
-            // 再點一次**已經啟用**的分頁 = 關閉面板。這是「切換」語意，而不是只能開不能關。
-            // 走 closePanel，因為這條路徑也必須清掉選取。
+          <MapSidePanel
+            activeTab={rightTab}
+            onTabChange={(tab) => {
+              // 再點一次**已經啟用**的分頁 = 關閉面板。這是「切換」語意，而不是只能開不能關。
+              // 走 closePanel，因為這條路徑也必須清掉選取。
+              //
+              // Clicking the already-active tab again closes the panel: a toggle, not open-only.
+              // It goes through closePanel because this path must clear the selection too.
+              if (rightTab === tab) {
+                closePanel();
+                return;
+              }
+              setRightTab(tab);
+              setRightPanelOpen(true);
+            }}
+            open={panelHasContent}
+            // 面板自己的 ✕。和分頁切換走同一個 closePanel，所以選取一定會跟著被清掉。
             //
-            // Clicking the already-active tab again closes the panel: a toggle, not open-only.
-            // It goes through closePanel because this path must clear the selection too.
-            if (rightTab === tab) {
-              closePanel();
-              return;
-            }
-            setRightTab(tab);
-            setRightPanelOpen(true);
-          }}
-          open={panelHasContent}
-          // 面板自己的 ✕。和分頁切換走同一個 closePanel，所以選取一定會跟著被清掉。
-          //
-          // The panel's own ✕. It shares closePanel with the tab toggle, so the selection is
-          // always cleared along with the panel.
-          onClose={closePanel}
-          loading={isLoading && !worldState}
-        >
-          {rightTab === 'characters' && (
-            <CharacterList
-              characters={worldState?.characters ?? []}
-              places={worldState?.places ?? []}
-              factions={worldState?.factions ?? []}
-              onOpenLeaderDetail={openLeaderDetail}
-            />
-          )}
-          {rightTab === 'events' && (
-            <EventLog
-              round={round}
-              worldId={worldState?.world.id ?? ''}
-              factions={worldState?.factions ?? []}
-              characters={worldState?.characters ?? []}
-              places={worldState?.places ?? []}
-              onFocusPlace={focusPlaceFromLog}
-              onOpenLeaderDetail={openLeaderDetail}
-              onRoundChange={handleRoundSelect}
-              availableRounds={availableRounds}
-            />
-          )}
-          {rightTab === 'stats' && (
-            <StatsCharts
-              worldId={worldState?.world.id ?? ''}
-              currentRound={worldState?.world.currentRound ?? 0}
-              characters={worldState?.characters ?? []}
-              worldFactions={worldState?.factions ?? []}
-            />
-          )}
-          {rightTab === 'factions' && (
-            // 勢力排行有**自己的分頁**（原本塞在統計裡）：名次表與趨勢圖是兩種
-            // 不同的讀法，混在一欄只會讓兩者互相干擾。它自己帶 GM_PANEL，
-            // 所以在分頁裡就是唯一的內容。
-            //
-            // The faction ranking has **its own tab** (it used to sit inside
-            // 統計): a rank table and a trend chart are two different readings,
-            // and sharing a column only made them interfere. It carries its own
-            // GM_PANEL, so inside a tab it is the only content.
-            <FactionRanking
-              factions={worldState?.factions ?? []}
-              characters={worldState?.characters ?? []}
-              places={worldState?.places ?? []}
-            />
-          )}
-          {rightTab === 'system' && (
-            // 回合檢查器：這一回合的階段耗時與摘要。以前要手寫 SQL 才看得到。
-            // 它跟著**顯示中的回合**（時間軸選哪一回合就看哪一回合）。
-            //
-            // The round inspector: this round's phase timings and summary. It
-            // used to take hand-written SQL to see any of it. It follows the
-            // **displayed round** — the timeline picks which one.
-            <RoundInspector round={round} data={roundInspect ?? null} />
-          )}
-          {rightTab === 'places' && (
-            // The place detail is now the 地點 tab's content rather than a floating
-            // popup: it used to cover the map it was describing, and the rail already
-            // exists, so there was no reason for a second surface.
-            <PlaceDetail
-              place={selectedPlace}
-              factions={worldState?.factions ?? []}
-              characters={worldState?.characters ?? []}
-              roads={worldState?.roads ?? []}
-              places={worldState?.places ?? []}
-              onClose={closePopup}
-              canGoBack={popupStack.length > 1}
-              onBack={popupBack}
-              onOpenPlace={openPlace}
-              onOpenLeader={openLeader}
-            />
-          )}
-        </MapSidePanel>
+            // The panel's own ✕. It shares closePanel with the tab toggle, so the selection is
+            // always cleared along with the panel.
+            onClose={closePanel}
+            loading={isLoading && !worldState}
+          >
+            {rightTab === 'characters' && (
+              <CharacterList
+                characters={worldState?.characters ?? []}
+                places={worldState?.places ?? []}
+                factions={worldState?.factions ?? []}
+                onOpenLeaderDetail={openLeaderDetail}
+              />
+            )}
+            {rightTab === 'events' && (
+              <EventLog
+                round={round}
+                worldId={worldState?.world.id ?? ''}
+                factions={worldState?.factions ?? []}
+                characters={worldState?.characters ?? []}
+                places={worldState?.places ?? []}
+                onFocusPlace={focusPlaceFromLog}
+                onOpenLeaderDetail={openLeaderDetail}
+                onRoundChange={handleRoundSelect}
+                availableRounds={availableRounds}
+              />
+            )}
+            {rightTab === 'stats' && (
+              <StatsCharts
+                worldId={worldState?.world.id ?? ''}
+                currentRound={worldState?.world.currentRound ?? 0}
+                characters={worldState?.characters ?? []}
+                worldFactions={worldState?.factions ?? []}
+              />
+            )}
+            {rightTab === 'factions' && (
+              // 勢力排行有**自己的分頁**（原本塞在統計裡）：名次表與趨勢圖是兩種
+              // 不同的讀法，混在一欄只會讓兩者互相干擾。它自己帶 GM_PANEL，
+              // 所以在分頁裡就是唯一的內容。
+              //
+              // The faction ranking has **its own tab** (it used to sit inside
+              // 統計): a rank table and a trend chart are two different readings,
+              // and sharing a column only made them interfere. It carries its own
+              // GM_PANEL, so inside a tab it is the only content.
+              <FactionRanking
+                factions={worldState?.factions ?? []}
+                characters={worldState?.characters ?? []}
+                places={worldState?.places ?? []}
+              />
+            )}
+            {rightTab === 'system' && (
+              // 回合檢查器：這一回合的階段耗時與摘要。以前要手寫 SQL 才看得到。
+              // 它跟著**顯示中的回合**（時間軸選哪一回合就看哪一回合）。
+              //
+              // The round inspector: this round's phase timings and summary. It
+              // used to take hand-written SQL to see any of it. It follows the
+              // **displayed round** — the timeline picks which one, and so does
+              // its own dropdown (shared state, like the event log's).
+              <RoundInspector
+                round={round}
+                data={roundInspect ?? null}
+                onRoundChange={handleRoundSelect}
+                availableRounds={availableRounds}
+              />
+            )}
+            {rightTab === 'places' && (
+              // The place detail is now the 地點 tab's content rather than a floating
+              // popup: it used to cover the map it was describing, and the rail already
+              // exists, so there was no reason for a second surface.
+              <PlaceDetail
+                place={selectedPlace}
+                factions={worldState?.factions ?? []}
+                characters={worldState?.characters ?? []}
+                roads={worldState?.roads ?? []}
+                places={worldState?.places ?? []}
+                onClose={closePopup}
+                canGoBack={popupStack.length > 1}
+                onBack={popupBack}
+                onOpenPlace={openPlace}
+                onOpenLeader={openLeader}
+              />
+            )}
+          </MapSidePanel>
         </main>
 
       </div>
@@ -1370,6 +1375,26 @@ function compareLeaderRows(a: LeaderRow, b: LeaderRow, key: LeaderSortKey): numb
 function useSideTabs(): Array<{ key: SideTab; label: string; icon: ReactNode }> {
   return [
     {
+      key: 'factions' as const,
+      label: t('ranking.tab'),
+      icon: (
+        <>
+          <path d="M7 4.5h10l3 5.5-8 9.5-8-9.5z" />
+          <path d="M10 4.5 12 10l2-5.5" />
+        </>
+      ),
+    },
+    {
+      key: 'places' as const,
+      label: t('place.tab'),
+      icon: (
+        <>
+          <circle cx="12" cy="12" r="2.5" />
+          <ellipse cx="12" cy="12" rx="9" ry="4" />
+        </>
+      ),
+    },
+    {
       key: 'characters' as const,
       label: t('faction.tab'),
       icon: (
@@ -1402,16 +1427,6 @@ function useSideTabs(): Array<{ key: SideTab; label: string; icon: ReactNode }> 
       ),
     },
     {
-      key: 'factions' as const,
-      label: t('ranking.tab'),
-      icon: (
-        <>
-          <path d="M7 4.5h10l3 5.5-8 9.5-8-9.5z" />
-          <path d="M10 4.5 12 10l2-5.5" />
-        </>
-      ),
-    },
-    {
       key: 'system' as const,
       label: t('game.systemTab'),
       icon: (
@@ -1419,16 +1434,6 @@ function useSideTabs(): Array<{ key: SideTab; label: string; icon: ReactNode }> 
           <circle cx="12" cy="12" r="8.5" />
           <path d="M12 7.5V12l3 2" />
           <path d="M12 3.5V2M20.5 12H22M12 22v-1.5M3.5 12H2" />
-        </>
-      ),
-    },
-    {
-      key: 'places' as const,
-      label: t('place.tab'),
-      icon: (
-        <>
-          <circle cx="12" cy="12" r="2.5" />
-          <ellipse cx="12" cy="12" rx="9" ry="4" />
         </>
       ),
     },
@@ -1465,34 +1470,45 @@ function MapSidePanel({
       {/* 內容：從右往左淡入 / Content: fades in from the right */}
       <AnimatePresence mode="wait" initial={false}>
         {open && (
-        <motion.div
-          // open 已經保證有值，但 TS 從 `activeTab` 推不出來，所以收斂一次 /
-          // `open` already guarantees a value, but TS cannot infer that
-          key={activeTab ?? 'none'}
-          initial={{ opacity: 0, x: 28 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: 28 }}
-          transition={{ duration: 0.18, ease: 'easeOut' }}
-          className={`pointer-events-auto h-full w-[20rem] md:w-[24rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
+          <motion.div
+            // open 已經保證有值，但 TS 從 `activeTab` 推不出來，所以收斂一次 /
+            // `open` already guarantees a value, but TS cannot infer that
+            key={activeTab ?? 'none'}
+            initial={{ opacity: 0, x: 28 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 28 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className={`pointer-events-auto h-full w-[20rem] md:w-[24rem] max-w-[80vw] ${GM_RAIL} border-l border-white/5 flex flex-col overflow-hidden`}
 
-        >
-          <div className="flex items-center justify-between px-3 pt-3 pb-2">
-            <span className="font-display text-xs text-gray-400 tracking-wider">
-              {tabs.find((tab) => tab.key === activeTab)?.label}
-            </span>
-            <button
-              type="button"
-              onClick={onClose}
-              className={`${GM_BTN} w-7 h-7`}
-              aria-label={t('general.close')}
-            >
-              <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
-            </button>
-          </div>
-          <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-3 pt-0">
-            {loading ? <PanelSkeleton /> : children}
-          </div>
-        </motion.div>
+          >
+            <div className="flex items-center justify-between px-3 pt-3 pb-2">
+              <span className="font-display text-xs text-gray-400 tracking-wider">
+                {tabs.find((tab) => tab.key === activeTab)?.label}
+              </span>
+              <button
+                type="button"
+                onClick={onClose}
+                className={`${GM_BTN} w-7 h-7`}
+                aria-label={t('general.close')}
+              >
+                <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
+              </button>
+            </div>
+            {/* 內容容器：自身是這個 motion.div 的一個定高 flex item（flex-1 + min-h-0），
+                所以「撐滿面板高度」的分頁可以直接用 flex-1 接滿剩下的高度，
+                不需要靠 `h-full` 的百分比解析（百分比對著 flex 佈局求值在舊版
+                Safari 上不穩）。其餘分頁維持 `flex: 0 1 auto`（內容多高就多高），
+                容器照樣用 overflow-y-auto 捲它們 —— 兩種分頁在同一個容器裡共存。
+                The content box: itself a definite flex item of this motion.div (flex-1 +
+                min-h-0), so a full-height tab can take the rest with plain `flex-1`
+                instead of a percentage `h-full` (percentages resolving against a flex
+                layout are unreliable on older Safari). Other tabs keep their content
+                height and the container scrolls them exactly as before — both kinds
+                coexist in one container. */}
+            <div className="flex-1 min-h-0 flex flex-col overflow-y-auto ds-gm-scroll p-3 pt-0">
+              {loading ? <PanelSkeleton /> : children}
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
       {/* 頁籤：直向釘住地圖右緣 / Tabs: vertical rail on the map's right edge */}
@@ -1526,9 +1542,8 @@ function MapSidePanel({
               // `div.fixed.z-50 h3.font-orbitron` could never match again, and it only
               // printed one WARN and silently recorded a shorter video.
               data-testid={`side-tab-${tab.key}`}
-              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-display tracking-wider transition-all duration-200 ${
-                isActive ? 'bg-cyan-500/15 text-cyan-300' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
-              }`}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-xs font-display tracking-wider transition-all duration-200 ${isActive ? 'bg-cyan-500/15 text-cyan-300' : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+                }`}
             >
               <Ic className="w-4 h-4">{tab.icon}</Ic>
               {/* 窄視窗只留圖示：rail 寬度會被面板壓到 80px，帶文字會逐字斷行 */}
@@ -2207,11 +2222,10 @@ function LeaderDetail({
                 role="tab"
                 aria-selected={active}
                 onClick={() => setDetailTab(active && tab === 'relations' ? 'stats' : tab)}
-                className={`px-3 py-1.5 text-xs transition-colors duration-150 border-b-2 -mb-px ${
-                  active
-                    ? 'border-cyan-400 text-cyan-300'
-                    : 'border-transparent text-gray-400 hover:text-gray-200'
-                }`}
+                className={`px-3 py-1.5 text-xs transition-colors duration-150 border-b-2 -mb-px ${active
+                  ? 'border-cyan-400 text-cyan-300'
+                  : 'border-transparent text-gray-400 hover:text-gray-200'
+                  }`}
               >
                 {tab === 'stats' ? t('character.tabStats') : t('character.tabRelations')}
               </button>
@@ -2228,18 +2242,18 @@ function LeaderDetail({
           />
         ) : (
           <>
-        {/* interactive：詳情彌窗里的圖是固定的，可以很自然地接受游標；
+            {/* interactive：詳情彌窗里的圖是固定的，可以很自然地接受游標；
             而將領表那一列的浮動預稿必須保持 pointer-events-none，
             否則面板會觸發那一列的 mouseleave 而閃烁消失 /
             interactive: in the modal the chart is static and can take the pointer; the
             leader-table hover preview must stay non-interactive or it flickers away */}
-        <CharacterRadarHover
-          character={char}
-          factionAverage={factionAverage}
-          color={faction ? faction.color : '#64748b'}
-          interactive
-        />
-        {/* 每個區塊用一條細線分開，而不是只靠間距。字級提到 14px（`GM_TITLE` 本來就是
+            <CharacterRadarHover
+              character={char}
+              factionAverage={factionAverage}
+              color={faction ? faction.color : '#64748b'}
+              interactive
+            />
+            {/* 每個區塊用一條細線分開，而不是只靠間距。字級提到 14px（`GM_TITLE` 本來就是
             14px，之前用 `text-xs!` 壓回 12px，和下面 12px 的標籤一樣大，分組標題就看不出
             是標題）。
             **間距總量刻意維持原本的 12px**：容器 `space-y-1`（4px）＋分隔線的 `pt-2`（8px）
@@ -2251,43 +2265,43 @@ function LeaderDetail({
             be. The heading carries **no** bottom margin: there is already a rule above it, and
             every row below has its own `border-b` and `py-1`, so another 4px only pushed the
             panel 1px past its box and produced a scrollbar on a popup that otherwise fitted. */}
-        <div className="space-y-1">
-          {statGroups.map((group, index) => (
-            <section
-              key={group.title}
-              className={index > 0 ? 'border-t border-white/10 pt-2' : undefined}
-            >
-              <h4 className={`${GM_TITLE} text-gray-300!`}>{group.title}</h4>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
-                {group.rows.map((row) => (
-                  <div
-                    key={row.label}
-                    className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
-                    /* 有提示的列才是可聚焦的：hover 與 focus 都會開提示（見 tooltip.tsx）。
-                       Focusable only when there is a tip; both hover and focus open it. */
-                    {...(row.tip ? abilityTip.triggerProps(row.tip) : {})}
-                  >
-                    <dt className="text-xs text-gray-400">{row.label}</dt>
-                    {/* 顯示字體放在**值**上，不放在 `dd` 上：「位置」那一列的值是個
+            <div className="space-y-1">
+              {statGroups.map((group, index) => (
+                <section
+                  key={group.title}
+                  className={index > 0 ? 'border-t border-white/10 pt-2' : undefined}
+                >
+                  <h4 className={`${GM_TITLE} text-gray-300!`}>{group.title}</h4>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-1">
+                    {group.rows.map((row) => (
+                      <div
+                        key={row.label}
+                        className="flex items-center justify-between gap-2 border-b border-white/5 py-1"
+                        /* 有提示的列才是可聚焦的：hover 與 focus 都會開提示（見 tooltip.tsx）。
+                           Focusable only when there is a tip; both hover and focus open it. */
+                        {...(row.tip ? abilityTip.triggerProps(row.tip) : {})}
+                      >
+                        <dt className="text-xs text-gray-400">{row.label}</dt>
+                        {/* 顯示字體放在**值**上，不放在 `dd` 上：「位置」那一列的值是個
                         按鈕，而按鈕繼承父層的字體——放在 `dd` 上會讓地名變成顯示字體，
                         那是一次沒人要求的排版變更。
                         The display face goes on the **value**, not on the `dd`: the place
                         row's value is a button, and a button inherits its parent's font —
                         putting it on the `dd` would silently switch the place name to the
                         display face, which is a typographic change nobody asked for. */}
-                    <dd className="min-w-0 text-xs text-gray-200">
-                      {typeof row.value === 'string' || typeof row.value === 'number' ? (
-                        <span className="font-display">{row.value}</span>
-                      ) : (
-                        row.value
-                      )}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
-          ))}
-        {/* 叛變值的來源：把「哪些事件把這個數字推高或壓低」列出來。
+                        <dd className="min-w-0 text-xs text-gray-200">
+                          {typeof row.value === 'string' || typeof row.value === 'number' ? (
+                            <span className="font-display">{row.value}</span>
+                          ) : (
+                            row.value
+                          )}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                </section>
+              ))}
+              {/* 叛變值的來源：把「哪些事件把這個數字推高或壓低」列出來。
             一個沒有來源的數字等於沒有解釋——讀者看得到結果，看不到原因，所以這個面板
             在表面上顯示機率、實際上卻沒有任何機制會讓人懷疑它錯了。
             每筆事件各有各的 delta（可以正也可以負），所以列的是**原始 delta**而不是
@@ -2298,33 +2312,32 @@ function LeaderDetail({
             its own delta, positive or negative, so the list shows the raw delta rather than a
             count of events. 這是同一組區塊裡的第四個，所以用同一條線分開 ——
             它是「忠誠」那一組的證據，不是另一個面板。*/}
-        <section className="border-t border-white/10 pt-2">
-          <div className={`${GM_TITLE} text-gray-300!`}>
-            {t('character.defectionEvents')}
-          </div>
-          {myEvents.length === 0 ? (
-            <p className="text-xs text-gray-500">{t('character.noDefectionEvents')}</p>
-          ) : (
-            <ul className="space-y-0.5">
-              {myEvents.map((e, i) => (
-                <li
-                  key={`${i}-${e.reason}`}
-                  className="flex items-baseline gap-2 text-xs text-gray-400"
-                >
-                  <span
-                    className={`font-display tabular-nums shrink-0 ${
-                      e.delta >= 0 ? 'text-amber-300' : 'text-cyan-300'
-                    }`}
-                  >
-                    {e.delta >= 0 ? `+${e.delta}` : e.delta}
-                  </span>
-                  <span className="min-w-0 flex-1 break-words">{e.reason}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-        </div>
+              <section className="border-t border-white/10 pt-2">
+                <div className={`${GM_TITLE} text-gray-300!`}>
+                  {t('character.defectionEvents')}
+                </div>
+                {myEvents.length === 0 ? (
+                  <p className="text-xs text-gray-500">{t('character.noDefectionEvents')}</p>
+                ) : (
+                  <ul className="space-y-0.5">
+                    {myEvents.map((e, i) => (
+                      <li
+                        key={`${i}-${e.reason}`}
+                        className="flex items-baseline gap-2 text-xs text-gray-400"
+                      >
+                        <span
+                          className={`font-display tabular-nums shrink-0 ${e.delta >= 0 ? 'text-amber-300' : 'text-cyan-300'
+                            }`}
+                        >
+                          {e.delta >= 0 ? `+${e.delta}` : e.delta}
+                        </span>
+                        <span className="min-w-0 flex-1 break-words">{e.reason}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+            </div>
           </>
         )}
       </div>
@@ -2354,7 +2367,7 @@ function CharacterList({
   factions: WorldState['factions'];
   onOpenLeaderDetail: (charId: string, reopenTable?: () => void) => void;
 }) {
-  
+
   const [showDetail, setShowDetail] = useState(false);
   // 彈窗表格分批：將領會隨回合持續增加，避免一次掛載全部列 /
   // Batched modal rows: characters keep growing with rounds — don't mount them all
@@ -2439,19 +2452,27 @@ function CharacterList({
 
 
   return (
-    <div className={`${GM_PANEL} p-3`}>
+    // 側欄面板本身就是內容的完整高度（MapSidePanel 的捲動容器給了它 h-full 可用的
+    // 定高），所以這一欄用 flex column 撐滿：標題固定，清單吃滿剩下的高度並自己捲。
+    // 昔日清單被 `max-h-60` 砍到 15rem，下面是一片空白——面板明明還有整排高度沒人用。
+    //
+    // The side panel's content box is a definite flex item of MapSidePanel's scroller, so
+    // this column stretches with plain flex-1: the title stays put and the list takes the
+    // rest and scrolls itself. The old `max-h-60` capped the list at 15rem and left the
+    // panel's remaining height empty.
+    <div className={`${GM_PANEL} flex flex-1 min-h-0 flex-col p-3`}>
       <button
         type="button"
         onClick={() => setShowDetail(true)}
         title={t('general.details')}
-        className={`${GM_TITLE} mb-3 w-full flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150`}
+        className={`${GM_TITLE} mb-3 w-full shrink-0 flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150`}
       >
         <span>{t('faction.characters')}</span>
         <Ic className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity duration-150">
           <path d="M7 17 17 7M9 7h8v8" />
         </Ic>
       </button>
-      <div className="space-y-0.5 max-h-60 overflow-y-auto ds-gm-scroll">
+      <div className="flex-1 min-h-0 space-y-0.5 overflow-y-auto ds-gm-scroll">
         {aliveRows.length === 0 && (
           <p className="text-gray-400 text-xs">{t('game.noData')}</p>
         )}
@@ -2473,7 +2494,7 @@ function CharacterList({
                   {char.troops}
                 </span>
               </div>
-              
+
             </button>
           ))}
         {/* 哨兵：捲到這裡就自動載入下一批（按鈕保留給鍵盤與不想等的人）/
@@ -2536,9 +2557,8 @@ function CharacterList({
                     <button
                       type="button"
                       onClick={() => toggleSort(key)}
-                      className={`inline-flex items-center gap-0.5 hover:text-gray-200 transition-colors duration-150 ${
-                        active ? 'text-cyan-300' : ''
-                      }`}
+                      className={`inline-flex items-center gap-0.5 hover:text-gray-200 transition-colors duration-150 ${active ? 'text-cyan-300' : ''
+                        }`}
                     >
                       {t(labelKey)}
                       {active && <span aria-hidden="true">{sortDir === 'asc' ? '▲' : '▼'}</span>}
@@ -2705,10 +2725,10 @@ function CharacterList({
                     factionAverage={
                       hoverPreview.char.factionId
                         ? radarMeanOf(
-                            detailRows
-                              .map((row) => row.char)
-                              .filter((c) => c.factionId === hoverPreview.char.factionId)
-                          )
+                          detailRows
+                            .map((row) => row.char)
+                            .filter((c) => c.factionId === hoverPreview.char.factionId)
+                        )
                         : null
                     }
                   />
@@ -2746,48 +2766,48 @@ function PlaceDetail({
   onOpenPlace: (place: WorldState['places'][0]) => void;
   onOpenLeader: (char: WorldState['characters'][0]) => void;
 }) {
-/**
- * Which building's per-level breakdown is expanded, or none.
- *
- * 建築列一開始只顯示「等級 + 目前效果」，每一級的效果表在 hover / focus / click
- * 時才展開。全部攤開會把真正要看的兩個數字（現在幾級、升一級多少錢）埋掉。
- * A building row shows only its level and current effect; the per-level table expands
- * on hover, focus or click. Listing every level up front buried the two numbers the
- * reader actually came for.
- *
- * 這個 state 必須在 `if (!place)` **之前**：hook 不能條件式呼叫，否則有選中／沒選中
- * 會走不一樣的 hook 順序。
- * This state must sit ABOVE the `if (!place)` guard: hooks cannot be called
- * conditionally, and "a place is selected" vs "none" would otherwise change the order.
- */
-/**
- * Which building's per-level breakdown is expanded, or none.
- *
- * 建立列一開始只顯示「等級 + 目前效果」，每一級的效果表在 hover / focus / click
- * 時才展開。全部擊開會把真正要看的兩個數字（現在幾級、升一級多少錢）埋掉。
- * A building row shows only its level and current effect; the per-level table expands
- * on hover, focus or click. Listing every level up front buried the two numbers the
- * reader actually came for.
- *
- * 這個 state 必須在 `if (!place)` **之前**：hook 不能條件式呼叫，否則有選中／沒選中
- * 會走不一樣的 hook 順序。
- * This state must sit ABOVE the `if (!place)` guard: hooks cannot be called
- * conditionally, and "a place is selected" vs "none" would otherwise change the order.
- */
-const [pinnedBuilding, setPinnedBuilding] = useState<BuildingKind | null>(null);
-const [hoveredBuilding, setHoveredBuilding] = useState<BuildingKind | null>(null);
+  /**
+   * Which building's per-level breakdown is expanded, or none.
+   *
+   * 建築列一開始只顯示「等級 + 目前效果」，每一級的效果表在 hover / focus / click
+   * 時才展開。全部攤開會把真正要看的兩個數字（現在幾級、升一級多少錢）埋掉。
+   * A building row shows only its level and current effect; the per-level table expands
+   * on hover, focus or click. Listing every level up front buried the two numbers the
+   * reader actually came for.
+   *
+   * 這個 state 必須在 `if (!place)` **之前**：hook 不能條件式呼叫，否則有選中／沒選中
+   * 會走不一樣的 hook 順序。
+   * This state must sit ABOVE the `if (!place)` guard: hooks cannot be called
+   * conditionally, and "a place is selected" vs "none" would otherwise change the order.
+   */
+  /**
+   * Which building's per-level breakdown is expanded, or none.
+   *
+   * 建立列一開始只顯示「等級 + 目前效果」，每一級的效果表在 hover / focus / click
+   * 時才展開。全部擊開會把真正要看的兩個數字（現在幾級、升一級多少錢）埋掉。
+   * A building row shows only its level and current effect; the per-level table expands
+   * on hover, focus or click. Listing every level up front buried the two numbers the
+   * reader actually came for.
+   *
+   * 這個 state 必須在 `if (!place)` **之前**：hook 不能條件式呼叫，否則有選中／沒選中
+   * 會走不一樣的 hook 順序。
+   * This state must sit ABOVE the `if (!place)` guard: hooks cannot be called
+   * conditionally, and "a place is selected" vs "none" would otherwise change the order.
+   */
+  const [pinnedBuilding, setPinnedBuilding] = useState<BuildingKind | null>(null);
+  const [hoveredBuilding, setHoveredBuilding] = useState<BuildingKind | null>(null);
 
-/**
- * Pinned wins over hovered. These are two separate states on purpose: a single "open"
- * state cannot serve both, because hover opens the row and the click that follows then
- * lands on an already-open row and immediately closes it again. Measured — the row
- * expanded on mouse-enter and collapsed again on the very next click.
- *
- * 分成兩個狀態是必要的：單一個 open 無法同時服務 hover 與 click，因為 hover 開完後緊接的
- * click 來到已開啟的列，立即把它關掉。分开來結果就是：鼠横移開伀默認開的那一列，
- * 體素後仍可以固定住。
- */
-const openBuilding = pinnedBuilding ?? hoveredBuilding;
+  /**
+   * Pinned wins over hovered. These are two separate states on purpose: a single "open"
+   * state cannot serve both, because hover opens the row and the click that follows then
+   * lands on an already-open row and immediately closes it again. Measured — the row
+   * expanded on mouse-enter and collapsed again on the very next click.
+   *
+   * 分成兩個狀態是必要的：單一個 open 無法同時服務 hover 與 click，因為 hover 開完後緊接的
+   * click 來到已開啟的列，立即把它關掉。分开來結果就是：鼠横移開伀默認開的那一列，
+   * 體素後仍可以固定住。
+   */
+  const openBuilding = pinnedBuilding ?? hoveredBuilding;
 
   // 還沒選地點時：不是空白，而是**列出所有地點**讓人直接點。這個面板現在是「地點」分頁
   // 的內容，所以「沒有選中」是一個正常狀態；但只放一句提示等於逼讀者回到地圖自己去點，
@@ -2854,8 +2874,16 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
     const shown = sorted.slice(0, placeVisibleCount);
     const hasMore = shown.length < sorted.length;
     return (
-      <div className={`${GM_PANEL} px-2 py-2`}>
-        <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.allPlaces')}</div>
+      // 與將領數同一套結構：標題與三個過濾器固定，清單吃滿剩下的高度自己捲。
+      // 昔日 `<ul>` 用 `max-h-[55vh]`——那是**視窗**的一半，不是這個面板的高度，
+      // 所以面板比視窗矮時清單照樣被砍，比視窗高時又留一段空白。
+      //
+      // The same structure as the leader list: title and the three filters stay put, the
+      // list takes the remaining height and scrolls itself. The old `max-h-[55vh]` was half
+      // the *viewport*, not this panel's height, so the list was cut short on short panels
+      // and left dead space on tall ones.
+      <div className={`${GM_PANEL} flex flex-1 min-h-0 flex-col px-2 py-2`}>
+        <div className={`${GM_TITLE} shrink-0 text-xs! mb-1.5`}>{t('place.allPlaces')}</div>
         {/* 搜尋 + 擁有權過濾。重設「已顯示筆數」是必要的：否則換了條件之後，那個數字
             會指向另一個集合的尾端，畫面看起來就像「沒反應」 /
             Search plus an ownership filter. The revealed-row count has to reset with them:
@@ -2870,9 +2898,9 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
           }}
           placeholder={t('place.searchPlaces')}
           aria-label={t('place.searchPlaces')}
-          className="mb-1.5 w-full rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 outline-none focus:border-cyan-400/50"
+          className="mb-1.5 w-full shrink-0 rounded-md border border-white/10 bg-white/5 px-2 py-1.5 text-sm text-gray-200 placeholder:text-gray-500 outline-none focus:border-cyan-400/50"
         />
-        <div className="mb-1.5 flex gap-1" role="group" aria-label={t('place.filterOwnership')}>
+        <div className="mb-1.5 flex shrink-0 gap-1" role="group" aria-label={t('place.filterOwnership')}>
           {(
             [
               ['all', t('place.filterAll')],
@@ -2888,11 +2916,10 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                 setPlaceOwnerFilter(key);
                 setPlaceVisibleCount(CONFIG.PLACE_LIST_PAGE_SIZE);
               }}
-              className={`min-h-11 flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors duration-150 ${
-                placeOwnerFilter === key
-                  ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-200'
-                  : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10'
-              }`}
+              className={`min-h-11 flex-1 rounded-md border px-2 py-1.5 text-xs transition-colors duration-150 ${placeOwnerFilter === key
+                ? 'border-cyan-400/50 bg-cyan-400/10 text-cyan-200'
+                : 'border-white/10 bg-white/5 text-gray-400 hover:bg-white/10'
+                }`}
             >
               {label}
             </button>
@@ -2907,7 +2934,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
             filter so the two read as the same control. The markers reuse the existing
             `faction.*` state words rather than inventing strings — and they are the same three
             states `statusRank()` in leader-detail.tsx sorts by. */}
-        <div className="mb-1.5 flex items-center gap-2">
+        <div className="mb-1.5 flex shrink-0 items-center gap-2">
           <label
             className="shrink-0 text-xs text-gray-400"
             htmlFor="gm-place-faction"
@@ -2948,7 +2975,7 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
         ) : (
           <>
             <ul
-              className="space-y-0.5 max-h-[55vh] overflow-y-auto ds-gm-scroll"
+              className="flex-1 min-h-0 space-y-0.5 overflow-y-auto ds-gm-scroll"
               onScroll={(e) => {
                 // 接近底部就再載入一頁。用捲動事件而不是 IntersectionObserver：
                 // 這裡已經有一個捲動容器，加一個哨兵元素只是多一個要同步的節點 /
@@ -2962,52 +2989,52 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
               }}
             >
               {shown.map((p) => {
-              const owner = factions.find((f) => f.id === p.factionId);
-              const adminId = p.administratorId;
-              const adminChar = (characters ?? []).find((c) => c.id === adminId);
-              return (
-                <li key={p.id}>
-                  <button
-                    type="button"
-                    onClick={() => onOpenPlace(p)}
-                    data-testid="place-list-row"
-                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-white/5"
-                  >
-                    {/* 勢力色塊在地點名左邊，與將領詳情的排列一致 /
+                const owner = factions.find((f) => f.id === p.factionId);
+                const adminId = p.administratorId;
+                const adminChar = (characters ?? []).find((c) => c.id === adminId);
+                return (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenPlace(p)}
+                      data-testid="place-list-row"
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-white/5"
+                    >
+                      {/* 勢力色塊在地點名左邊，與將領詳情的排列一致 /
                         The faction swatch sits left of the name, matching the leader detail */}
-                    <span
-                      className="size-2.5 shrink-0 rounded-full"
-                      style={{ backgroundColor: owner ? owner.color : 'transparent' }}
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-sm text-gray-200">
-                      {p.name}
-                    </span>
-                    {adminChar ? (
                       <span
-                        className="shrink-0 text-[11px] text-cyan-300/90 truncate max-w-[8rem]"
-                        title={t('place.administeredBy', { name: adminChar.name })}
-                      >
-                        👤 {adminChar.name}
+                        className="size-2.5 shrink-0 rounded-full"
+                        style={{ backgroundColor: owner ? owner.color : 'transparent' }}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-sm text-gray-200">
+                        {p.name}
                       </span>
-                    ) : null}
-                    {!owner && (
-                      <span className="shrink-0 text-xs text-gray-500">
-                        {t('place.unowned')}
+                      {adminChar ? (
+                        <span
+                          className="shrink-0 text-[11px] text-cyan-300/90 truncate max-w-[8rem]"
+                          title={t('place.administeredBy', { name: adminChar.name })}
+                        >
+                          👤 {adminChar.name}
+                        </span>
+                      ) : null}
+                      {!owner && (
+                        <span className="shrink-0 text-xs text-gray-500">
+                          {t('place.unowned')}
+                        </span>
+                      )}
+                      <span className="shrink-0 font-display text-xs text-cyan-300/80 tabular-nums">
+                        {p.garrison}
                       </span>
-                    )}
-                    <span className="shrink-0 font-display text-xs text-cyan-300/80 tabular-nums">
-                      {p.garrison}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
             {/* 已經到底了就不再提示，否則它會永遠掛在那裡說「還有更多」 /
                 No "load more" once the list is exhausted, or it sits there claiming there
                 is more forever */}
-            <div className="mt-1 px-1 text-center text-[11px] text-gray-500 tabular-nums">
+            <div className="mt-1 shrink-0 px-1 text-center text-[11px] text-gray-500 tabular-nums">
               {hasMore
                 ? `${shown.length} / ${sorted.length}`
                 : `${sorted.length}`}
@@ -3053,17 +3080,17 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
   const othersHere = splitRecipients.length;
   const placeSplit = adminChar
     ? splitIncome(
-        // 與模擬同一份規則：**整塊餅**先乘行政官的 jing 倍率（地方產出），分配階段
-        // 不再對行政官重複乘。死君王不算（模擬有 alive 過濾）。
-        // The same rule as the simulation: the **whole pie** is scaled by the
-        // administrator's jing first (the place's output), and the split no longer
-        // multiplies the administrator again. A dead king does not count (the
-        // simulation alive-filters).
-        placeOutput(place.market, adminChar.jing),
-        kingCharOfPlace && kingCharOfPlace.alive ? kingCharOfPlace.jing : null,
-        adminChar.jing,
-        othersHere
-      )
+      // 與模擬同一份規則：**整塊餅**先乘行政官的 jing 倍率（地方產出），分配階段
+      // 不再對行政官重複乘。死君王不算（模擬有 alive 過濾）。
+      // The same rule as the simulation: the **whole pie** is scaled by the
+      // administrator's jing first (the place's output), and the split no longer
+      // multiplies the administrator again. A dead king does not count (the
+      // simulation alive-filters).
+      placeOutput(place.market, adminChar.jing),
+      kingCharOfPlace && kingCharOfPlace.alive ? kingCharOfPlace.jing : null,
+      adminChar.jing,
+      othersHere
+    )
     : null;
   const adminLeaderShare = placeSplit?.admin ?? null;
   // 在場的其他將領每人分到多少：與模擬同一條 floor（餘數留在地方上）/
@@ -3101,156 +3128,154 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
       exit={{ opacity: 0, x: 28 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
     >
-        {/* 影像標頭 / Imagery header */}
-        <div className="relative h-24 overflow-hidden">
-          <Image
-            src="/space/cosmic-cliffs.jpg"
-            alt=""
-            fill
-            sizes="100vw"
-            className={`${GM_MODAL_PHOTO}`}
-          />
-          <div className={`${GM_MODAL_VEIL}`} aria-hidden="true" />
+      {/* 影像標頭 / Imagery header */}
+      <div className="relative h-24 overflow-hidden">
+        <Image
+          src="/space/cosmic-cliffs.jpg"
+          alt=""
+          fill
+          sizes="100vw"
+          className={`${GM_MODAL_PHOTO}`}
+        />
+        <div className={`${GM_MODAL_VEIL}`} aria-hidden="true" />
 
-          {/* 標頭 / Header */}
-          <div className="relative h-full flex items-end justify-between gap-3 p-4 pb-3">
-            <div className="min-w-0">
-              <h3 className="font-display font-bold text-lg text-white tracking-wide truncate">{place.name}</h3>
-              {faction && (
-                <div className="flex items-center gap-1.5 mt-1">
-                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: faction.color }} />
-                  <span className="text-base text-gray-300 truncate">{faction.name}</span>
-                </div>
-              )}
-              {!faction && (
-                <span className="text-sm text-gray-400">{t('place.unowned')}</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 shrink-0">
-              {canGoBack && (
-                <button
-                  type="button"
-                  onClick={onBack}
-                  className={`${GM_BTN} w-8 h-8`}
-                  aria-label={t('general.back')}
-                  title={t('general.back')}
-                >
-                  <Ic className="w-4 h-4"><path d="m15 6-6 6 6 6" /></Ic>
-                </button>
-              )}
+        {/* 標頭 / Header */}
+        <div className="relative h-full flex items-end justify-between gap-3 p-4 pb-3">
+          <div className="min-w-0">
+            <h3 className="font-display font-bold text-lg text-white tracking-wide truncate">{place.name}</h3>
+            {faction && (
+              <div className="flex items-center gap-1.5 mt-1">
+                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: faction.color }} />
+                <span className="text-base text-gray-300 truncate">{faction.name}</span>
+              </div>
+            )}
+            {!faction && (
+              <span className="text-sm text-gray-400">{t('place.unowned')}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {canGoBack && (
               <button
+                type="button"
+                onClick={onBack}
+                className={`${GM_BTN} w-8 h-8`}
+                aria-label={t('general.back')}
+                title={t('general.back')}
+              >
+                <Ic className="w-4 h-4"><path d="m15 6-6 6 6 6" /></Ic>
+              </button>
+            )}
+            <button
               onClick={onClose}
               className={`${GM_BTN} w-8 h-8`}
               aria-label="close"
             >
               <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
             </button>
-            </div>
           </div>
         </div>
+      </div>
 
-        <div className="p-4 space-y-4">
-          {/* 相連地點 / Linked Places */}
-          {linkedPlaces.length > 0 && (
-            <div>
-              <div className={`${GM_TITLE} text-xs! mb-1.5 flex items-center gap-2`}>
-                <span className="h-px w-4 bg-cyan-400/50" aria-hidden="true" />
-                {t('map.linkedPlaces')}
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {linkedPlaces.map((linked) => (
-                  <button
-                    key={linked.id}
-                    type="button"
-                    onClick={() => onOpenPlace(linked)}
-                    className="text-sm bg-white/5 border border-white/10 rounded px-2 py-0.5 text-gray-300 hover:text-cyan-200 hover:border-cyan-400/40 hover:bg-cyan-400/10 transition-colors"
-                  >
-                    {linked.name}
-                  </button>
-                ))}
-              </div>
+      <div className="p-4 space-y-4">
+        {/* 相連地點 / Linked Places */}
+        {linkedPlaces.length > 0 && (
+          <div>
+            <div className={`${GM_TITLE} text-xs! mb-1.5 flex items-center gap-2`}>
+              <span className="h-px w-4 bg-cyan-400/50" aria-hidden="true" />
+              {t('map.linkedPlaces')}
             </div>
-          )}
+            <div className="flex flex-wrap gap-1">
+              {linkedPlaces.map((linked) => (
+                <button
+                  key={linked.id}
+                  type="button"
+                  onClick={() => onOpenPlace(linked)}
+                  className="text-sm bg-white/5 border border-white/10 rounded px-2 py-0.5 text-gray-300 hover:text-cyan-200 hover:border-cyan-400/40 hover:bg-cyan-400/10 transition-colors"
+                >
+                  {linked.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
-          {/* 建築資訊：每棟一列，等級與目前效果常駐；每一級的效果表在 hover / focus /
+        {/* 建築資訊：每棟一列，等級與目前效果常駐；每一級的效果表在 hover / focus /
               click 時才展開，並把目前等級標成 active。新的互動（hover / focus / click）
               同時取代了 hover 與 click，所以觸控也能用同一顆按鈕 /
               Buildings: one compact row each, level and current effect always visible; the
               per-level table expands on hover, focus or click with the current level marked
               active. Hover, focus and click all toggle the same one-row disclosure, so touch
               gets the identical control instead of a second one. */}
-          <div>
-            <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.buildings')}</div>
-            <div className="space-y-1.5">
-              {BUILDING_ROWS.map((row) => {
-                const level = place[row.kind];
-                const per = buildingPerLevel(row.kind);
-                const cost = level >= BUILDING_MAX_LEVEL ? null : upgradeCost(level);
-                // 下一升到頂了嗎？只用來當開關——顯示的數字是 `buildingTotal(level + 1)`（**累積**值，
-                // 例如堡壘 1→2 是 +40%，不是 +20%），所以不能直接印這個的傳回值。
-                //
-                // Is the next upgrade possible? Used **only as the gate** — the number printed
-                // is `buildingTotal(level + 1)`, the **cumulative** effect (fortress 1→2 is
-                // +40%, not +20%), so this function's own return value must not be printed.
-                const nextGain = nextUpgradeGain(row.kind, level);
-                // 印的數字一律走 `placeEffectLabel`：市場與兵營印**這個地方每回合的總產出**
-                // （1 級 = 基礎 10 + 5 = 15），堡壘沒有「總產出」可言所以印累積百分比。
-                // 展開的等級表與等級圓點的 tooltip 也走同一個函式——以前行與圓點印的是這一棟
-                // 建築自己的貢獻，於是市場 1 級同時有「15 金錢 / 每回合」與「+5 金錢」兩個數字。
-                //
-                // Every printed number goes through `placeEffectLabel`: market and barracks
-                // print the **place's total per round** (level 1 = 10 base + 5 = 15), while
-                // fortress has no total and keeps its cumulative percentage. The expanded level
-                // table and the dots' tooltips go through the same function — the row and the
-                // dots used to print this one building's own contribution, so market level 1
-                // carried both "15 gold / round" and "+5 gold".
-                // 市場行的產出要含**行政官的 jing 倍率**（實際產出）；堡壘是百分比、
-                // 兵營是徵兵，都不受 jing 影響，倍率對它們是無操作。
-                // The market row's output includes the **administrator's jing
-                // multiplier** (the actual output); fortress is a percentage and
-                // barracks is recruitment — neither is jing-scaled, so the multiplier
-                // is a no-op for them.
-                const currentLabel = placeEffectLabel(row.kind, level, outputMultiplier);
-                const nextLabel = placeEffectLabel(row.kind, level + 1, outputMultiplier);
-                const expanded = openBuilding === row.kind;
-                const affordable = adminChar !== null && adminChar.gold >= (cost ?? 0);
-                return (
-                  <div
-                    key={row.kind}
-                    // 展開時提高 z：提示畫在這一張卡的**外面**（上一張卡的上方），
-                    // 不提高的話會被後面的同層卡片蓋掉。
-                    // 而這裡**不能**把 `overflow-hidden` 加回來：它會把提示整個裁掉，
-                    // z 再高也沒用——裁切與堆疊順序是兩件事。
-                    //
-                    // Raise z while expanded: the tooltip renders *outside* this card, over the
-                    // card above it, so a later sibling would otherwise paint over it. And
-                    // `overflow-hidden` must not come back here — it clips the tooltip away
-                    // entirely, and no z-index can undo a clip.
-                    className={`relative rounded-lg bg-white/5 border border-white/10 ${
-                      expanded ? 'z-30' : ''
+        <div>
+          <div className={`${GM_TITLE} text-xs! mb-1.5`}>{t('place.buildings')}</div>
+          <div className="space-y-1.5">
+            {BUILDING_ROWS.map((row) => {
+              const level = place[row.kind];
+              const per = buildingPerLevel(row.kind);
+              const cost = level >= BUILDING_MAX_LEVEL ? null : upgradeCost(level);
+              // 下一升到頂了嗎？只用來當開關——顯示的數字是 `buildingTotal(level + 1)`（**累積**值，
+              // 例如堡壘 1→2 是 +40%，不是 +20%），所以不能直接印這個的傳回值。
+              //
+              // Is the next upgrade possible? Used **only as the gate** — the number printed
+              // is `buildingTotal(level + 1)`, the **cumulative** effect (fortress 1→2 is
+              // +40%, not +20%), so this function's own return value must not be printed.
+              const nextGain = nextUpgradeGain(row.kind, level);
+              // 印的數字一律走 `placeEffectLabel`：市場與兵營印**這個地方每回合的總產出**
+              // （1 級 = 基礎 10 + 5 = 15），堡壘沒有「總產出」可言所以印累積百分比。
+              // 展開的等級表與等級圓點的 tooltip 也走同一個函式——以前行與圓點印的是這一棟
+              // 建築自己的貢獻，於是市場 1 級同時有「15 金錢 / 每回合」與「+5 金錢」兩個數字。
+              //
+              // Every printed number goes through `placeEffectLabel`: market and barracks
+              // print the **place's total per round** (level 1 = 10 base + 5 = 15), while
+              // fortress has no total and keeps its cumulative percentage. The expanded level
+              // table and the dots' tooltips go through the same function — the row and the
+              // dots used to print this one building's own contribution, so market level 1
+              // carried both "15 gold / round" and "+5 gold".
+              // 市場行的產出要含**行政官的 jing 倍率**（實際產出）；堡壘是百分比、
+              // 兵營是徵兵，都不受 jing 影響，倍率對它們是無操作。
+              // The market row's output includes the **administrator's jing
+              // multiplier** (the actual output); fortress is a percentage and
+              // barracks is recruitment — neither is jing-scaled, so the multiplier
+              // is a no-op for them.
+              const currentLabel = placeEffectLabel(row.kind, level, outputMultiplier);
+              const nextLabel = placeEffectLabel(row.kind, level + 1, outputMultiplier);
+              const expanded = openBuilding === row.kind;
+              const affordable = adminChar !== null && adminChar.gold >= (cost ?? 0);
+              return (
+                <div
+                  key={row.kind}
+                  // 展開時提高 z：提示畫在這一張卡的**外面**（上一張卡的上方），
+                  // 不提高的話會被後面的同層卡片蓋掉。
+                  // 而這裡**不能**把 `overflow-hidden` 加回來：它會把提示整個裁掉，
+                  // z 再高也沒用——裁切與堆疊順序是兩件事。
+                  //
+                  // Raise z while expanded: the tooltip renders *outside* this card, over the
+                  // card above it, so a later sibling would otherwise paint over it. And
+                  // `overflow-hidden` must not come back here — it clips the tooltip away
+                  // entirely, and no z-index can undo a clip.
+                  className={`relative rounded-lg bg-white/5 border border-white/10 ${expanded ? 'z-30' : ''
                     }`}
-                  >
-                    <div className="flex items-stretch">
-                      <div className="min-w-0 flex-1">
-                    <button
-                      type="button"
-                      aria-expanded={expanded}
-                      // 點擊＝固定，hover＝預覽。固定之後滑鼠移開也不會收起 / Click pins, hover only
-                      // previews, so a pinned row survives the pointer leaving the row
-                      onClick={() => setPinnedBuilding(pinnedBuilding === row.kind ? null : row.kind)}
-                      onMouseEnter={() => setHoveredBuilding(row.kind)}
-                      onMouseLeave={() =>
-                        setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
-                      }
-                      onFocus={() => setHoveredBuilding(row.kind)}
-                      onBlur={() =>
-                        setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
-                      }
-                      className={`w-full flex flex-col gap-1 px-2.5 py-2 text-left transition-colors duration-150 ${
-                        expanded ? 'bg-cyan-400/10' : 'hover:bg-white/5'
-                      }`}
-                    >
-                      {/* 第一行：等級、名稱、價格；第二行：「目前 → 下一級」。
+                >
+                  <div className="flex items-stretch">
+                    <div className="min-w-0 flex-1">
+                      <button
+                        type="button"
+                        aria-expanded={expanded}
+                        // 點擊＝固定，hover＝預覽。固定之後滑鼠移開也不會收起 / Click pins, hover only
+                        // previews, so a pinned row survives the pointer leaving the row
+                        onClick={() => setPinnedBuilding(pinnedBuilding === row.kind ? null : row.kind)}
+                        onMouseEnter={() => setHoveredBuilding(row.kind)}
+                        onMouseLeave={() =>
+                          setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
+                        }
+                        onFocus={() => setHoveredBuilding(row.kind)}
+                        onBlur={() =>
+                          setHoveredBuilding((cur) => (cur === row.kind ? null : cur))
+                        }
+                        className={`w-full flex flex-col gap-1 px-2.5 py-2 text-left transition-colors duration-150 ${expanded ? 'bg-cyan-400/10' : 'hover:bg-white/5'
+                          }`}
+                      >
+                        {/* 第一行：等級、名稱、價格；第二行：「目前 → 下一級」。
                           單行時市場那一列是 `1/5 市場 +15 金錢 → +20 金錢 升級費用 200`，
                           剛好溢出 24rem 的面板 —— 而且溢出的是最右邊的價格，也就是最該讀到
                           的那個數字。第二行只有兩個數字，任何面板寬度都放得下。
@@ -3262,44 +3287,41 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           number that most needs reading. Line two holds two numbers and fits any
                           width. The chevron stays on line one beside the price, which is the
                           same piece of information. */}
-                      <div className="flex items-center gap-2">
-                        {/* 等級是主要資訊，所以用等寬字 + active 色，無論展開與否都在 /
+                        <div className="flex items-center gap-2">
+                          {/* 等級是主要資訊，所以用等寬字 + active 色，無論展開與否都在 /
                           The level is the headline number, so it keeps the active colour
                           whether or not the table is expanded */}
-                        <span
-                          className={`font-display text-sm tabular-nums shrink-0 ${
-                            level > 0 ? 'text-cyan-300' : 'text-gray-500'
-                          }`}
-                        >
-                          {level}/{BUILDING_MAX_LEVEL}
-                        </span>
-                        <span className="text-base text-gray-200 truncate">
-                          {t(row.labelKey)}
-                        </span>
-                        <span className="flex-1 min-w-0" />
-                        {cost !== null ? (
                           <span
-                            className={`text-sm font-display tabular-nums shrink-0 ${
-                              affordable ? 'text-amber-300' : 'text-rose-300'
-                            }`}
-                            title={adminChar ? `${t('place.adminHas')} ${adminChar.gold}` : undefined}
+                            className={`font-display text-sm tabular-nums shrink-0 ${level > 0 ? 'text-cyan-300' : 'text-gray-500'
+                              }`}
                           >
-                            {t('place.upgradeCost')} {cost}
+                            {level}/{BUILDING_MAX_LEVEL}
                           </span>
-                        ) : (
-                          <span className="text-sm text-amber-300 shrink-0">{t('place.maxLevel')}</span>
-                        )}
-                        {/* 展開時的箭頭：折疊方向本身就是提示，不需要文字 / A chevron is the
+                          <span className="text-base text-gray-200 truncate">
+                            {t(row.labelKey)}
+                          </span>
+                          <span className="flex-1 min-w-0" />
+                          {cost !== null ? (
+                            <span
+                              className={`text-sm font-display tabular-nums shrink-0 ${affordable ? 'text-amber-300' : 'text-rose-300'
+                                }`}
+                              title={adminChar ? `${t('place.adminHas')} ${adminChar.gold}` : undefined}
+                            >
+                              {t('place.upgradeCost')} {cost}
+                            </span>
+                          ) : (
+                            <span className="text-sm text-amber-300 shrink-0">{t('place.maxLevel')}</span>
+                          )}
+                          {/* 展開時的箭頭：折疊方向本身就是提示，不需要文字 / A chevron is the
                             affordance here; the direction already says "this opens" */}
-                        <Ic
-                          className={`w-4 h-4 shrink-0 text-gray-500 transition-transform duration-200 ${
-                            expanded ? 'rotate-180' : ''
-                          }`}
-                        >
-                          <path d="m6 9 6 6 6-6" />
-                        </Ic>
-                      </div>
-                      {/* 第二行：「目前 → 下一級」。箭頭是這裡唯一的說明——它說明右邊是
+                          <Ic
+                            className={`w-4 h-4 shrink-0 text-gray-500 transition-transform duration-200 ${expanded ? 'rotate-180' : ''
+                              }`}
+                          >
+                            <path d="m6 9 6 6 6-6" />
+                          </Ic>
+                        </div>
+                        {/* 第二行：「目前 → 下一級」。箭頭是這裡唯一的說明——它說明右邊是
                           「多花這筆錢會換到的東西」，而不是另一個並排的數字。
                           第二行仍然自己 `flex-wrap`，所以就算面板再窄一點也不會溢出。
 
@@ -3307,64 +3329,63 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                           says the right-hand number is what the money buys, not another figure
                           sitting beside this one. Line two wraps on its own, so a narrower
                           panel cannot push it over the edge either. */}
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span className="text-sm text-gray-300 font-display tabular-nums shrink-0">
-                          {formatEffect(currentLabel.value, currentLabel.unit)}
-                        </span>
-                        {nextGain !== null && (
-                          <>
-                            <span className="text-gray-600 shrink-0" aria-hidden="true">
-                              →
-                            </span>
-                            <span
-                              className="text-sm text-cyan-300/90 font-display tabular-nums shrink-0"
-                              title={t('place.nextLevelEffect')}
-                            >
-                              {formatEffect(nextLabel.value, nextLabel.unit)}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </button>
-                    {/* 一級一點：已達到的填滿，目前等級是 active 色，未達到的只剩外框。
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className="text-sm text-gray-300 font-display tabular-nums shrink-0">
+                            {formatEffect(currentLabel.value, currentLabel.unit)}
+                          </span>
+                          {nextGain !== null && (
+                            <>
+                              <span className="text-gray-600 shrink-0" aria-hidden="true">
+                                →
+                              </span>
+                              <span
+                                className="text-sm text-cyan-300/90 font-display tabular-nums shrink-0"
+                                title={t('place.nextLevelEffect')}
+                              >
+                                {formatEffect(nextLabel.value, nextLabel.unit)}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </button>
+                      {/* 一級一點：已達到的填滿，目前等級是 active 色，未達到的只剩外框。
                         數字不常駐——滑鼠停在點點上時用 tooltip 顯示，這樣一行只佔幾像素，
                         三棟建築疊起來仍然讀得完。
                         One dot per level: reached levels filled, the current one in the active colour,
                         unreached ones reduced to an outline. The numbers are not permanent — they appear
                         in a tooltip on hover, so a row costs a few pixels and all three buildings still fit. */}
-                    <div
-                      className="group/dots relative flex items-center gap-1.5 px-2.5 pb-2"
-                      onMouseEnter={() => setPinnedBuilding(row.kind)}
-                      onMouseLeave={() => setPinnedBuilding((cur) => (cur === row.kind ? null : cur))}
-                    >
+                      <div
+                        className="group/dots relative flex items-center gap-1.5 px-2.5 pb-2"
+                        onMouseEnter={() => setPinnedBuilding(row.kind)}
+                        onMouseLeave={() => setPinnedBuilding((cur) => (cur === row.kind ? null : cur))}
+                      >
                         {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
                           const active = lvl === level;
                           const reached = lvl <= level;
                           return (
-                          <span
-                            key={lvl}
-                            className={`size-2 rounded-full transition-colors duration-150 ${
-                              active
+                            <span
+                              key={lvl}
+                              className={`size-2 rounded-full transition-colors duration-150 ${active
                                 ? 'bg-cyan-300 ring-2 ring-cyan-400/50 scale-125'
                                 : reached
                                   ? 'bg-cyan-400/45'
                                   : 'border border-white/20 bg-transparent'
-                            }`}
-                            title={`L${lvl} · ${formatEffect(placeEffectLabel(row.kind, lvl, outputMultiplier).value, placeEffectLabel(row.kind, lvl, outputMultiplier).unit)} / ${t('place.perRound')}`}
-                          />
+                                }`}
+                              title={`L${lvl} · ${formatEffect(placeEffectLabel(row.kind, lvl, outputMultiplier).value, placeEffectLabel(row.kind, lvl, outputMultiplier).unit)} / ${t('place.perRound')}`}
+                            />
                           );
                         })}
-{/* 提示固定貼在點點**上方**（bottom-full）。點點本來就在每一張卡片的底部，下面就是卡片邊界，
+                        {/* 提示固定貼在點點**上方**（bottom-full）。點點本來就在每一張卡片的底部，下面就是卡片邊界，
                           再往下只會被裁掉，所以一律往上，不做翻轉。
                           The tooltip is anchored above the dots (bottom-full) unconditionally:
                           the dots already sit at the bottom of each card, so anything below
                           them is the card edge and would be clipped. No flip needed. */}
-                      {expanded && (
-                        <div
-                          className="pointer-events-none absolute left-2.5 bottom-full mb-1 z-20 w-[21rem] max-w-[min(21rem,calc(100vw-2rem))] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
-                          role="tooltip"
+                        {expanded && (
+                          <div
+                            className="pointer-events-none absolute left-2.5 bottom-full mb-1 z-20 w-[21rem] max-w-[min(21rem,calc(100vw-2rem))] rounded-lg border border-white/10 bg-gray-900/95 px-2 py-1.5 shadow-lg shadow-black/50"
+                            role="tooltip"
                           >
-                          {/* 展開的主圖：這一級的等距外觀 + 下一級的虛線幽靈——
+                            {/* 展開的主圖：這一級的等距外觀 + 下一級的虛線幽靈——
                               幽靈畫的就是「多花這筆錢會長出來的結構」。幽靈說明在圖右側；
                               等級表在圖**下方**吃滿整個寬度——放在圖旁邊只剩 111px，
                               每一列會折成八行。
@@ -3372,49 +3393,48 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                               level's dashed ghost — the ghost is exactly what the money grows.
                               The caption sits beside the figure; the level list runs BELOW at
                               full width (beside the figure, 111px wrapped every row eight times). */}
-                          <div className="flex items-start gap-2">
-                            <div className="w-28 shrink-0">
-                              <BuildingFigure
-                                kind={row.kind}
-                                level={level}
-                                ghost={level < BUILDING_MAX_LEVEL}
-                                className="w-full"
-                              />
-                            </div>
-                            {level < BUILDING_MAX_LEVEL && (
-                              <div className="min-w-0 flex-1 pt-1 text-[11px] leading-tight text-cyan-300/80">
-                                {t('place.nextLevelStructure')}
+                            <div className="flex items-start gap-2">
+                              <div className="w-28 shrink-0">
+                                <BuildingFigure
+                                  kind={row.kind}
+                                  level={level}
+                                  ghost={level < BUILDING_MAX_LEVEL}
+                                  className="w-full"
+                                />
                               </div>
-                            )}
-                          </div>
-                          <ul className="mt-1.5 space-y-0.5">
-                            {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
-                              const out = placeEffectLabel(row.kind, lvl, outputMultiplier);
-                              // 印的是**此地此刻每回合的總產出**，不是這一棟自己的貢獻：
-                              // 市場 0 級時貢獻是 0，但地方照樣有基礎收入，印 0 會讓讀者
-                              // 以為這棟建築一點用都沒有。堡壘沒有「總產出」，退回累積百分比。
-                              // 這裡與行內摘要、圓點 tooltip 共用同一個函式，三處不可能再各說各話。
-                              //
-                              // The **place's total per round** is printed, not this building's own
-                              // contribution: at market level 0 the contribution is 0 while the
-                              // place still earns its base income, and printing 0 would read as
-                              // "this building is worthless". Fortress has no total, so it falls
-                              // back to the cumulative percentage. The row summary and the dots'
-                              // tooltips share this function, so the three cannot drift apart.
-                              const value = out.value;
-                              const unit = out.unit;
-                              return (
-                                <li
-                                  key={lvl}
-                                  className={`flex items-baseline gap-1.5 text-[13px] font-mono tabular-nums ${
-                                    lvl === level ? 'text-cyan-200' : 'text-gray-400'
-                                  }`}
-                                >
-                                  <span className="w-4 shrink-0">L{lvl}</span>
-                                  <span className="flex-1">
-                                    {formatEffect(value, unit)} / {t('place.perRound')}
-                                  </span>
-                                  {/* **升到這一級這一步的價錢**，不是「從 0 升到這裡」的累計。
+                              {level < BUILDING_MAX_LEVEL && (
+                                <div className="min-w-0 flex-1 pt-1 text-[11px] leading-tight text-cyan-300/80">
+                                  {t('place.nextLevelStructure')}
+                                </div>
+                              )}
+                            </div>
+                            <ul className="mt-1.5 space-y-0.5">
+                              {Array.from({ length: BUILDING_MAX_LEVEL + 1 }, (_, lvl) => {
+                                const out = placeEffectLabel(row.kind, lvl, outputMultiplier);
+                                // 印的是**此地此刻每回合的總產出**，不是這一棟自己的貢獻：
+                                // 市場 0 級時貢獻是 0，但地方照樣有基礎收入，印 0 會讓讀者
+                                // 以為這棟建築一點用都沒有。堡壘沒有「總產出」，退回累積百分比。
+                                // 這裡與行內摘要、圓點 tooltip 共用同一個函式，三處不可能再各說各話。
+                                //
+                                // The **place's total per round** is printed, not this building's own
+                                // contribution: at market level 0 the contribution is 0 while the
+                                // place still earns its base income, and printing 0 would read as
+                                // "this building is worthless". Fortress has no total, so it falls
+                                // back to the cumulative percentage. The row summary and the dots'
+                                // tooltips share this function, so the three cannot drift apart.
+                                const value = out.value;
+                                const unit = out.unit;
+                                return (
+                                  <li
+                                    key={lvl}
+                                    className={`flex items-baseline gap-1.5 text-[13px] font-mono tabular-nums ${lvl === level ? 'text-cyan-200' : 'text-gray-400'
+                                      }`}
+                                  >
+                                    <span className="w-4 shrink-0">L{lvl}</span>
+                                    <span className="flex-1">
+                                      {formatEffect(value, unit)} / {t('place.perRound')}
+                                    </span>
+                                    {/* **升到這一級這一步的價錢**，不是「從 0 升到這裡」的累計。
                                       這裡原本印的是累計（`totalCostToReach`），而 `build.ts`
                                       實際收的是**一步**的價錢——於是同一個目標兩處印出不同
                                       數字（1→2：這裡 300、卡片 200），而卡片才是收費的
@@ -3430,199 +3450,199 @@ const openBuilding = pinnedBuilding ?? hoveredBuilding;
                                       the one that gets charged. A price list that does not
                                       list prices is the bug this fixes; the price follows
                                       the charge. */}
-                                  <span className="shrink-0 text-amber-300/80">
-                                    {lvl === 0
-                                      ? '—'
-                                      : `${t('place.upgradeCost')} ${costToReachLevel(lvl)}`}
-                                  </span>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                          <div className="mt-1 border-t border-white/10 pt-1 text-[11px] text-gray-500">
-                            {t('place.perLevel')} {formatEffect(per.value, per.unit)}
-                            {adminChar && cost !== null && (
-                              <> · {t('place.adminHas')} {adminChar.gold}</>
-                            )}
+                                    <span className="shrink-0 text-amber-300/80">
+                                      {lvl === 0
+                                        ? '—'
+                                        : `${t('place.upgradeCost')} ${costToReachLevel(lvl)}`}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                            <div className="mt-1 border-t border-white/10 pt-1 text-[11px] text-gray-500">
+                              {t('place.perLevel')} {formatEffect(per.value, per.unit)}
+                              {adminChar && cost !== null && (
+                                <> · {t('place.adminHas')} {adminChar.gold}</>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      )}
-                    </div>
+                        )}
                       </div>
-                      {/* 收起態剪影：等級的外觀一直在畫面裡，指標不會碰到（pointer-events
+                    </div>
+                    {/* 收起態剪影：等級的外觀一直在畫面裡，指標不會碰到（pointer-events
                           不設 none 的話，滑過剪影會落到卡片本身——沒有 handler，是死區）。
                           Collapsed silhouette: the level's look stays on screen; the column is
                           pointer-events-none so hovering it falls through to the card — which
                           has no handler and would otherwise be a dead zone. */}
-                      <div className="flex w-16 shrink-0 items-center justify-center pr-1.5" aria-hidden="true">
-                        <BuildingFigure kind={row.kind} level={level} className="w-14" />
-                      </div>
+                    <div className="flex w-16 shrink-0 items-center justify-center pr-1.5" aria-hidden="true">
+                      <BuildingFigure kind={row.kind} level={level} className="w-14" />
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
           </div>
+        </div>
 
-          {/* 這個地方每回合實際產出多少 / What this place actually yields each round */}
-          <div className="rounded-lg bg-white/5 border border-white/10 px-2.5 py-2 space-y-1">
-            <div className={`${GM_TITLE} text-xs!`}>{t('place.perRound')}</div>
-            <div className="flex items-baseline justify-between gap-2 text-base">
-              <span className="text-gray-400">{t('place.recruitsToGarrison')}</span>
-              <span className="font-display text-cyan-300 tabular-nums">
-                +{placeRecruits(place.barracks)}
-              </span>
-            </div>
-            <div className="flex items-baseline justify-between gap-2 text-base">
-              <span className="text-gray-400">{t('place.incomeTotal')}</span>
-              <span className="font-display text-amber-300 tabular-nums">
-                {placeIncome(place.market)}
-              </span>
-            </div>
-            {/* 依新的分配規則，沒有行政官就誰都不拿，所以這裡必須寫明實際結果而不是比例 /
+        {/* 這個地方每回合實際產出多少 / What this place actually yields each round */}
+        <div className="rounded-lg bg-white/5 border border-white/10 px-2.5 py-2 space-y-1">
+          <div className={`${GM_TITLE} text-xs!`}>{t('place.perRound')}</div>
+          <div className="flex items-baseline justify-between gap-2 text-base">
+            <span className="text-gray-400">{t('place.recruitsToGarrison')}</span>
+            <span className="font-display text-cyan-300 tabular-nums">
+              +{placeRecruits(place.barracks)}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2 text-base">
+            <span className="text-gray-400">{t('place.incomeTotal')}</span>
+            <span className="font-display text-amber-300 tabular-nums">
+              {placeIncome(place.market)}
+            </span>
+          </div>
+          {/* 依新的分配規則，沒有行政官就誰都不拿，所以這裡必須寫明實際結果而不是比例 /
                 Under the new split nobody is paid without an administrator, so this states the
                 outcome rather than the nominal share */}
-            {/* 本回合分成：**每個人**在此地拿多少（君王與行政官可能人在別處，錢仍來自
+          {/* 本回合分成：**每個人**在此地拿多少（君王與行政官可能人在別處，錢仍來自
                 這裡；其他人在場者平分，餘數留在地方上——與模擬同一份 splitIncome）。
                 This round's split: **everyone's** take here (the king and the
                 administrator may be elsewhere, but their gold still comes from this
                 place; the others present split their bucket evenly with the remainder
                 staying put — the same splitIncome as the simulation). */}
-            {adminLeaderShare === null ? (
-              <div className="flex items-baseline justify-between gap-2 text-base">
-                <span className="text-gray-400">{t('place.roundSplit')}</span>
-                <span className="text-gray-500">{t('place.nobodyPaid')}</span>
-              </div>
-            ) : (
-              <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2">
-                <div className="text-xs uppercase tracking-wider text-cyan-300">
-                  {t('place.roundSplit')}
-                </div>
-                {kingCharOfPlace && kingCharOfPlace.alive && placeSplit && placeSplit.king > 0 && (
-                  <div className="flex items-baseline justify-between gap-2 text-base">
-                    <span className="truncate text-gray-400">
-                      👑 {kingCharOfPlace.name}
-                      {kingCharOfPlace.placeId !== place.id && (
-                        <span className="ml-1 text-[11px] text-gray-600">{t('place.elsewhere')}</span>
-                      )}
-                    </span>
-                    <span className="font-display tabular-nums text-amber-300">
-                      +{placeSplit.king}
-                    </span>
-                  </div>
-                )}
-                {adminChar && placeSplit && placeSplit.admin > 0 && (
-                  <div className="flex items-baseline justify-between gap-2 text-base">
-                    <span className="truncate text-gray-400">
-                      👤 {adminChar.name}
-                      {adminChar.placeId !== place.id && (
-                        <span className="ml-1 text-[11px] text-gray-600">{t('place.elsewhere')}</span>
-                      )}
-                    </span>
-                    <span className="font-display tabular-nums text-amber-300">
-                      +{placeSplit.admin}
-                    </span>
-                  </div>
-                )}
-                {splitRecipients.map((c) => (
-                    <div
-                      key={c.id}
-                      className="flex items-baseline justify-between gap-2 text-base"
-                    >
-                      <span className="truncate text-gray-400">{c.name}</span>
-                      <span
-                        className={`font-display tabular-nums ${perOther > 0 ? 'text-amber-300' : 'text-gray-600'}`}
-                      >
-                        +{perOther}
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            )}
-          </div>
-
-          {/* 駐軍 / Garrison */}
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 border border-white/10">
-            <span className="text-base text-gray-400">{t('place.garrison')}</span>
-            <span className="font-display font-bold text-lg text-cyan-300 tabular-nums">{place.garrison}</span>
-          </div>
-
-          {/* 行政官 / Administrator */}
-          <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 border border-white/10">
-            <span className="text-base text-gray-400">{t('place.administrator')}</span>
-            {adminChar ? (
-              <span className="text-base font-medium text-amber-300 flex items-center gap-1.5">
-                {adminChar.isKing && <Crown className="w-4 h-4 shrink-0" label={t('character.isKing')} />}
-                {adminChar.name}
-              </span>
-            ) : (
-              <span className="text-base text-gray-400">{t('place.noAdmin')}</span>
-            )}
-          </div>
-
-          {/* 駐紮將領 / Stationed Characters */}
-          <div>
-            <div className={`${GM_TITLE} text-xs! mb-1.5`}>
-              {t('place.characters')}
+          {adminLeaderShare === null ? (
+            <div className="flex items-baseline justify-between gap-2 text-base">
+              <span className="text-gray-400">{t('place.roundSplit')}</span>
+              <span className="text-gray-500">{t('place.nobodyPaid')}</span>
             </div>
-            <div className="space-y-0.5 max-h-44 overflow-y-auto ds-gm-scroll">
-              {placeChars.length === 0 && (
-                <p className="text-gray-400 text-sm">—</p>
+          ) : (
+            <div className="space-y-1 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2">
+              <div className="text-xs uppercase tracking-wider text-cyan-300">
+                {t('place.roundSplit')}
+              </div>
+              {kingCharOfPlace && kingCharOfPlace.alive && placeSplit && placeSplit.king > 0 && (
+                <div className="flex items-baseline justify-between gap-2 text-base">
+                  <span className="truncate text-gray-400">
+                    👑 {kingCharOfPlace.name}
+                    {kingCharOfPlace.placeId !== place.id && (
+                      <span className="ml-1 text-[11px] text-gray-600">{t('place.elsewhere')}</span>
+                    )}
+                  </span>
+                  <span className="font-display tabular-nums text-amber-300">
+                    +{placeSplit.king}
+                  </span>
+                </div>
               )}
-              {placeChars.map((char) => (
+              {adminChar && placeSplit && placeSplit.admin > 0 && (
+                <div className="flex items-baseline justify-between gap-2 text-base">
+                  <span className="truncate text-gray-400">
+                    👤 {adminChar.name}
+                    {adminChar.placeId !== place.id && (
+                      <span className="ml-1 text-[11px] text-gray-600">{t('place.elsewhere')}</span>
+                    )}
+                  </span>
+                  <span className="font-display tabular-nums text-amber-300">
+                    +{placeSplit.admin}
+                  </span>
+                </div>
+              )}
+              {splitRecipients.map((c) => (
                 <div
-                  key={char.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => onOpenLeader(char)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      onOpenLeader(char);
-                    }
-                  }}
-                  className="px-2 py-1 rounded-md text-base text-gray-400 hover:bg-white/5 hover:text-gray-200 transition-colors cursor-pointer"
+                  key={c.id}
+                  className="flex items-baseline justify-between gap-2 text-base"
                 >
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium text-gray-200">{char.name}</span>
-                    {char.isKing && <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" label={t('character.isKing')} />}
-                    <span className="ml-auto flex items-center gap-3 text-sm font-display">
-                      {/* 兵力配劍、金幣配錢記號，並各自上色。原本兩個數字直接並排、
+                  <span className="truncate text-gray-400">{c.name}</span>
+                  <span
+                    className={`font-display tabular-nums ${perOther > 0 ? 'text-amber-300' : 'text-gray-600'}`}
+                  >
+                    +{perOther}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 駐軍 / Garrison */}
+        <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 border border-white/10">
+          <span className="text-base text-gray-400">{t('place.garrison')}</span>
+          <span className="font-display font-bold text-lg text-cyan-300 tabular-nums">{place.garrison}</span>
+        </div>
+
+        {/* 行政官 / Administrator */}
+        <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 border border-white/10">
+          <span className="text-base text-gray-400">{t('place.administrator')}</span>
+          {adminChar ? (
+            <span className="text-base font-medium text-amber-300 flex items-center gap-1.5">
+              {adminChar.isKing && <Crown className="w-4 h-4 shrink-0" label={t('character.isKing')} />}
+              {adminChar.name}
+            </span>
+          ) : (
+            <span className="text-base text-gray-400">{t('place.noAdmin')}</span>
+          )}
+        </div>
+
+        {/* 駐紮將領 / Stationed Characters */}
+        <div>
+          <div className={`${GM_TITLE} text-xs! mb-1.5`}>
+            {t('place.characters')}
+          </div>
+          <div className="space-y-0.5 max-h-44 overflow-y-auto ds-gm-scroll">
+            {placeChars.length === 0 && (
+              <p className="text-gray-400 text-sm">—</p>
+            )}
+            {placeChars.map((char) => (
+              <div
+                key={char.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onOpenLeader(char)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onOpenLeader(char);
+                  }
+                }}
+                className="px-2 py-1 rounded-md text-base text-gray-400 hover:bg-white/5 hover:text-gray-200 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-gray-200">{char.name}</span>
+                  {char.isKing && <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" label={t('character.isKing')} />}
+                  <span className="ml-auto flex items-center gap-3 text-sm font-display">
+                    {/* 兵力配劍、金幣配錢記號，並各自上色。原本兩個數字直接並排、
                           金幣連圖示都沒有，看不出哪個是兵力哪個是金幣 / Troops get a
                           sword and gold a coin, each colour-coded. Previously the two
                           numbers sat side by side and gold had no icon at all, so
                           there was no way to tell them apart. */}
-                      <span
-                        className="inline-flex items-center gap-1 text-cyan-300"
-                        title={t('character.troops')}
-                      >
-                        <Ic className="w-3.5 h-3.5"><path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2" /></Ic>
-                        <span className="sr-only">{t('character.troops')}: </span>
-                        {char.troops}
-                      </span>
-                      <span
-                        className="inline-flex items-center gap-1 text-amber-300"
-                        title={t('character.gold')}
-                      >
-                        <Ic className="w-3.5 h-3.5"><circle cx="12" cy="12" r="8" /><path d="M12 7v10M9.5 9.5h5M9.5 14.5h5" /></Ic>
-                        <span className="sr-only">{t('character.gold')}: </span>
-                        {char.gold}
-                      </span>
+                    <span
+                      className="inline-flex items-center gap-1 text-cyan-300"
+                      title={t('character.troops')}
+                    >
+                      <Ic className="w-3.5 h-3.5"><path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2" /></Ic>
+                      <span className="sr-only">{t('character.troops')}: </span>
+                      {char.troops}
                     </span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-2.5 text-xs font-display text-gray-400">
-                    <span>{t('character.wu')} {char.wu}</span>
-                    <span>{t('character.tong')} {char.tong}</span>
-                    <span>{t('character.ti')} {char.ti}</span>
-                    <span>{t('character.jing')} {char.jing}</span>
-                    <span>{t('character.speed')} {char.speed}</span>
-                    <span>{t('character.age')} {char.age}</span>
-                  </div>
+                    <span
+                      className="inline-flex items-center gap-1 text-amber-300"
+                      title={t('character.gold')}
+                    >
+                      <Ic className="w-3.5 h-3.5"><circle cx="12" cy="12" r="8" /><path d="M12 7v10M9.5 9.5h5M9.5 14.5h5" /></Ic>
+                      <span className="sr-only">{t('character.gold')}: </span>
+                      {char.gold}
+                    </span>
+                  </span>
                 </div>
-              ))}
-            </div>
+                <div className="flex flex-wrap gap-x-2.5 text-xs font-display text-gray-400">
+                  <span>{t('character.wu')} {char.wu}</span>
+                  <span>{t('character.tong')} {char.tong}</span>
+                  <span>{t('character.ti')} {char.ti}</span>
+                  <span>{t('character.jing')} {char.jing}</span>
+                  <span>{t('character.speed')} {char.speed}</span>
+                  <span>{t('character.age')} {char.age}</span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
+      </div>
     </motion.div>
   );
 }
@@ -3867,7 +3887,7 @@ function GameGraph({
     // layered together
     <div className="w-full h-full bg-ds-space relative">
       <div className="absolute inset-0 bg-ds-space-nebula" aria-hidden="true" />
-{/* DOM 順序就是繪製順序，而 sigma 的容器本身帶一層不透明底色，所以**銀河、霧氣、塵埃都必須在
+      {/* DOM 順序就是繪製順序，而 sigma 的容器本身帶一層不透明底色，所以**銀河、霧氣、塵埃都必須在
           SigmaMap 之前**，否則會被完全蓋掉。SigmaMap 的外層底色也已經拿掉，改由上層的
           bg-ds-space 提供。
 

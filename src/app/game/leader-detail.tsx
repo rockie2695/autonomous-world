@@ -121,7 +121,16 @@ export function DetailModal({
             <Ic className="w-4 h-4"><path d="m6 6 12 12M18 6 6 18" /></Ic>
           </button>
         </div>
-        <div className="p-4 overflow-auto ds-gm-scroll">{children}</div>
+        {/* 本體：`flex-1 min-h-0` 讓它成為這個 dialog（`flex flex-col` + `max-h`）的
+            定高 item，內容比對話框矮時就撐滿、高時自己捲。裡面若有一個「撐滿高度」的
+            元件（例如 FactionRanking），它才能拿到確定高度——沒有這一行，那種元件的
+            flex-1 會落在一个 auto 高度的父層上而失效。
+            The body: `flex-1 min-h-0` makes it a definite item of this dialog (a
+            `flex flex-col` with a max height), filling the space when the content is
+            short and scrolling it when it is tall. A full-height child (FactionRanking)
+            needs that definite height — without it, its `flex-1` would resolve against an
+            auto-height parent and do nothing. */}
+        <div className="flex-1 min-h-0 flex flex-col p-4 overflow-auto ds-gm-scroll">{children}</div>
       </motion.div>
     </motion.div>,
     document.body
@@ -328,19 +337,28 @@ export function FactionRanking({
     });
 
   return (
-    <div className={`${GM_PANEL} p-3`}>
+    // 撐滿面板高度：標題固定，名次表吃滿剩下的高度自己捲。這個元件同時被側欄分頁與
+    // 彈窗（FactionRanking 嵌在 DetailModal 裡）使用，兩邊的容器都給定高，所以
+    // `h-full` 在兩種場合都成立。
+    //
+    // Fill the container's height with plain flex-1 (no percentage `h-full`, which is
+    // unreliable against a flex layout): the title stays put and the ranking takes the
+    // rest and scrolls itself. Both hosts give it a definite height — the side panel's
+    // content box and DetailModal's body (see the `flex-1 min-h-0` there), so this works
+    // in the tab and inside the modal alike.
+    <div className={`${GM_PANEL} flex flex-1 min-h-0 flex-col p-3`}>
       <button
         type="button"
         onClick={() => setShowDetail(true)}
         title={t('general.details')}
-        className={`${GM_TITLE} mb-3 w-full flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150`}
+        className={`${GM_TITLE} mb-3 w-full shrink-0 flex items-center justify-between group hover:text-cyan-300 transition-colors duration-150`}
       >
         <span>{t('ranking.title')}</span>
         <Ic className="w-4 h-4 opacity-40 group-hover:opacity-100 transition-opacity duration-150">
           <path d="M7 17 17 7M9 7h8v8" />
         </Ic>
       </button>
-      <div className="space-y-1.5">
+      <div className="flex-1 min-h-0 space-y-1.5 overflow-y-auto ds-gm-scroll">
         {factions.filter((f) => f.alive).length === 0 && (
           <p className="text-gray-400 text-xs">{t('game.noData')}</p>
         )}

@@ -546,8 +546,18 @@ export function EventLog({
   }
 
   return (
-    <div className={`${GM_PANEL} p-3`}>
-      <h3 className={`${GM_TITLE} mb-3 flex items-center justify-between`}>
+    // 撐滿面板高度：標題與**整排篩選器**固定在上方，事件清單吃滿剩下的高度自己捲。
+    // 用 flex column 而不是 `sticky`：sticky 只在「外層滾動」時有效，而這個面板要的是
+    // 「內層滾動」——而且 sticky 元素還需要一塊不透明背景蓋住划過它底下的列，
+    // flex 結構連那個都不需要，兩者效果相同但少一個會漂的元件。
+    //
+    // Fill the panel's height: the title and the **whole filter row** stay pinned above
+    // while the event list takes the rest and scrolls itself. A flex column rather than
+    // `sticky`: sticky only works when an *outer* element scrolls, and what this panel
+    // needs is an *inner* scroller — plus a sticky element needs an opaque background to
+    // cover the rows sliding under it. Same effect, one fewer element that can drift.
+    <div className={`${GM_PANEL} flex flex-1 min-h-0 flex-col p-3`}>
+      <h3 className={`${GM_TITLE} mb-3 flex shrink-0 items-center justify-between`}>
         <span>{t('events.title')}</span>
         <span className="flex items-center gap-2">
           {/* 回合徽章：日誌只顯示這一回合，所以徽章在標頭而不是每列 /
@@ -570,7 +580,7 @@ export function EventLog({
           Three controls: faction (dropdown), category (multi-select chips) and
           information kind (three toggles). All of them express "what to show"
           without changing the events, so they compose freely. */}
-      <div className="mb-2.5 space-y-2">
+      <div className="mb-2.5 shrink-0 space-y-2">
         <div className="flex items-center gap-2">
           <label className="text-xs text-gray-400 shrink-0" htmlFor="gm-evt-faction">
             {t('events.filterFaction')}
@@ -618,7 +628,7 @@ export function EventLog({
         {availableRounds.length > 0 && (
           <div className="flex items-center gap-2">
             <label className="text-xs text-gray-400 shrink-0" htmlFor="gm-evt-round">
-              {t('events.roundSelect')}
+              {t('general.roundSelect')}
             </label>
             <select
               id="gm-evt-round"
@@ -736,7 +746,8 @@ export function EventLog({
         </div>
       </div>
 
-      {/* 所有回合的事件，高度加倍以便瀏覽 / All rounds' events, doubled height for browsing */}
+      {/* 這一回合的事件：吃滿面板剩下的高度，自己上下捲 /
+          This round's events: takes the panel's remaining height and scrolls itself */}
       <div
         ref={scrollRef}
         onScroll={() => {
@@ -759,7 +770,7 @@ export function EventLog({
             loadOlder();
           }
         }}
-        className="space-y-0.5 overflow-y-auto ds-gm-scroll"
+        className="flex-1 min-h-0 space-y-0.5 overflow-y-auto ds-gm-scroll"
       >
         {isLoading && (
           <div className="space-y-1.5 pt-1" aria-busy="true" aria-label={t('general.loading')}>
@@ -841,7 +852,7 @@ export function EventLog({
           When the reader is not at the bottom, new events do not yank them down — they get a
           pill at the bottom instead. The pill is a real button so keyboard users reach it. */}
       {pendingNew && (
-        <div className="flex justify-center -mt-1 mb-1">
+        <div className="flex shrink-0 justify-center -mt-1 mb-1">
           <button
             type="button"
             onClick={() => {

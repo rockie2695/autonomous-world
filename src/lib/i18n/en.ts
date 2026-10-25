@@ -22,6 +22,9 @@ export const en = {
     status: 'Status',
     back: 'Back',
     close: 'Close',
+    // Two panels (the event log, the round overview) each carry a round dropdown and
+    // share this one label
+    roundSelect: 'Select round',
   },
 
   // ── 認證 / Authentication ─────────────────────────────────────────────────
@@ -278,6 +281,14 @@ export const en = {
     layout: 'Layout recalc',
     snapshot: 'Snapshot',
     advance: 'Advance round',
+    // 階段分組的名稱（檢查器、首頁流程圖都讀它）。這四個一度只存在 zh，
+    // 英文頁的分組標題因此印出原始鍵名 / The phase group names (the inspector and
+    // the home page's pipeline both read them). These four existed in zh only, so
+    // English pages printed the raw keys for the group headings.
+    groupWorld: 'World generation',
+    groupSimulation: 'Simulation',
+    groupAftermath: 'Aftermath',
+    groupPersistence: 'Persistence',
   },
 
   // ── 地圖 / Map ──────────────────────────────────────────────────────────
@@ -345,6 +356,10 @@ export const en = {
     wu: 'Martial',
     tong: 'Leadership',
     ti: 'Physique',
+    // The touch-device ability-tip sheet's title, moved here from `events`: the
+    // caller is `t('character.abilityTipTitle')` in tooltip.tsx, and in the wrong
+    // namespace NEITHER locale resolved, so the sheet printed the raw key.
+    abilityTipTitle: 'Ability details',
     jing: 'Economy',
     speed: 'Speed',
     defectionBase: 'Ambition',
@@ -399,7 +414,6 @@ export const en = {
     tipDefectionLoyaltyTerm: 'loyalty tag differs from the king',
     tipDefectionLedgerTerm: 'this round\'s ledger',
     tipDefectionRateRule: 'Chance = (value − {mid}) ÷ {mid} × {rate}%; below {mid} it is 0',
-    abilityTipTitle: 'Ability details',
   },
 
   // ── 地點 / Place ────────────────────────────────────────────────────────
@@ -461,6 +475,9 @@ export const en = {
       kingInheritedDesc: '{character} succeeded {father} as king',
       reportTitle: 'Battle report',
       reportAttack: 'Attack',
+      // Each war-replay strike prints the damage it dealt; this key was missing
+      // from both locales, so the report printed the raw key instead
+      reportDamage: 'Damage',
       reportDefence: 'Defence',
       reportRoll: 'Roll',
       reportPower: 'Power',
@@ -470,8 +487,6 @@ export const en = {
       reportOpen: 'Report',
     title: 'Event Log',
     tab: 'Events',
-    // The log's own round selector (separate from the map's displayed round)
-    roundSelect: 'Select round',
     filterFaction: 'Faction',
     filterAll: 'All',
     filterByLeader: 'Leader',

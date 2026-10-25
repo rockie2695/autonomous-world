@@ -13,6 +13,13 @@
 // back: the summary (events, battles, defections), the event mix, and **how long
 // each phase took**.
 //
+// 面板自己帶一個**回合下拉**：看哪一個回合由讀者當下決定，與時間軸、事件日誌共用
+// 同一個 `selectedRound`，所以三者永遠同一個數字。
+//
+// The panel carries its **own round dropdown**: which round is on view is the
+// reader's decision, sharing one `selectedRound` with the timeline and the event
+// log so all three always read the same number.
+//
 // 階段的**條**用比例呈現（相對最慢的那一段），所以一眼看得出瓶頸在哪——這正是
 // 手寫 SQL 時最難看出來的一件事。
 //
@@ -49,17 +56,94 @@ function fmtMs(ms: number): string {
   return `${Math.round(ms)}ms`;
 }
 
+/**
+ * 標題列：面板名 + 目前回合 + **回合選擇器**。
+ *
+ * The panel's head: its name, the round on view and the **round selector**.
+ *
+ * 選擇器與事件日誌那一個是同一組 props、同一個 state（`selectedRound`）：左右兩邊
+ * 選的都是「正在看的那一回合」，地圖、事件日誌、這裡三者永遠讀到同一個數字。昔日
+ * 這一塊只能跟著時間軸跑，而時間軸在地圖左緣——人在右側面板裡想回頭看前一回合的
+ * 階段耗時，必須離開面板去點地圖。
+ *
+ * It is the same pair of props and the same state (`selectedRound`) as the event
+ * log's selector: both pick the one "round on view", so the map, the log and this
+ * panel always read the same number. This panel used to follow the timeline only,
+ * and the timeline sits on the map's left edge — so checking the *previous* round's
+ * phase timings meant leaving the panel to click the map.
+ */
+function RoundOverviewHead({
+  round,
+  availableRounds,
+  onRoundChange,
+}: {
+  round: number;
+  availableRounds: number[];
+  onRoundChange: (round: number) => void;
+}) {
+  return (
+    <>
+      <h3 className={`${GM_TITLE} mb-2 flex items-baseline justify-between gap-2`}>
+        <span>{t('game.roundOverview')}</span>
+        <span className="font-display text-xs tracking-widest text-cyan-300/90">
+          RND {String(round).padStart(4, '0')}
+        </span>
+      </h3>
+      {/* 沒有可選回合（種子世界，一回合都還沒跑）時整列不出現 /
+          Omitted when there is nothing to pick (a seeded world, nothing run yet) */}
+      {availableRounds.length > 0 && (
+        <div className="mb-2 flex items-center gap-2">
+          <label className="shrink-0 text-xs text-gray-400" htmlFor="gm-sys-round">
+            {t('general.roundSelect')}
+          </label>
+          <select
+            id="gm-sys-round"
+            value={round}
+            onChange={(e) => {
+              const next = parseInt(e.target.value, 10);
+              if (!Number.isNaN(next)) onRoundChange(next);
+            }}
+            className="min-w-0 flex-1 rounded-md border border-white/10 bg-gray-900/80 px-2 py-1 text-xs text-gray-200 focus:border-cyan-400/50 focus:outline-none"
+          >
+            {availableRounds.map((r) => (
+              <option key={r} value={r}>
+                RND {String(r).padStart(4, '0')}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function RoundInspector({
   round,
   data,
+  availableRounds,
+  onRoundChange,
 }: {
   round: number;
   data: RoundInspectPayload | null;
+  /** 可選的回合清單（1..最新回合）/ The selectable rounds (1..latest) */
+  availableRounds: number[];
+  /** 點回合選項 → 切換顯示的回合 / Clicking a round option switches the displayed round */
+  onRoundChange: (round: number) => void;
 }) {
+  // 「沒有資料」的分支也要帶選擇器：沒有量測的回合（尚未跑過的那一個）正是最需要
+  // 能換走的情況，否則那塊面板會把人關在一個空畫面上。
+  //
+  // The no-data branch keeps the selector too: a round with no measurements (one that
+  // has not run yet) is exactly when switching away matters, because otherwise this
+  // panel traps the reader on an empty screen.
   if (!data) {
     return (
       <div className={`${GM_PANEL} p-3`}>
-        <h3 className={`${GM_TITLE} mb-2`}>{t('game.roundOverview')}</h3>
+        <RoundOverviewHead
+          round={round}
+          availableRounds={availableRounds}
+          onRoundChange={onRoundChange}
+        />
         <p className="text-xs text-gray-500">{t('game.roundNoData')}</p>
       </div>
     );
@@ -70,12 +154,11 @@ export function RoundInspector({
 
   return (
     <div className={`${GM_PANEL} p-3`}>
-      <h3 className={`${GM_TITLE} mb-2 flex items-baseline justify-between gap-2`}>
-        <span>{t('game.roundOverview')}</span>
-        <span className="font-display text-xs tracking-widest text-cyan-300/90">
-          RND {String(round).padStart(4, '0')}
-        </span>
-      </h3>
+      <RoundOverviewHead
+        round={round}
+        availableRounds={availableRounds}
+        onRoundChange={onRoundChange}
+      />
 
       {/* 摘要：這一回合發生的事 / The summary: what this round did */}
       <div className="grid grid-cols-3 gap-2 mb-3">

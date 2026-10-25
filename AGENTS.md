@@ -393,7 +393,12 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 
 - The 將領 / 事件 / 統計 tabs are **absolutely positioned over the map's right edge** (`MapSidePanel`, `z-[8]`), not a layout column — the map keeps the full width. The vertical tab rail is always visible; only the 19rem content panel collapses (its own ✕), and content enters and exits with a right-to-left fade (`AnimatePresence`, `x: 28`)
 - **Clicking the already-active tab closes its panel.** `onTabChange` checks `rightTab === tab` first and, on a match, does `setRightTab(null)` + `setRightPanelOpen(false)` — a toggle, not open-only, so the rail can always dismiss its own panel
-- **Nothing is a layout column any more.** 選擇回合 (`RoundTimeline`, `GM_TIMELINE`) is absolutely positioned over the map's **left** edge (`absolute left-12 top-12 z-[7] w-60 hidden md:block`), and 勢力排行 (`FactionRanking`) moved into the **統計** tab above the charts. Both used to be a left sidebar; a sidebar column is what forced the map to share width with chrome. The mobile overlay drawer is unaffected — it still stacks timeline, leader list and event log
+- **Nothing is a layout column any more.** 選擇回合 (`RoundTimeline`, `GM_TIMELINE`) is absolutely positioned over the map's **left** edge (`absolute left-12 top-12 z-[7] w-60 hidden md:block`), and 勢力排行 (`FactionRanking`) has **its own 勢力 tab** in the rail (`useSideTabs`, `rightTab === 'factions'`). Both used to be a left sidebar; a sidebar column is what forced the map to share width with chrome. The mobile overlay drawer is unaffected — it still stacks timeline and faction ranking
+- **將領數 / 事件日誌 / 勢力排行 / 所有地方 use the panel's whole height** (Oct 2026). Each is `flex flex-1 min-h-0 flex-col` with a `shrink-0` head and a `flex-1 min-h-0 overflow-y-auto ds-gm-scroll` body, so the list uses every pixel of the panel and scrolls **inside itself**. This replaced three unrelated caps: `max-h-60` on the leader list, `max-h-[55vh]` on the place list (**viewport**-relative, so it clipped short panels and left dead space on tall ones), and EventLog's uncapped list.
+  - **`MapSidePanel`'s content box is what makes this possible**: it is `flex-1 min-h-0 flex flex-col`, a *definite* flex item of the panel shell, so a tab takes the rest with plain `flex-1`. **Do not introduce `h-full` here** — a percentage resolving against a flex layout is unreliable (older Safari), and `h-full` inside a scroller is the classic way to get a layout that is right on one machine only.
+  - **EventLog's filter row is permanently visible, not `sticky`.** The request was sticky, and the flex column gives the identical result: sticky only works when an *outer* element scrolls, this panel needs an *inner* scroller, and a sticky element additionally needs an opaque background to cover the rows sliding under it. A structural pin cannot drift or need a background patch.
+  - Other tabs (統計, 系統, the place **detail**) keep their content height and are still scrolled by the outer container — both kinds coexist in the same flex column, and only one tab is ever mounted. The `PanelSkeleton` is an ordinary content-height item.
+  - `DetailModal`'s body is `flex-1 min-h-0 flex flex-col` for the same reason: `FactionRanking` also renders inside the modal, and its `flex-1` would resolve against an `auto`-height parent (i.e. do nothing) without it.
 - `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `31rem` so they clear the open panel, and **from `md` up** (Oct 2026: was `lg`/`26rem`, which left the 768-1023px tablet band with the controls underneath the open panel) — below md the panel is an overlay drawer and the controls keep `right-4`
 - The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 3`
 - **The percentage is an `<input type="number">` plus a literal `%` label**, not a display. It reads `0` = furthest, `100` = closest, and typing a value jumps the camera there (`Enter` commits, and so does blur — Enter alone would leave the text unapplied for someone who tabs away). The draft is a **string**, never a number: a numeric value would reformat `15` to `1` on the first keystroke and throw the caret to the end. Dragging the slider clears the draft so the field follows the zoom again. The `%` is a separate `<span>` beside the input so the number stays the editable body and `%` is only its unit
@@ -1206,8 +1211,16 @@ Every phase records its duration (`runRound` wraps each phase in `runPhase`, and
 - `GET /api/world/inspect?round=N` returns the durations, the summary (events, battles,
   defections), the event mix and the world's scale. Before this, "which stage of the
   last round was slowest" meant hand-writing SQL against the database.
-- The **統計 tab** renders it (`RoundInspector.tsx`): a bar per phase, proportional to
+- The **系統 tab** renders it (`RoundInspector.tsx`, live under `roundOverview`): a bar per phase, proportional to
   the slowest one, so the bottleneck is visible at a glance.
+- **The panel has its own round dropdown** (`#gm-sys-round`, Oct 2026) sharing
+  `selectedRound` with the timeline and the event log's `#gm-evt-round` — three controls,
+  one state, so the map, the log and this panel always name the same round. The label is
+  `general.roundSelect`, moved out of `events` because two panels now use it. Options are
+  **1..lastRound** and the selector is rendered in the no-data branch too: a round with no
+  measurements is exactly when switching away matters. Every new prop must be
+  **destructured** — EventLog's selector once shipped using props without destructuring
+  them, which compiled as bare globals and threw a runtime `ReferenceError`.
 - The game page's telemetry strip shows the same round's total duration.
 
 ### The round's phases are a single source

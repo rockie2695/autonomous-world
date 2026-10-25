@@ -22,6 +22,10 @@ export const zh = {
     status: '狀態',
     back: '返回',
     close: '關閉',
+    // 兩個面板（事件日誌、回合概覽）各有一個回合下拉，標籤是同一個字串 /
+    // Two panels (the event log, the round overview) each carry a round dropdown and
+    // share this one label
+    roundSelect: '選擇回合',
   },
 
   // ── 認證 / Authentication ─────────────────────────────────────────────────
@@ -351,6 +355,14 @@ export const zh = {
     wu: '武力',
     tong: '統領',
     ti: '體魄',
+    // 觸摸設備上「屬性說明」底部卡片的標題。從 `events` 搬過來：呼叫端是
+    // tooltip.tsx 的 `t('character.abilityTipTitle')`，放錯命名空間時兩個語系
+    // 都讀不到，卡片標題直接印出原始鍵名。
+    //
+    // The touch-device ability-tip sheet's title, moved here from `events`: the
+    // caller is `t('character.abilityTipTitle')` in tooltip.tsx, and in the wrong
+    // namespace NEITHER locale resolved, so the sheet printed the raw key.
+    abilityTipTitle: '屬性說明',
     jing: '經濟',
     speed: '速度',
     defectionBase: '野心',
@@ -468,6 +480,11 @@ connections: '連接道路',
       kingInheritedDesc: '{character}接任了父親 {father} 的王位',
       reportTitle: '戰報',
       reportAttack: '進攻',
+      // 戰爭回放的每一輪都要印「造成多少傷害」，這一個鍵曾經兩個語系都沒有，
+      // 戰報裡因此直接印出原始鍵名 / each war-replay strike prints the damage it
+      // dealt, and this key was missing from BOTH locales, so the report printed
+      // the raw key instead
+      reportDamage: '傷害',
       reportDefence: '防守',
       reportRoll: '隨機值',
       reportPower: '戰力',
@@ -477,9 +494,6 @@ connections: '連接道路',
       reportOpen: '戰報',
     title: '事件日誌',
     tab: '事件',
-    // 日誌自己的回合選擇（與地圖顯示的回合分開，見 EventLog）/
-    // the log's own round selector (separate from the map's displayed round)
-    roundSelect: '選擇回合',
     filterFaction: '勢力',
     filterAll: '全部',
     filterByLeader: '將領',
@@ -511,7 +525,12 @@ connections: '連接道路',
     signalAttackDesc: '{faction} 的 {character} 號令全軍進攻 {place}',
     signalDefendDesc: '{faction} 的 {character} 號令全軍馳援 {place}',
     // 底部卡片的標題（觸摸設備的屬性提示）/ The sheet's title (touch-device ability tips)
-    abilityTipTitle: '屬性說明',
+    //
+    // **它住在 `character` 而不是 `events`**：呼叫端是 tooltip.tsx 的
+    // `t('character.abilityTipTitle')`，而這個鍵一度放在 events 裡，兩個語系都放錯，
+    // 於是卡片標題印出原始鍵名。/ It lives under `character`, not `events`: the
+    // caller is `t('character.abilityTipTitle')` in tooltip.tsx, and the key sat in
+    // `events` in BOTH locales, so the sheet printed the raw key.
     escapeFail: '逃脫失敗',
     escapeFailDesc: '{character} 未能逃離 (速度差: {speedDiff})',
     defection: '叛變',
