@@ -32,12 +32,49 @@
 //   await economy(worldId, round, rng);
 //
 // 寫入方式 / How it writes:
-//   整階段（所有地點）的寫入落在**同一筆交易**裡（inTransaction + tx），讀取在交易外。
-//   The whole phase's writes land in **one transaction** (inTransaction + tx); the
-//   reads stay outside it.
+//   整階段的寫入落在**同一筆交易**裡，而且交易裡**只有三句話**：一段合併的角色
+//   UPDATE（UPDATE ... FROM (VALUES ...)，一口氣套用每個角色的金幣／兵力淨增量），
+//   一段合併的地方 UPDATE（駐軍招募），以及一次 createMany（全部 INCOME 與
+//   TROOPS_BOUGHT 事件，陣列順序＝模擬順序）。雲端資料庫每一句都是一次 round
+//   trip：以前每地 5–10 次逐筆寫入 × 上百個地方，一回合是數百次往返；現在交易內
+//   只剩三次。讀取與**計算**全部在交易外——交易只做寫入，所以很短。
+//
+//   The whole phase's writes land in **one transaction**, and the transaction holds
+//   exactly **THREE statements**: one merged characters UPDATE (UPDATE ... FROM
+//   (VALUES ...), applying every character's net gold/troop delta in one shot), one
+//   merged places UPDATE (garrison recruits), and one createMany of every INCOME and
+//   TROOPS_BOUGHT row (array order = simulation order). Every statement is a cloud
+//   round trip: the old 5-10 sequential writes per place × ~a hundred places were
+//   hundreds of round trips a round; the transaction now holds three. Reads and the
+//   **computation** stay outside entirely — the transaction only writes, which is
+//   what keeps it short.
+//
+//   **為什麼可以這樣合併**：繁衍結果的量（金幣、兵力）全部在**計算時**就知道——
+//   「發多少」與「買多少」都是算出來的，從不依賴寫入的回傳值，除了事件要印的「之後
+//   餘額」。該餘額用**模擬帳本**重現：初始值（讀取時的快照）按住，之後每筆增量照
+//   同一個迴圈順序在記憶體裡累加——和昔日「逐筆 update 之後讀回傳值」給出同一組
+//   數字，因為資料庫本來也是把同樣的增量按同樣順序疊上去的。
+//
+//   **Why merging is possible**: the amounts being reproduced (gold, troops) are all
+//   known at **computation** time — "how much was paid" and "how big a batch" are
+//   computed, never derived from a write's return value. The only thing the old
+//   `update().gold` round-trip provided is the event's *after* balance, and that is
+//   reproduced by a **simulated ledger**: take the initial value (the read snapshot),
+//   then accumulate every increment in memory **in the same loop order** the old
+//   statements applied them. Same order, same adds — so the sim gives exactly the
+//   numbers the sequential updates returned.
+//
+//   事件的因果順序也保住了：createMany 依**陣列順序**插fila，id 由用戶端按序產生
+//   （cuid 單調遞增），事件日誌的 `{ round asc, createdAt asc, id asc }` 排序因此
+//   仍然還原「先 INCOME、後 TROOPS_BOUGHT、按地點推進」的原序。
+//
+//   The events' causal order survives too: createMany inserts in **array order** with
+//   client-generated monotonic cuid ids, so the log's
+//   `{ round asc, createdAt asc, id asc }` ordering still restores the original
+//   INCOME-before-purchases, place-by-place sequence.
 // ============================================================================
 
-import { prisma } from '@/lib/prisma';
+import { prisma, type Prisma } from '@/lib/prisma';
 import { CONFIG } from '@/lib/gameConfig';
 import { type Rng } from '@/lib/rng';
 import {
@@ -59,11 +96,16 @@ import { placeRecruits } from '@/lib/placeEffects';
  * @param round - 當前回合數 / Current round number
  * @param rng - 用於購兵的種子 RNG / Seeded RNG for troop purchases
  *
- * @remarks 整階段的所有寫入落在**同一筆交易**裡（見函式下方的 inTransaction）：
- *   全部落地，或全部不落地。讀取在交易外，計算順序與昔日逐筆交易時完全相同。
- *   Every write in this phase lands in **one transaction** (see inTransaction below):
- *   all of them or none. The reads stay outside it, and the computation order is
- *   byte-for-byte the one the per-place version had.
+ * @remarks 計算（分配、徵兵、購兵的每一次 RNG 抽取與每個事件的內容）在交易外
+ *   完成，順序與昔日逐筆寫入時逐一相同；寫入則是一次 `inTransaction` 收攏成三句
+ *   （合併的角色 UPDATE、合併的地方 UPDATE、一次 createMany）。同一個種子仍然
+ *   長出同一個世界。
+ *
+ *   The computation (splits, recruits, every RNG draw, every event payload) happens
+ *   outside the transaction, in exactly the order the per-statement version ran;
+ *   one `inTransaction` then folds the writes into three statements (a merged
+ *   characters UPDATE, a merged places UPDATE, one createMany). One seed still
+ *   grows one world.
  */
 export async function economy(
   worldId: string,
@@ -87,8 +129,34 @@ export async function economy(
     },
   });
 
-  // 君王與總督可能住在外地，所以另外抓一次他們的 jing /
-  // A king or an admin can live in another place, so fetch their jing separately
+  // ── 模擬帳本（模擬昔日回傳值的記憶體複本）──
+  // charInitial：從快照來的初始值；charDelta：至今的淨增量；running*()：套用增量後
+  // 的「現在值」——昔日這個值來自 update 的回傳列（資料庫把同樣的增量按同樣順序
+  // 疊上去），所以按同一順序累加得到的是同一組數字。
+  //
+  // ── The simulated ledger (an in-memory replica of the old return values) ──
+  // charInitial: the starting values from the snapshots; charDelta: the net delta so
+  // far; running*(): the "current" value after applying it — the value the old code
+  // read off an update's returned row (the database stacked the same increments in
+  // the same order), so accumulating in that same order yields the same numbers.
+  const charInitial = new Map<string, { gold: number; troops: number }>();
+  const charDelta = new Map<string, { gold: number; troops: number }>();
+  const placeDelta = new Map<string, number>(); // placeId → 本回合招募數 / recruits this round
+
+  // 在地快照先播種（這些角色也在下面的君王／行政官清單裡，setIfAbsent 避免覆寫）/
+  // Seed from the place snapshots first (these ids also appear in the king/admin list
+  // below; setIfAbsent keeps the first, identical seed)
+  for (const place of places) {
+    for (const char of place.characters) {
+      if (!charInitial.has(char.id)) {
+        charInitial.set(char.id, { gold: char.gold, troops: char.troops });
+      }
+    }
+  }
+
+  // 君王與總督可能住在外地，所以另外抓一次他們 / A king or an admin can live in
+  // another place, so fetch them separately. The ledger needs their starting gold
+  // and troops the same way (see charInitial above).
   const leaderIds = new Set<string>();
   for (const place of places) {
     const kingId = place.faction?.kingId;
@@ -105,40 +173,36 @@ export async function economy(
     // aliveness filter the dead collected the king's 30% share every round.
     const leaders = await prisma.character.findMany({
       where: { id: { in: Array.from(leaderIds) }, alive: true },
-      select: { id: true, name: true, jing: true },
+      select: { id: true, name: true, jing: true, gold: true, troops: true },
     });
     for (const leader of leaders) {
       leaderJing.set(leader.id, leader.jing);
       leaderName.set(leader.id, leader.name);
+      if (!charInitial.has(leader.id)) {
+        charInitial.set(leader.id, { gold: leader.gold, troops: leader.troops });
+      }
     }
   }
 
-  // ── 整個階段一筆交易 / ONE TRANSACTION FOR THE WHOLE PHASE ──
-  // 曾經是**每個地點一筆**交易：一回合數百次提交，保護的卻是同一條不變量（三份加總
-  // 剛好等於 income）。交易的成本是 round trip，而那個不變量逐地點都成立——一次提交
-  // 就夠，所以現在整階段的發錢、徵兵、購兵與事件全部落在同一筆交易裡。
-  //
-  // **計算順序完全沒變**：交易只包住 DB 寫入。收益、購買批次、每一次 rng.float 的抽取
-  // 順序與昔日逐筆交易時逐一相同——同一個種子仍然長出同一個世界。這裡只是把寫入排到
-  // 同一條連線上，不是把計算改成併發（併發會讓 rng 的順序取決於排程，那是模擬的災難）。
-  //
-  // 讀取（上面的 findMany）刻意留在交易外：只做寫入的交易才會短。
-  //
-  // It used to be ONE TRANSACTION PER PLACE: hundreds of commits a round protecting the
-  // same per-place invariant ("the three shares sum exactly to income"). One commit is
-  // enough, so every write in this phase - the splits, the recruits, the purchases and
-  // their events - now lands in a single transaction.
-  //
-  // **The computation order is unchanged**: the transaction wraps only the DB writes.
-  // Income, purchase batches and every rng.float draw happen in exactly the same order
-  // as before, so one seed still grows one world. This routes the writes down one
-  // connection - it does NOT make the computation concurrent (a concurrent draw order
-  // would depend on scheduling, which is a simulation disaster).
-  //
-  // The reads (the findMany calls above) stay outside on purpose: a transaction that
-  // only writes is a short one.
-  await inTransaction(async (tx) => {
-    for (const place of places) {
+  /** 累加一個角色的淨增量 / Accumulate a character's net delta */
+  const applyDelta = (charId: string, dGold: number, dTroops: number): void => {
+    const cur = charDelta.get(charId) ?? { gold: 0, troops: 0 };
+    cur.gold += dGold;
+    cur.troops += dTroops;
+    charDelta.set(charId, cur);
+  };
+  /** 套用增量後的金幣：昔日自 update 回傳值讀取 / Gold after the delta: the update's returned value yesterday */
+  const runningGold = (charId: string): number =>
+    (charInitial.get(charId)?.gold ?? 0) + (charDelta.get(charId)?.gold ?? 0);
+  /** 套用增量後的兵力，同一個道理 / Troops after the delta, for the same reason */
+  const runningTroops = (charId: string): number =>
+    (charInitial.get(charId)?.troops ?? 0) + (charDelta.get(charId)?.troops ?? 0);
+
+  // ── 計算（交易外）：順序與昔日逐筆寫入時逐一相同 ──
+  // ── The computation (outside the transaction): exactly the old order ──
+  const eventRows: Prisma.EventCreateManyInput[] = [];
+
+  for (const place of places) {
     // 計算地點收入 / Calculate place income
     // ── 無主之地：完全不進入經濟循環 ──
     // 不產出、不徵兵、也不寫事件。無主之地沒有勢力在其上收稅或養兵，讓它出現在事件日誌
@@ -200,55 +264,51 @@ export async function economy(
 
     // 分配收入 / Distribute income
     // ── 分配收益，同時記下「發了多少」與「發完剩多少」──
-    // 日誌要同時顯示增加量與總量，所以 update 的**回傳值**（更新後的那一列）要留下來。
+    // 日誌要同時顯示增加量與總量。增量進模擬帳本，總量由 runningGold() 重現——
+    // 昔日這個總量來自 update 回傳列，資料庫按同樣順序疊了同樣的增量。
     //
     // Distribute while capturing both the amount paid and the resulting total: the log shows
-    // the increase *and* the new balance, so the update's returned row is kept.
+    // the increase *and* the new balance. The increase goes into the simulated ledger and
+    // the total is reproduced by runningGold() — the number the old code read off an
+    // update's returned row, where the database had stacked the same increments in the
+    // same order.
     let kingGold = 0;
     let kingGoldAfter = 0;
     let adminGold = 0;
     let adminGoldAfter = 0;
     let othersGold = 0;
 
-    // ── 分配收益（在同一筆交易內）──
     if (kingId && split.king > 0) {
-      const king = await tx.character.update({
-        where: { id: kingId },
-        data: { gold: { increment: split.king } },
-      });
+      applyDelta(kingId, split.king, 0);
       kingGold = split.king;
-      kingGoldAfter = king.gold;
+      kingGoldAfter = runningGold(kingId);
     }
 
     if (adminId && split.admin > 0) {
-      const admin = await tx.character.update({
-        where: { id: adminId },
-        data: { gold: { increment: split.admin } },
-      });
+      applyDelta(adminId, split.admin, 0);
       adminGold = split.admin;
-      adminGoldAfter = admin.gold;
+      adminGoldAfter = runningGold(adminId);
     }
 
     if (otherChars.length > 0 && split.others > 0) {
       const perChar = Math.floor(split.others / otherChars.length);
       if (perChar > 0) {
         for (const char of otherChars) {
-          await tx.character.update({
-            where: { id: char.id },
-            data: { gold: { increment: perChar } },
-          });
+          applyDelta(char.id, perChar, 0);
         }
         othersGold = perChar * otherChars.length;
       }
     }
 
     // ── 徵兵，同樣記下增加量與總量 ──
+    // 本地只有這一筆招募增量，所以「之後的駐軍」就是快照值 + recruits——不需要
+    // 帳本，加法本身就給出確定性。
     // Recruit for the garrison, keeping both the increment and the new total.
+    // This is the only garrison increment a place gets here, so "after" is simply the
+    // snapshot value plus recruits — the arithmetic is already exact.
     const recruits = placeRecruits(place.barracks);
-    const updatedPlace = await tx.place.update({
-      where: { id: place.id },
-      data: { garrison: { increment: recruits } },
-    });
+    placeDelta.set(place.id, recruits);
+    const garrisonAfter = place.garrison + recruits;
 
     // 角色以個人金幣購兵 / Characters buy troops with personal gold
     // 記一筆 INCOME 事件：哪個地方、這個回合發了多少錢給誰、徵了多少兵。
@@ -257,37 +317,35 @@ export async function economy(
     //
     // One INCOME event per place rather than per leader: a world holds hundreds of places
     // and per-leader rows would be hundreds of events a round for no extra information.
-    await tx.event.create({
+    eventRows.push({
+      worldId,
+      round,
+      type: 'INCOME',
       data: {
-        worldId,
-        round,
-        type: 'INCOME',
-        data: {
-          placeId: place.id,
-          placeName: place.name,
-          income,
-          recruits,
-          kingId,
-          kingName: kingId ? (leaderName.get(kingId) ?? null) : null,
-          // 只記錄**真的發出**的金額。沒有控制者時 split 仍然算得出一個數字，但那些錢
-          // 根本沒發出去 —— 照抄 split 會讓日誌顯示「收益 10 金」卻沒有收款人。
-          //
-          // Record only what was **actually paid**. With no controller the split still
-          // produces a number, but none of it was handed out — copying the split would make
-          // the log read "earned 10 gold" with no recipient.
-          // 增加量與**發完後的總額**：日誌要說得出「現在有多少」/
-          // Both the increase and the resulting total, so the log can state the new balance
-          kingGold,
-          kingGoldAfter,
-          adminId,
-          adminName: adminId ? (leaderName.get(adminId) ?? null) : null,
-          adminGold,
-          adminGoldAfter,
-          // 「其他人」只有在君王與行政官都存在時才會分到 / others are paid only when both seats are filled
-          othersGold,
-          // 徵兵後的駐軍總數 / the garrison total after recruiting
-          garrisonAfter: updatedPlace.garrison,
-        },
+        placeId: place.id,
+        placeName: place.name,
+        income,
+        recruits,
+        kingId,
+        kingName: kingId ? (leaderName.get(kingId) ?? null) : null,
+        // 只記錄**真的發出**的金額。沒有控制者時 split 仍然算得出一個數字，但那些錢
+        // 根本沒發出去 —— 照抄 split 會讓日誌顯示「收益 10 金」卻沒有收款人。
+        //
+        // Record only what was **actually paid**. With no controller the split still
+        // produces a number, but none of it was handed out — copying the split would make
+        // the log read "earned 10 gold" with no recipient.
+        // 增加量與**發完後的總額**：日誌要說得出「現在有多少」/
+        // Both the increase and the resulting total, so the log can state the new balance
+        kingGold,
+        kingGoldAfter,
+        adminId,
+        adminName: adminId ? (leaderName.get(adminId) ?? null) : null,
+        adminGold,
+        adminGoldAfter,
+        // 「其他人」只有在君王與行政官都存在時才會分到 / others are paid only when both seats are filled
+        othersGold,
+        // 徵兵後的駐軍總數 / the garrison total after recruiting
+        garrisonAfter,
       },
     });
 
@@ -329,13 +387,7 @@ export async function economy(
 
         const cost = buyCount * CONFIG.CHAR_BUY_TROOP_PRICE;
 
-        const updatedChar = await tx.character.update({
-          where: { id: char.id },
-          data: {
-            gold: { decrement: cost },
-            troops: { increment: buyCount },
-          },
-        });
+        applyDelta(char.id, -cost, buyCount);
 
         // 購兵要寫事件：這是唯一一筆「**自己的錢變成自己的兵**」的紀錄，而 INCOME 只
         // 說明地方发了多少錢給誰，看不出誰把錢換成了兵。沒有它，日誌會出現「某某 得 5 金」
@@ -351,29 +403,87 @@ export async function economy(
         //
         // `charId` (not just the name) so the row links back to the leader, and `placeId` so the
         // camera can jump to where the trade happened.
-        await tx.event.create({
+        eventRows.push({
+          worldId,
+          round,
+          type: 'TROOPS_BOUGHT',
           data: {
-            worldId,
-            round,
-            type: 'TROOPS_BOUGHT',
-            data: {
-              charId: char.id,
-              charName: char.name,
-              placeId: place.id,
-              placeName: place.name,
-              bought: buyCount,
-              cost,
-              // 花完後的餘額與兵力，與 INCOME 同一個理由：只寫增減量說不出「現在有多少」
-              //
-              // The resulting balance and strength, for the same reason INCOME carries them:
-              // the delta alone cannot answer "how much does he have now"
-              goldAfter: updatedChar.gold,
-              troopsAfter: updatedChar.troops,
-            },
+            charId: char.id,
+            charName: char.name,
+            placeId: place.id,
+            placeName: place.name,
+            bought: buyCount,
+            cost,
+            // 花完後的餘額與兵力，與 INCOME 同一個理由：只寫增減量說不出「現在有多少」
+            // 總量由模擬帳本重現（昔日自 update 回傳值讀取）。
+            //
+            // The resulting balance and strength, for the same reason INCOME carries them:
+            // the delta alone cannot answer "how much does he have now". The total is
+            // reproduced by the simulated ledger (the old code read it off an update).
+            goldAfter: runningGold(char.id),
+            troopsAfter: runningTroops(char.id),
           },
         });
       }
     }
   }
+
+  // ── 寫入（交易內，三句話）／ The writes (in one transaction, three statements) ──
+  await inTransaction(async (tx) => {
+    // 1) 角色：一段 UPDATE ... FROM (VALUES ...) 同時套用每個角色的金幣與兵力淨增量。
+    //    多處收入（君王在多個地方有封地）本來就是逐筆 increment 疊上去的——一次 SUM
+    //    套上同一個總量，結果逐位元組相同。gold 為負數 = 購兵的花費。
+    //    一个總量為 0 的角色不會出現：只有真的被動到的 id 才進得來。
+    //
+    //    Characters: one UPDATE ... FROM (VALUES ...) applies every character's net
+    //    gold and troop delta. Income collected at several places (a king with several
+    //    fiefs) was always a series of increments — applying their sum once is
+    //    byte-for-byte the same result. A negative gold delta is a purchase's cost.
+    //    A character with an all-zero delta cannot appear: only genuinely touched ids
+    //    get in.
+    if (charDelta.size > 0) {
+      const params: (string | number)[] = [];
+      const values = Array.from(charDelta)
+        .map(([id, d], i) => {
+          params.push(id, d.gold, d.troops);
+          const b = i * 3;
+          return `($${b + 1}::text, $${b + 2}::int, $${b + 3}::int)`;
+        })
+        .join(', ');
+      await tx.$executeRawUnsafe(
+        `UPDATE "Character" AS c
+           SET gold = c.gold + v.dg, troops = c.troops + v.dt
+           FROM (VALUES ${values}) AS v(id, dg, dt)
+           WHERE c.id = v.id`,
+        ...params,
+      );
+    }
+
+    // 2) 地方：招募的駐軍增量，同樣一段合併 UPDATE（每地一筆，鍵唯一，無疊加風險）/
+    //    Places: the recruit increment, likewise one merged UPDATE (one row per place,
+    //    keys unique, no stacking risk).
+    if (placeDelta.size > 0) {
+      const params: (string | number)[] = [];
+      const values = Array.from(placeDelta)
+        .map(([id, dg], i) => {
+          params.push(id, dg);
+          return `($${i * 2 + 1}::text, $${i * 2 + 2}::int)`;
+        })
+        .join(', ');
+      await tx.$executeRawUnsafe(
+        `UPDATE "Place" AS p
+           SET garrison = p.garrison + v.dg
+           FROM (VALUES ${values}) AS v(id, dg)
+           WHERE p.id = v.id`,
+        ...params,
+      );
+    }
+
+    // 3) 事件：一次 createMany，陣列順序＝模擬順序（見檔頭因果順序註解）/
+    //    Events: one createMany, array order = simulation order (see the file header's
+    //    causal-order note).
+    if (eventRows.length > 0) {
+      await tx.event.createMany({ data: eventRows });
+    }
   });
 }

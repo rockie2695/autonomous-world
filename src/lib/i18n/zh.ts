@@ -244,6 +244,18 @@ export const zh = {
     play: '播放',
     nextRound: '下一回合',
     adminOnly: '僅管理員可操作',
+    worldSelect: '選擇世界',
+    worldNew: '建立新世界',
+    worldNamePlaceholder: '世界名稱',
+    worldCreate: '建立',
+    worldCancel: '取消',
+    worldReset: '重置此世界（歷史歸零，無法復原）',
+    worldDelete: '刪除此世界（無法復原）',
+    worldResetConfirm: '重置「{name}」？所有回合、地方與將領都會清除，世界從第 1 回合重新開始。此操作無法復原。',
+    worldDeleteConfirm: '刪除「{name}」？此世界的所有資料都會永久移除。此操作無法復原。',
+    worldResetGo: '確認重置',
+    worldDeleteGo: '確認刪除',
+    worldLast: '最後一個世界無法刪除',
     noData: '此回合尚無資料',
     roundStale: '回合已前進：畫面資料過期，已重新同步，請再按一次',
     roundDuration: '回合耗時',
@@ -455,12 +467,29 @@ export const zh = {
     nextLevelStructure: '虛線＝下一級新增的結構',
     recruitsToGarrison: '徵兵（加入駐軍）',
     incomeTotal: '總收入',
+    // 推導列：基礎收入 × 行政官 jing 倍率 = 實際的餅。分成對著**產出**印，
+    // 沒有這一列，+2 與 +5 的加總就會「不等於 10」。
+    // The derivation line: base income × the administrator's jing multiplier =
+    // the actual pie. The split is printed against the **output**; without this
+    // line, +2 and +5 "do not sum to 10".
+    outputFormula: '總收入 {income} × 經濟倍率 {mult}（行政官 jing {jing}）→ 產出 {output}',
+    sharePct: '（{pct}%）',
+    othersBucket: '其他人 ×{count}（{pct}%）',
+    remainderUnpaid: '餘數 {amount} 留在地方',
     toAdmin: '行政官實拿',
     roundSplit: '本回合分成',
     elsewhere: '在別處',
     nobodyPaid: '無人領取',
     administrator: '行政官',
     noAdmin: '無行政官',
+    // 行政官異動冷卻：地方彈窗回答「為什麼還沒有行政官」。{rounds} 是冷卻還蓋住的
+    // 回合數，{round} 是上次異動回合（零補四位，與事件列頭的 RND 樣式一致）/
+    // The administrator-change cooldown: the place popup answers "why no administrator
+    // yet". {rounds} = rounds the cooldown still covers; {round} = the last change
+    // round (zero-padded to 4, the event log's RND style)
+    adminCooldown: '行政官冷卻',
+    adminCooling: '還有 {rounds} 回合 · 上次異動 RND {round}',
+    adminCooled: '已結束 · 上次異動 RND {round}',
     characters: '將領',
 connections: '連接道路',
     upgrade: '升級',

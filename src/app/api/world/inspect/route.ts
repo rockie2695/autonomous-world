@@ -21,6 +21,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { decompressSnapshot, type WorldStateMeta } from '@/lib/snapshot';
+import { getSelectedWorldId } from '@/lib/worldSelect';
 import { withRetry } from '@/lib/retry';
 
 export async function GET(request: NextRequest) {
@@ -34,9 +35,14 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const world = await prisma.world.findFirst({
-    where: { active: true },
-  });
+  const worldId = await getSelectedWorldId();
+  if (!worldId) {
+    return NextResponse.json(
+      { error: 'No world found' },
+      { status: 404 }
+    );
+  }
+  const world = await prisma.world.findUnique({ where: { id: worldId } });
   if (!world) {
     return NextResponse.json(
       { error: 'No active world found' },

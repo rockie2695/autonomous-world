@@ -104,6 +104,31 @@ export async function loyaltyCheck(
     deltaPerChar.set(ev.charId, (deltaPerChar.get(ev.charId) ?? 0) + ev.delta);
   }
 
+  // 君王的忠誠標籤一次抓齊。主迴圈裡每個角色都要比較「我的標籤與君王不同嗎」，而
+  // 以前每個角色都查一次君王——同一批君王被反覆查了上百次，一回合就是上百次
+  // round trip。一次 findMany 之後，比較變成記憶體讀取。**不過濾 alive**：與昔日
+  // findUnique 完全相同的比對基準（崩解中的勢力，死去的君王仍算在位）。
+  //
+  // Fetch every king's loyalty tag once. The main loop compares each character's tag
+  // with their faction king's, and the old code looked the same king up once PER
+  // CHARACTER — hundreds of round trips a round for a handful of kings. One findMany
+  // turns the comparison into a map read. **No alive filter** — exactly the old
+  // findUnique's basis (a dead king still counts for a collapsing faction).
+  const kingIds = new Set<string>();
+  for (const char of characters) {
+    if (char.faction?.kingId) kingIds.add(char.faction.kingId);
+  }
+  const kingLoyalty = new Map<string, string>();
+  if (kingIds.size > 0) {
+    const kings = await prisma.character.findMany({
+      where: { id: { in: Array.from(kingIds) } },
+      select: { id: true, loyalty: true },
+    });
+    for (const king of kings) {
+      kingLoyalty.set(king.id, king.loyalty);
+    }
+  }
+
   let defectionCount = 0;
 
   for (const char of characters) {
@@ -116,15 +141,13 @@ export async function loyaltyCheck(
         // factor could be read off on its own, and "friend defected x1.5" doubled the
         // *probability* rather than the *risk*. Everything now adds to the value instead.
         //
-        // Note the king lookup is by id and does not need the faction: loyalty only matters
-        // as "same tag as the king", and a character with no king has nothing to mismatch.
+        // The king's tag comes from the pre-fetched map above (no per-character lookup);
+        // a miss = no king row = no mismatch, the branch the old null took.
         let loyaltyMismatch = false;
         if (char.faction.kingId) {
-          const king = await prisma.character.findUnique({
-            where: { id: char.faction.kingId },
-            select: { loyalty: true },
-          });
-          loyaltyMismatch = king !== null && char.loyalty !== king.loyalty;
+          const kingLoyaltyTag = kingLoyalty.get(char.faction.kingId);
+          loyaltyMismatch =
+            kingLoyaltyTag !== undefined && char.loyalty !== kingLoyaltyTag;
         }
 
         const value = defectionValue({

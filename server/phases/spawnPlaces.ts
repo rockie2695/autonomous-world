@@ -7,6 +7,11 @@
 //
 // 規則（來自規格）/ Rules (from spec):
 // - 每回合新增 PLACE_NEW_PER_ROUND 個地點（預設：1）/ PLACE_NEW_PER_ROUND new places per round (default: 1)
+// - **一回合只生一次**：本回合已有 PLACE_CREATED 事件就整段跳過——中途被殺的嘗試
+//   遺留 spawn 後，重試不得再生成（見函式內註解）/
+//   **One spawn per round**: if a PLACE_CREATED for this round already exists, the
+//   phase short-circuits — a partially-run killed attempt must not survive its spawn
+//   into the retry (see the comment in the function)
 // - 母節點：隨機既有地點 / Parent node: random existing place
 // - 新地點：1-3 條道路連至隨機既有地點（去重，每端 < 3 條路）/ New place: 1-3 roads to random existing places (deduped, each end < 3 roads)
 // - 佈局：鄰居重心加隨機偏移（重心式放置）/ Layout: near neighbor centroid with random offset (centroid-based placement)
@@ -68,6 +73,33 @@ export async function spawnPlaces(
 
   if (placeCount >= CONFIG.PLACE_MAX_COUNT) {
     return 0; // 世界已滿 / World is full
+  }
+
+  // ── 本回合已經生過地點，就不再生 ──
+  // 回合工作 job 的冪等檢查只保護「**跑完**的回合」（currentRound 在所有階段結束後才
+  // 推進）：一個跑到中途就被殺掉的嘗試若留下 spawn 的成果，重試會整回合重跑，再生成
+  // 一個新的地點——世界就永久多了一個地（實際案例：round 10 的第一次嘗試在 09:00
+  // 存活、被殺，09:01 的重試照跑，同回合出現兩個 PLACE_CREATED，聚光燈亮了兩個環）。
+  // 這裡以事件表為錨：同回合一經有 PLACE_CREATED 就整段跳過。事件表在
+  // `[worldId, round]` 有索引，這次查詢不抽 RNG——正常單次執行下永遠不被觸發，
+  // 隨機序列完全不變。
+  //
+  // ── If this round already spawned a place, spawn nothing more ──
+  // The round job's idempotency check only protects a **finished** round (currentRound
+  // advances after every phase): an attempt killed midway leaves its spawn behind, and
+  // a retry re-runs the whole round — creating a SECOND new place for the same round,
+  // a place that appears permanently. Real case: round 10's first attempt survived its
+  // spawn at 09:00 and was killed; the 09:01 retry ran in full, so round 10 carried two
+  // PLACE_CREATED events and the map lit two created rings. The events table is the
+  // anchor here: any PLACE_CREATED for this round short-circuits the whole phase. The
+  // event table is indexed on `[worldId, round]`, and this query draws no RNG — under a
+  // normal single execution it never fires, so the random sequence is untouched.
+  const spawnedThisRound = await prisma.event.findFirst({
+    where: { worldId, round, type: 'PLACE_CREATED' },
+    select: { id: true },
+  });
+  if (spawnedThisRound) {
+    return 0; // 中途重跑：本回合的地點已在 / A retried attempt: this round's place already exists
   }
 
   const newPlacesCount = Math.min(

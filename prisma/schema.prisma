@@ -33,13 +33,25 @@ datasource db {
 // seed + rngState enable exact reproduction of any round.
 // seed + rngState 可精確重現任何回合。
 model World {
-  id           String   @id @default(cuid())
-  name         String
-  currentRound Int      @default(0)
-  seed         String                    // RNG seed for reproducibility / RNG 種子用於可重現性
-  rngState     String                    // Serialized RNG state after each round / 每回合序列化 RNG 狀態
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
+  id             String    @id @default(cuid())
+  name           String
+  currentRound   Int       @default(0)
+  seed           String                    // RNG seed for reproducibility / RNG 種子用於可重現性
+  rngState       String                    // Serialized RNG state after each round / 每回合序列化 RNG 狀態
+  active         Boolean   @default(true)
+
+  // ── 回合執行旗標（背景工作的持久化狀態）/ The round-running flag (the background job's persisted state) ──
+  // 工作狀態本身住在 globalThis（行程重啟就沒了），但「下一回合正在跑」必須讓
+  // 重整後的頁面**立刻**看到：這兩欄就是那個真相。入隊時置 true、結束（成功或失敗）
+  // 在 finally 清掉；卡死超過 ROUND_RUNNING_WATCHDOG_MS 由輪詢入口自癒。
+  // The job state itself lives on globalThis (gone on restart), but "a round is
+  // running" must be visible **immediately** to a refreshed page: these two columns
+  // are that source of truth. Set true on enqueue, cleared in finally (success or
+  // failure); a stall past ROUND_RUNNING_WATCHDOG_MS is healed by the poll routes.
+  roundRunning   Boolean   @default(false)
+  roundStartedAt DateTime?
+
+  createdAt      DateTime  @default(now())
 
   // Back-relations (required by Prisma 7+)
   // 反向關聯（Prisma 7+ 必需）

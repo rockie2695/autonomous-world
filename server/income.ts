@@ -44,6 +44,21 @@ export interface IncomeSplit {
   admin: number;
   /** 其他人平分的金額 / Amount shared equally among everyone else */
   others: number;
+  /**
+   * 三份的**有效**比例（含缺位吸收）。缺位者的份額由在場者接手，所以行政官的
+   * 比例可能是 40%、70% 甚至 100%——彈窗要印的就是這個有效比例，印死「40%」
+   * 會讓分成加總對不上餅，讀者以為錢憑空少了。
+   *
+   * The three shares' **effective** portions (absorption included). An absent
+   * holder's share folds into whoever is present, so the administrator's portion
+   * can be 40%, 70% or even 100% — the popup prints exactly these, and a hard
+   * "40%" would make the rows fail to sum to the pie, reading as gold vanishing.
+   */
+  portions: {
+    king: number;
+    admin: number;
+    others: number;
+  };
 }
 
 /**
@@ -184,7 +199,12 @@ export function splitIncome(
   // No administrator → nobody is paid. This test has to come first: it is the only branch
   // that zeroes the total, and every calculation below assumes the total gets distributed.
   if (adminJing === null) {
-    return { king: 0, admin: 0, others: 0 };
+    return {
+      king: 0,
+      admin: 0,
+      others: 0,
+      portions: { king: 0, admin: 0, others: 0 },
+    };
   }
 
   // 缺席者的份額由在場者接手，比例先合併再套倍率。這樣「沒有其他人」時行政官拿到
@@ -235,6 +255,15 @@ export function splitIncome(
   const king = Math.floor(income * kingPortion);
   const admin = Math.floor(income * adminPortion);
 
+  // 有效比例（含缺位吸收）一次算好，三個回傳路徑共用——彈窗印的就是這三個數。
+  // The effective portions (absorption included), computed once and shared by all
+  // three return paths — these are exactly what the popup prints.
+  const portions = {
+    king: kingPortion,
+    admin: adminPortion,
+    others: hasOthers ? othersShare : 0,
+  };
+
   if (!hasOthers) {
     // 沒有其他人可分時，餘額歸行政官——否則那筆錢會**憑空消失**，
     // 而這個函式的整個重點就是總額必定等於 income。
@@ -242,12 +271,12 @@ export function splitIncome(
     // With nobody else to share with, the leftover goes to the administrator —
     // otherwise that gold simply **vanishes**, and the whole point of this function is
     // that the shares sum to `income`.
-    return { king, admin: Math.floor(income - king), others: 0 };
+    return { king, admin: Math.floor(income - king), others: 0, portions };
   }
 
   // 「其他人」永遠是剩餘額，所以三份加起來必定等於 income /
   // "Everyone else" is always the remainder, so the three shares sum to `income`
-  return { king, admin, others: Math.floor(income - king - admin) };
+  return { king, admin, others: Math.floor(income - king - admin), portions };
 }
 
 /**

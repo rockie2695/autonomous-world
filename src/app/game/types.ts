@@ -27,6 +27,17 @@ export interface WorldState {
     name: string;
     factionId: string | null;
     administratorId: string | null;
+    /**
+     * 行政官上次異動回合（冷卻錨點）。選填：舊快照沒有這個鍵（`undefined` = 這份
+     * 歷史資料不帶此欄位，不是「從未異動」），即時路徑與新快照必有。詳見
+     * `src/lib/snapshot.ts` 的同名欄位。
+     *
+     * The administrator-seat's last change round (the cooldown anchor). Optional:
+     * older snapshots lack the key (`undefined` = this historical payload carries no
+     * such field, NOT "never changed"), while the live path and new snapshots always
+     * have it. See the same field in `src/lib/snapshot.ts`.
+     */
+    adminChangedRound?: number | null;
     garrison: number;
     fortress: number;
     market: number;

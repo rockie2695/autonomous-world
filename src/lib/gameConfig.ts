@@ -431,6 +431,16 @@ export const CONFIG = {
   INITIAL_LAYOUT_ITERATIONS: 200, // 迭代次數，越大越收斂但有遞減報酬 / Iterations, higher = more convergence but diminishing returns
   INITIAL_LAYOUT_RADIUS: 500, // 初始散佈半徑 / Initial spread radius
 
+  // ── 回合執行看門狗 / Round-Running Watchdog ────────────────────────────────
+  // 「下一回合正在跑」旗標（World.roundRunning）超過這個毫秒數仍未清除，輪詢入口
+  // 就自癒解鎖——正常回合只要幾秒到幾十秒，5 分鐘是餘裕；後端重啟丟掉 globalThis
+  // 上的工作時，這是唯一能把按鈕解鎖回來的機制。
+  // When World.roundRunning stays set past this many milliseconds, the poll routes
+  // heal it back to false — a normal round takes seconds to tens of seconds, so 5
+  // minutes is headroom; when a restart drops the in-memory job, this watchdog is
+  // the only thing that re-enables the button.
+  ROUND_RUNNING_WATCHDOG_MS: 300_000,
+
   // ── 地圖聚光燈 / Map Spotlight ─────────────────────────────────────────────
   // 新生成 / 被攻擊的地點顯示發光環的回合數（1 = 僅當前顯示回合）
   // Rounds a newly created / attacked place keeps its glowing ring (1 = displayed round only)

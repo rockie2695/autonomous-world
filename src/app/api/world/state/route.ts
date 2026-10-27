@@ -19,6 +19,8 @@ import { decompressSnapshot } from "@/lib/snapshot";
 import { withRetry } from "@/lib/retry";
 import { WorldStateQuerySchema } from "@/lib/validations";
 import { CONFIG } from "@/lib/gameConfig";
+import { getSelectedWorldId } from "@/lib/worldSelect";
+import { reconcileRoundRunFlag } from "../../../../../server/roundJob";
 
 export async function GET(request: NextRequest) {
   // 需要認證 / Require authentication
@@ -39,16 +41,33 @@ export async function GET(request: NextRequest) {
   }
   const { round } = queryResult.data;
 
-  // 尋找活躍的世界 / Find the active world
-  const world = await prisma.world.findFirst({
-    where: { active: true },
-  });
-  if (!world) {
+  // 目前選中的世界（cookie；無 cookie 時回退 active 世界）/
+  // The selected world (the cookie; falls back to the active world without one)
+  const worldId = await getSelectedWorldId();
+  if (!worldId) {
     return NextResponse.json(
-      { error: "No active world found" },
+      { error: "No world found" },
       { status: 404 },
     );
   }
+  const world = await prisma.world.findUnique({ where: { id: worldId } });
+  if (!world) {
+    return NextResponse.json(
+      { error: "No world found" },
+      { status: 404 },
+    );
+  }
+
+  // 回合執行旗標：這條路由是所有客端持續輪詢的入口，看門狗在這裡被常態呼叫——
+  // 沒人輪詢 admin 端點時，一次頁面重整（或任何人的任何 world-state 請求）也足以
+  // 解鎖卡死的旗標。旗標隨兩條路徑（快照／即時）一起送出，NextRoundButton 重整後
+  // 靠它立刻鎖上。
+  // The round-running flag: this route is what every client polls continuously, so
+  // the watchdog is invoked here routinely — even with nobody polling the admin
+  // endpoint, one page refresh (or anyone's world-state request) clears a stalled
+  // flag. The flag ships with both paths (snapshot / live); NextRoundButton re-locks
+  // off it the moment the page refreshes.
+  const runFlag = await reconcileRoundRunFlag(world.id);
   // 檢查回合是否有效 / Check if round is valid
   if (round > world.currentRound) {
     return NextResponse.json(
@@ -143,6 +162,10 @@ export async function GET(request: NextRequest) {
       world: { ...state.world, currentRound: world.currentRound },
       spotlights,
       moves,
+      // 回合執行旗標：與 admin 輪詢端點同一個真值，見上面的看門狗註解 /
+      // The round-running flag: the same truth as the admin polling endpoint,
+      // see the watchdog comment above
+      roundRunning: runFlag.running,
       // 這份資料是從**快照**來的還是**即時**查的？兩條路徑讀的是不同來源，客戶端
       // 需要知道自己在看哪一份（回合剛跑完、快照還沒寫好時就是即時路徑）/
       // Whether this payload came from the **snapshot** or a **live** query: the two
@@ -167,6 +190,11 @@ export async function GET(request: NextRequest) {
         name: true,
         factionId: true,
         administratorId: true,
+        // 冷卻錨點與快照路徑同步送出（createSnapshot）：兩條路徑的 payload 必須
+        // 同形，地方彈窗才不會依 servedFrom 分岔 /
+        // Shipped with the snapshot path (createSnapshot): both payloads must share
+        // one shape, so the place popup does not branch on servedFrom
+        adminChangedRound: true,
         garrison: true,
         fortress: true,
         market: true,
@@ -274,5 +302,8 @@ export async function GET(request: NextRequest) {
     spotlights,
     moves,
     roundDefectionEvents,
+    // 回合執行旗標：與快照路徑同一個欄位、同一個真值 /
+    // The round-running flag: same field, same truth as the snapshot path
+    roundRunning: runFlag.running,
   });
 }

@@ -125,9 +125,29 @@ describe('Income split', () => {
       // 這條規則和舊的相反：舊版沒有總督就把錢給國王，現在一分都不發 /
       // This inverts the old rule: the king used to absorb a vacant administrator's place,
       // now nobody is paid at all
-      expect(splitIncome(100, 30, null, 3)).toEqual({ king: 0, admin: 0, others: 0 });
-      expect(splitIncome(100, null, null, 3)).toEqual({ king: 0, admin: 0, others: 0 });
-      expect(splitIncome(0, 30, null, 3)).toEqual({ king: 0, admin: 0, others: 0 });
+      const none = { king: 0, admin: 0, others: 0, portions: { king: 0, admin: 0, others: 0 } };
+      expect(splitIncome(100, 30, null, 3)).toEqual(none);
+      expect(splitIncome(100, null, null, 3)).toEqual(none);
+      expect(splitIncome(0, 30, null, 3)).toEqual(none);
+    });
+
+    it('should expose the effective portions (absorption included)', () => {
+      // 彈窗印的百分比是**有效**比例：君王缺席時行政官 70%；沒有其他人時他把
+      // 「其他人」的 30% 也吸掉。印死 40% 會讓分成加總對不上餅，讀者以為帳目有誤。
+      // The percentages the popup prints are the **effective** portions: with no
+      // king the administrator is 70%; with nobody else he absorbs the others' 30%
+      // too. A hard 40% would fail to sum to the pie, reading as a ledger error.
+      const full = splitIncome(100, MID, MID, 2);
+      expect(full.portions).toEqual({ king: 0.3, admin: 0.4, others: 0.3 });
+      const noKing = splitIncome(100, null, MID, 2);
+      expect(noKing.portions).toEqual({ king: 0, admin: 0.7, others: 0.3 });
+      const alone = splitIncome(100, MID, MID, 0);
+      expect(alone.portions).toEqual({ king: 0.3, admin: 0.7, others: 0 });
+      // 沒有君王也沒有其他人：行政官獨得全部（30% + 40% + 30% = 100%）/
+      // No king and no others: the administrator takes everything (30+40+30 = 100%)
+      const sole = splitIncome(100, null, MID, 0);
+      expect(sole.portions).toEqual({ king: 0, admin: 1, others: 0 });
+      expect(sole.admin).toBe(100);
     });
 
     it('should apply the absent-vacant-seat rule even when a king exists', () => {

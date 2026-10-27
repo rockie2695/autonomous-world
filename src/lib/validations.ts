@@ -36,6 +36,46 @@ export const ResetWorldBodySchema = z.object({
 });
 
 /**
+ * 建立新世界的請求本體驗證（admin；不動其他世界的 active 狀態）。
+ * Request body validation for creating a new world (admin; leaves every other
+ * world's active state untouched).
+ */
+export const CreateWorldBodySchema = z.object({
+  name: z
+    .string()
+    .min(1, '世界名稱為必填 / World name is required')
+    .max(100, '世界名稱不能超過 100 個字元 / World name must be 100 characters or less'),
+});
+
+/**
+ * 選擇世界的請求本體驗證（任何已登入使用者；寫進 cookie）。
+ * Request body validation for selecting a world (any signed-in user; lands in a cookie).
+ */
+export const SelectWorldBodySchema = z.object({
+  worldId: z.string().min(1, '世界 ID 為必填 / World ID is required'),
+});
+
+/**
+ * 重置**指定**世界的請求本體驗證（admin；與 reset-world 同樣需要客端確認）。
+ * Request body validation for resetting a **specific** world (admin; requires the
+ * same client confirmation as reset-world).
+ */
+export const ResetWorldByIdSchema = z.object({
+  worldId: z.string().min(1, '世界 ID 為必填 / World ID is required'),
+  confirm: z.literal(true, '需要確認 / Confirmation required'),
+});
+
+/**
+ * 刪除世界的請求本體驗證（admin；同樣需要客端確認）。
+ * Request body validation for deleting a world (admin; requires the same client
+ * confirmation).
+ */
+export const DeleteWorldSchema = z.object({
+  worldId: z.string().min(1, '世界 ID 為必填 / World ID is required'),
+  confirm: z.literal(true, '需要確認 / Confirmation required'),
+});
+
+/**
  * 指派管理員的請求本體驗證。
  * Request body validation for assigning administrator.
  */

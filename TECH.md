@@ -134,6 +134,7 @@ export function InteractiveComponent() {
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
+import { getSelectedWorldId } from '@/lib/worldSelect';
 
 export async function GET() {
   const session = await auth();
@@ -141,7 +142,12 @@ export async function GET() {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const world = await prisma.world.findFirst({ where: { active: true } });
+  // 多世界：目前選中的世界由 cookie 決定（見 src/lib/worldSelect.ts）/
+  // Multiple worlds: the selected world comes from a cookie (see src/lib/worldSelect.ts)
+  const worldId = await getSelectedWorldId();
+  const world = worldId
+    ? await prisma.world.findUnique({ where: { id: worldId } })
+    : null;
   return NextResponse.json(world);
 }
 ```
@@ -519,9 +525,11 @@ import { prisma } from '@/lib/prisma';
 //   const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 //   return new PrismaClient({ adapter });
 
-// 查詢
-const world = await prisma.world.findFirst({
-  where: { active: true },
+// 查詢（多世界：路由請走 worldSelect.ts 的 getSelectedWorldId()；這裡只示範 Prisma 用法）
+// A query (multi-world: routes must go through worldSelect.ts's getSelectedWorldId();
+// this only demonstrates Prisma usage)
+const world = await prisma.world.findUnique({
+  where: { id: worldId },
   include: {
     places: true,
     characters: true,
@@ -1324,13 +1332,20 @@ export const CONFIG = {
 - **先建立 round-0 快照**（此時 `currentRound` 仍為 0），**再**把 `currentRound` 設為 1：第一次「下一回合」執行回合 1、回傳 `round: 1`、`RND` 從 0000 前進到 0001（重設世界同理）
 - 成功後 `process.exit(0)` 關閉 Prisma 連線池（否則共享 singleton 會讓腳本掛住）
 
-初始狀態：
-- 1 個世界
+初始狀態（**每一個**世界如此；seed／reset／create-world 共用同一份 `initWorld`）：
+- 1 個世界（種子建立第一個；之後可再建立更多——見「多世界」一節）
 - 100 個地方
 - 道路連接
 - 1 個角色（國王）
 - 1 個勢力
 - round-0 快照 + `currentRound: 1`
+
+Initial state (**per world**; seed / reset / create-world share the same `initWorld`):
+- 1 world (the seed creates the first; more can be created later — see "Multiple worlds")
+- 100 places, roads connecting them
+- 1 character (king)
+- 1 faction
+- round-0 snapshot + `currentRound: 1`
 
 ### 遊戲數值公式 / Game Formulas
 
@@ -1575,11 +1590,13 @@ chance = (value − DEFECTION_MIDPOINT(17.5)) / 17.5 × DEFECTION_BASE_RATE(0.05
 
 四條任命路徑共用 `grantAdmin` / `revokeAdmin` / `isAdminChangeCoolingDown`：
 
-- **任命 `grantAdmin`**：清除該角色在其他地點的職務（`administratorId` 全域 `@unique`）→ 寫入 `administratorId`、`Place.adminChangedRound = round`、`lastPromotedRound` → 寫入一筆 `− DEFECTION_ADMIN_ASSIGNED_DELTA(1)` 的 `DefectionEvent`。**沒有自動回復**——這是永久的帳本項目。
+- **任命 `grantAdmin`**：清除該角色在其他地點的職務（`administratorId` 全域 `@unique`，**只清 `administratorId`、不打冷卻錨點**，見下）→ 寫入新地的 `administratorId`、`Place.adminChangedRound = round`、`lastPromotedRound` → 寫入一筆 `− DEFECTION_ADMIN_ASSIGNED_DELTA(1)` 的 `DefectionEvent`。**沒有自動回復**——這是永久的帳本項目。
 - **免職 `revokeAdmin`**：寫入一筆 `+ DEFECTION_ADMIN_REPLACED_DELTA(1)` 的 `DefectionEvent`。
 - **「暫時減免＋到期回復」整組機制已經移除**：欄位 `adminAmbitionRevertRound`（已刪）、`AMBITION_RECOVERED` 事件型態（從未被任何程式寫出）、以及三個消費它的 UI 分支，都已一併刪除。這段文字以前把它描述成運作中的行為，那是錯的。
 - **路徑**：階段 2 `spawnCharacters`（受冷卻限制）· 階段 12 `assignAdmins`（受冷卻限制）· 階段 10 `battle.ts` 奪取（**不受**冷卻限制）· `POST /api/admin/assign-admin` 手動指派（**不受**冷卻限制，且會先免職舊任者）
-- **冷卻 `ADMIN_CHANGE_COOLDOWN_ROUNDS(10)`**：任何行政官異動都寫入 `Place.adminChangedRound`；`round - adminChangedRound < 10` 時**僅 AI 路徑**跳過該地點（`assignAdmins` 以 `where` 過濾，`spawnCharacters` 以 `isAdminChangeCoolingDown()` 判斷）
+- **冷卻 `ADMIN_CHANGE_COOLDOWN_ROUNDS(10)`**：**授予與免職**都寫入該地的 `Place.adminChangedRound`；`round - adminChangedRound < 10` 時**僅 AI 路徑**跳過該地點（`assignAdmins` 以 `where` 過濾，`spawnCharacters` 以 `isAdminChangeCoolingDown()` 判斷）
+- **搬 seat 的清空刻意不打點**（Oct 2026，`server/adminAssign.noStamp.test.ts` 鎖住 `data:` 物件）：將領到新地任職時，清空動作讓**舊地**變空——那裡沒有比較、沒有戰鬥，並非「異動」。打點會讓空著的舊地在 `assignAdmins` 凍結整整十回合（`where` 只讀 `adminChangedRound`），40% 的行政官分成一直沒人領；因此舊地**下一回合**就有資格被指派新行政官。新地照樣打點。
+- **地方彈窗顯示冷卻**（Oct 2026）：`adminChangedRound` 隨 `/api/world/state` 兩條路徑送出，`PlaceDetail` 的「行政官冷卻」列在冷卻中以青色顯示剩餘回合、結束後轉灰（`上次異動 RND 000N`）。舊快照沒有此欄位（`undefined`）與 `null`（從未異動）都不顯示列，且兩者刻意區分——`undefined` 是「這份歷史資料不帶此欄」，不是「從未異動」。
 
 #### 老化與死亡 / Aging & Death（`server/phases/ageAndDeath.ts`）
 
@@ -1798,6 +1815,22 @@ rendering all 27 combinations:
 - **沒有君王 → 行政官拿 100%**（40% + 30% + 30%）。
 - 三份加起來**永遠等於 income**。縮放回來之後的餘額在沒有其他人時歸行政官——早期版本直接回傳
   `others: 0`，那筆錢會憑空消失，是測試抓出來的。
+- **彈窗的每一列分成帶**有效**比例，餅要推導出來**（Oct 2026——用戶回報：總收入 10 旁邊印
+  👑 +2、👤 +5，讀起來像帳目不平）。`splitIncome` 的回傳多了 `portions`
+  `{ king, admin, others }`：**含缺位吸收**的有效比例（君王缺席時行政官 70%、沒有其他人時
+  再吸掉 30%）。地方彈窗的「總收入」列印**基礎**收入，底下跟一行推導
+  （`總收入 10 × 經濟倍率 0.82（行政官 jing 12）→ 產出 8`），因為分成對著**放大後的餅**
+  （`placeOutput`）算——直接對基礎收入印，加總永遠對不上，讀者會以為錢憑空少了。
+  「其他人」印成一列合計（`其他人 ×N（30%）`，金額是**實發**的 `floor(others/N) × N`），
+  floor 的餘數註明留在地方。**絕不印死 40%**——寫死的比例會讓列加總對不上餅。
+  The place popup's split rows carry their **effective** portions and the pie is derived, not
+  implied (Oct 2026 — a user report read 總收入 10 beside 👑 +2 / 👤 +5 as an unbalanced
+  ledger). `splitIncome` now returns `portions { king, admin, others }`: absorption-inclusive
+  (70% for an absent king, +30% more when nobody else is present). The popup's 總收入 row prints
+  the **base** income with a derivation line under it, because the split is computed against the
+  **grown** pie (`placeOutput`) — against the base alone the rows can never sum, and the reader
+  concludes gold vanished. The others bucket prints as one lead-in row with the **actually paid**
+  total, and the floor remainder is stated as staying with the place. **Never print a hard 40%.**
 - **tong（統領）現在只影響購兵量**：
   `上限 = CHAR_BUY_TROOP_MAX × (1 + (tong − INCOME_TONG_MIDPOINT) / CHAR_ABILITY_MAX)`，
   與 `jingIncomeMultiplier` 完全同形（測試直接斷言兩者對同一輸入給出同一答案）。
@@ -2734,12 +2767,12 @@ any later code path repair this?**
 - `economy` 的**整階段**發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以寫到一半
   崩潰，不會有任何一筆錢移動到別處：部分世界的金幣就是消失了，而沒有任何階段會對帳（每
   個金額都是算出來的，不是從某個總帳扣的，所以無從對回）。整階段一筆交易同時解決了成本：
-  舊制每地點一筆，一回合數百次提交。
+  交易裡只有**三句話**（見下一節）。
   The economy phase's payout is atomic because `splitIncome` is exact: a half-written phase
   moves the missing gold nowhere - part of the world's gold simply ceases to exist, and no
   later phase reconciles totals (every amount is computed, not derived from a stored total,
   so there is nothing to reconcile against). Batched into one transaction it also costs less:
-  the old per-place version committed hundreds of times a round.
+  the transaction holds exactly **THREE statements** (see the next section).
 
 **刻意排除 / Deliberately excluded**
 
@@ -2751,20 +2784,53 @@ any later code path repair this?**
 `prisma` 會逃出這筆交易，不會隨之回滾——這個輔助存在的理由就是把這個陷阱寫在程式碼裡。
 
 逾時是 `TX_TIMEOUT_MS`（**60 秒**，2026-10 由 20 秒提高），比 Prisma 預設的 5 秒寬——
-一個地點的發放就可能超過 5 秒，而 economy 現在是**整階段一筆交易**，時鐘覆蓋最多
-2000 個地點 × 每地 5–8 次依序寫入（見下一節）。
+曾是整階段一筆交易、時鐘覆蓋 2000 個地點 × 每地 5–8 次依序寫入；現在交易裡只剩三句話
+（見下一節），60 秒是餘裕。
+`TX_TIMEOUT_MS` is **60 seconds** (raised from 20s in Oct 2026), wider than Prisma's 5s
+default — the phase's transaction used to cover 2000 places × 5–8 sequential writes each;
+it now holds only three statements (next section), and the 60s is headroom.
 
-### 經濟階段只提交一次（批量交易）/ The economy phase commits once (batched transaction)
+### 經濟階段只提交一次，交易裡只有三句話 / The economy phase commits once, in three statements (batched transaction)
 
-**每個地點一筆交易改成整階段一筆。** 舊制對每個地點各開一筆 `inTransaction`：一回合數百
-次提交，保護的卻是同一條逐地點成立的不變量（君王／行政官／其他人的三份加總剛好等於
-`income`）。交易的成本是 round trip，不變量又不依賴「一次提交」——所以現在整階段的發錢、
-徵兵、購兵與事件全部落在同一筆交易裡，2000 個地點的世界仍然只提交一次。
-One transaction **per place** became one transaction **per phase**. The old rule opened an
-`inTransaction` around each place — hundreds of commits a round protecting the same
-per-place invariant (king / administrator / others summing exactly to `income`). A
-transaction costs a round trip and the invariant does not need a commit, so the whole
-phase's writes now share one transaction: a 2000-place world still commits once.
+**每個地點一筆交易改成整階段一筆，而且交易裡只有三句話**（Oct 2026）：一段合併的角色
+`UPDATE ... FROM (VALUES ...)`（把每個角色的金幣／兵力淨增量一次套上）、一段合併的地方
+`UPDATE`（駐軍招募），與一次 `event.createMany`（全部 INCOME 與 TROOPS_BOUGHT，
+**陣列順序＝模擬順序**——cuid 由用戶端按序產生，事件日誌的
+`{ round asc, createdAt asc, id asc }` 排序因此仍還原原序）。
+One transaction **per place** became one transaction **per phase**, and the transaction holds
+only **THREE statements** (Oct 2026): one merged characters `UPDATE ... FROM (VALUES ...)`
+(every character's net gold/troop delta in a single statement), one merged places `UPDATE`
+(garrison recruits), and one `event.createMany` of every INCOME and TROOPS_BOUGHT row
+(**array order = simulation order** — cuid ids are client-generated monotonic, so the log's
+`{ round asc, createdAt asc, id asc }` ordering restores the original sequence).
+
+**事件裡的「之後餘額」來自模擬帳本，不是寫入回傳值。** 金額（發多少、買多少）全部在
+計算時已知；舊的逐列 `update().gold` 唯一提供的東西是事件要印的餘額。記憶體帳本從讀取
+快照播種（`charInitial`），按昔日逐筆更新**同一個迴圈順序**累加每筆增量
+（`runningGold` / `runningTroops`），逐位元組重現同一組數字——資料庫本來就是把同樣的
+增量按同樣的順序疊上去。購兵決策照舊讀快照 `char.gold`，語義不變。
+**The events' `*After` balances come from a simulated ledger, not a write's return value.**
+The amounts are all known at computation time; the old per-row `update().gold` provided only
+the after-balance the events print. The in-memory ledger seeds from the read snapshots
+(`charInitial`) and accumulates every increment **in the same loop order** the old sequential
+updates applied them (`runningGold` / `runningTroops`), reproducing the numbers
+byte-for-byte — the database was stacking the same increments in the same order anyway.
+Purchase decisions still read the snapshot `char.gold` — unchanged semantics.
+
+**同批合併的還有 aiMove 與 loyaltyCheck。** aiMove 的每個決策只讀迴圈前的快照，所以移動
+先收進 `moveRows`、階段結尾一次合併 placeId UPDATE + 一次 `CHARACTER_MOVED` createMany
+（不包交易——與昔日逐筆各自落地相同；`recordMove` 的 import 已移除，檔案仍服務
+`battle.ts`）。若未來有規則需要「剛搬到的地點的落寫狀態」，整個收集-再清寫的形狀要重新
+思考，不能默默改回逐筆。loyaltyCheck 則用一次 `findMany` 把所有君王的忠誠標籤抓成
+map（不過濾 alive——與昔日每角色 `findUnique` 的基準完全一致）。
+**aiMove and loyaltyCheck got the same treatment.** aiMove's decisions read only pre-loop
+snapshots, so its moves are collected into `moveRows` and flushed once at the end of the
+phase: one merged placeId UPDATE plus one `CHARACTER_MOVED` createMany (not in a
+transaction — the old per-statement non-atomicity; `recordMove`'s import is gone, the file
+still serves `battle.ts`). If a future rule needs the just-moved-to place's post-write
+state, the collect-then-flush shape must be rethought, not quietly re-inlined.
+`loyaltyCheck` fetches all kings' loyalty tags with one `findMany` into a map (no alive
+filter — exactly the old per-character `findUnique`'s basis).
 
 **計算順序完全沒變，這不是併發化。** 交易只包住 DB 寫入；收益、購買批次與每一次
 `rng.float` 的抽取順序與昔日逐一相同，同一個種子仍然長出同一個世界。把寫入改成併發會讓
@@ -2773,6 +2839,129 @@ rng 的順序取決於排程——那是模擬的災難，所以刻意不做。
 the DB writes; income, purchase batches and every `rng.float` draw happen in exactly the same
 order as before, so one seed still grows one world. Making the writes concurrent would let
 scheduling decide the draw order, which is a simulation disaster.
+
+### 回合執行旗標與看門狗 / The round-running flag and the watchdog
+
+**「下一回合正在跑」不只是記憶體狀態，也是資料庫欄位**（Oct 2026）。工作登記簿住在
+`globalThis`（行程重啟就沒了），但重整後的頁面必須**立刻**鎖住「下一回合」按鈕——
+`World.roundRunning` + `roundStartedAt` 就是那個真相：`startRoundJob` 入隊時置 true，
+背景工作的 `finally` 清掉（成功與失敗都清）。
+**"A round is running" is not only in-memory state, it is database columns** (Oct 2026).
+The job registry lives on `globalThis` (gone with the process), but a refreshed page must
+lock the next-round button **immediately** — `World.roundRunning` + `roundStartedAt` are
+that truth: set by `startRoundJob` on enqueue, cleared in the background job's `finally`
+(on success and failure alike).
+
+**看門狗 `reconcileRoundRunFlag()` 在三個入口被常態呼叫**：輪詢 GET、入隊 POST、以及
+每一個人的 world-state 請求。旗標掛著超過 `ROUND_RUNNING_WATCHDOG_MS`（5 分鐘，設定值）
+**而本行程沒有 running 的工作** → 自癒清掉。旗標掛著而工作真的還在跑（遠端資料庫上
+一回合超過 5 分鐘）**不自癒**，否則會把還在跑的回合解鎖成可再點。
+**The watchdog `reconcileRoundRunFlag()` is called routinely at three entry points**: the
+polling GET, the enqueue POST, and every client's world-state request. A flag standing past
+`ROUND_RUNNING_WATCHDOG_MS` (5 minutes, a config value) **with no running job in this
+process** heals to false. A flag up while the job is genuinely still executing is **left
+alone**, or the watchdog would unlock a round that is still running.
+
+**關瀏覽器不會停止回合**（Oct 2026，`server/roundJob.detach.test.ts` 守住）。POST 先回
+202，回合以 **void 脫鉤的 IIFE** 在伺服器行程裡跑——沒有任何東西 await 它，兩個處理器
+都不讀 `request.signal`，所以客端斷線對回合**零影響**。入隊路徑上沒有
+`await runRound`（等它就等於把回合綁回請求生命週期），而且**旗標寫入失敗不能攔下
+回合**：入隊時 DB 抖一下，旗標可能缺席，但回合照樣開跑——另一個結局是 registry 裡
+卡著一個沒有回合在跑的幽靈 'running' 工作。已驗證：入隊約 100ms、4.5 秒後回合在
+沒有任何客端的情況下跑完、世界前進、旗標清除。
+**Closing the browser never stops a round** (Oct 2026, guarded by
+`server/roundJob.detach.test.ts`). The POST answers 202 first and the round executes as a
+**void-detached IIFE** inside the server process — nothing awaits it, neither handler reads
+`request.signal`, so a client disconnect has ZERO effect on the round. The enqueue path
+never does `await runRound` (that would tie the round back to the request lifecycle), and a
+**failed flag write must not stop the round**: a DB blip at enqueue time may leave the flag
+unset, but the round still starts — the alternative is a phantom 'running' registry entry
+with no round behind it. Verified: enqueue ~100ms, the round finished ~4.5s later with no
+client attached, the world advanced, the flag cleared.
+
+**客端：掛載即查一次 + 每次輪詢同步旗標。** 重整後若旗標還掛著（別的分頁或前一個行程
+留下的回合），按鈕立刻鎖上並接上進度輪詢。輪詢只在 `job.status === 'done'` 時導航到
+剛跑完的回合——工作在別的行程收尾（看門狗自癒、job 為 null）時靜默解鎖、不導航。
+**Client: probe once on mount, mirror the flag on every poll.** After a refresh with the
+flag still standing (a round left by another tab or the previous process), the button locks
+immediately and adopts the progress polling. Navigation to the just-run round happens only
+on `job.status === 'done'` — a job that finished in another process (the watchdog healed,
+job null) unlocks silently without navigating.
+
+### 多世界 / Multiple worlds
+
+**「我在看哪個世界」是一個 cookie**（`aw_world`，`src/lib/worldSelect.ts`），不是全域也
+不是角色屬性：有效 cookie 優先，否則回退 active 世界。**選擇不分角色**——所有已登入
+使用者都能切換（`POST /api/worlds/select`，頁首 `WorldPicker`）；只有**建立**世界
+（`POST /api/admin/worlds`，與 seed/reset 共用 `initWorld`）與**跑回合**是 admin 限定。
+建立成功時 cookie 已指向新世界，客端整頁重載（換世界改寫了每個 query 的語義，逐一失效
+不如乾淨重來）。
+**"Which world am I looking at" is a cookie** (`aw_world`, `src/lib/worldSelect.ts`), not a
+global and not a role attribute: a valid cookie wins, otherwise fall back to the active
+world. **Selection is role-blind** — every signed-in user can switch (`POST
+/api/worlds/select`, the header `WorldPicker`); only **creating** a world (`POST
+/api/admin/worlds`, sharing `initWorld` with seed/reset) and **running rounds** are
+admin-gated. On success the cookie already points at the new world, and the client reloads
+(the switch rewrites every query's meaning — a clean reload beats invalidating one by one).
+
+**`World.active` 從「互斥開關」降級為「預設世界」標記。** 資料庫從來沒有 unique 索引——
+唯一性只是 `findFirst({ where: { active: true } })` 裡的應用層假設。reset-world 保留
+「重置＝新世界成為唯一預設」的語義；create-world 不動任何既有世界。
+**`World.active` is demoted from an exclusive switch to a "default world" mark.** The
+database never had a unique index — the uniqueness was only ever an application assumption
+inside `findFirst({ where: { active: true } })`. Reset-world keeps its "reset = the new world
+becomes the sole default" semantics; create-world touches nothing else.
+
+**admin 的世界管理動作（頁首選擇器，全部兩段式確認）**（Oct 2026）：
+- **⟲ 重置此世界** — `POST /api/admin/worlds/reset` `{ worldId, confirm: true }`：該世界的
+  全部遊戲資料被拆除（`server/teardownWorld.ts`，**一筆交易**），然後對**同一個 world id**
+  重新跑 `initWorld`——世界還在、名字不變、歷史歸零、`currentRound` 回到 1。與
+  `POST /api/admin/reset-world` 的差別：那條路「建一個新世界並讓它成為唯一預設」；這裡是
+  「把你指著的這個世界打掉重練」。
+- **🗑 刪除此世界** — `DELETE /api/admin/worlds` `{ worldId, confirm: true }`：拆除後連
+  World 列一起刪。**最後一個世界不能刪**（400）；刪的是選中世界時清掉選擇 cookie，讓
+  fallback（active 世界）接手。
+- 兩者在該世界**有回合正在跑**時都回 **409**（記憶體工作或 DB 旗標都算）——絕不在跑動中
+  的回合底下拆資料。
+- `teardownWorldData` 先把 schema 的兩個**外鍵環**清成 null
+  （`Place.administratorId` ↔ `Character.placeId`、`Faction.kingId` ↔
+  `Character.factionId`），再按依賴序在一筆 `inTransaction` 裡刪除。`BattleStrike` 刻意
+  無外鍵（戰史要比參與者長命），按 worldId 直接刪。
+- **以明確 worldId 跑回合**（Oct 2026）：`POST /api/admin/run-round` 的 body 可帶
+  `worldId`、`GET` 可帶 `?worldId=`——admin 不用切換 cookie 就能對**任何**世界跑／查回合；
+  不帶參數就是選中的世界。這需要移除 `runRound` 舊的 `if (!world.active) throw` 檢查：
+  `active` 降級後它只是單世界時代的殘留，會讓所有非 active 世界永遠跑不了回合。
+  可跑性 = 「世界存在 + `expectedRound` 對得上」，僅此而已。
+**Admin world actions (header picker, all two-step confirmed)** (Oct 2026):
+- **⟲ Reset this world** — `POST /api/admin/worlds/reset`: the dataset is torn down
+  (`server/teardownWorld.ts`, one transaction) and `initWorld` runs again against the SAME
+  world id — the world survives, history zeroed, `currentRound` back to 1. Unlike
+  `POST /api/admin/reset-world` (a NEW world becomes the sole default), this is "tear down
+  and rebuild the world you are pointing at".
+- **🗑 Delete this world** — `DELETE /api/admin/worlds`: teardown, then the World row. The
+  last world cannot be deleted (400); deleting the selected world clears the selection
+  cookie so the fallback takes over.
+- Both refuse with **409 while a round is running** for that world (in-memory job or the DB
+  flag) — never tear data down under a running round.
+- `teardownWorldData` nulls the schema's two **FK cycles** first, then deletes in dependency
+  order inside one `inTransaction`. `BattleStrike` has no FKs by design.
+- **Running a round by explicit world id** (Oct 2026): `POST /api/admin/run-round` takes an
+  optional `worldId` in the body; `GET` takes `?worldId=` — an admin runs/polls **any** world
+  without switching cookies; without the param, the selected world. This required removing
+  `runRound`'s old `if (!world.active) throw` gate: a single-world leftover that made every
+  non-active world un-runnable. Runnability = "the world exists + `expectedRound` matches".
+
+**所有 session 路由都走 `getSelectedWorldId()`**：world/current、world/state、
+world/events、world/inspect、world/rounds、world/stats、admin/run-round（GET+POST）、
+admin/assign-admin。**不要在 session 路由重新引入裸的 `findFirst({ active: true })`**——
+兩個世界時它把所有讀者釘在預設世界上，選擇器讀起來就是「選了卻沒反應」。首頁的
+`/api/public/world` 刻意保留 active-world 讀取：訪客沒有 session，帶不了選擇 cookie。
+**Every session route resolves the world through `getSelectedWorldId()`**: world/current,
+world/state, world/events, world/inspect, world/rounds, world/stats, admin/run-round
+(GET+POST), admin/assign-admin. **Do not reintroduce a bare `findFirst({ active: true })` in
+a session route** — with two worlds it pins every reader to the default world and the picker
+reads as "selected but nothing happened". The home page's `/api/public/world` deliberately
+keeps the active-world read: visitors carry no session, so no selection cookie.
 
 ### 顯示字型與前臂 / The display face and the forearm
 
@@ -2976,6 +3165,25 @@ The building card must not carry `overflow-hidden`. The tooltip renders *outside
 the card above it, and `overflow-hidden` clips it away entirely — clipping and stacking order are
 different things, and no z-index undoes a clip. The fix is to drop `overflow-hidden` and instead
 raise the **card itself** to `z-30` while expanded, so a later sibling cannot paint over it.
+
+### 地點詳情自己帶 scrollbar / The place detail scrolls itself
+
+**地點詳情加入了「撐滿面板高度」那一套（Oct 2026）。** 它過去維持內容高度、由
+`MapSidePanel` 的外層容器捲——外層照樣捲得到，但讀者要的是**彈窗自己**帶 scrollbar，而
+外層捲動會讓影像標頭跟著內文一起滾出視線。現在根節點是
+`flex flex-1 min-h-0 flex-col`，影像標頭 `shrink-0`，內文 `flex-1 min-h-0 overflow-y-auto
+ds-gm-scroll p-4 space-y-4`——與將領數／事件日誌同一個結構，兩個分支（列表／詳情）在
+同一個 flex 容器裡是同一種東西。於是「全高」分頁現在有三個 + 一個：將領數、事件日誌、
+勢力排行、地點詳情；統計與系統仍由外層捲。
+**The place detail joined the full-height tab structure (Oct 2026).** It used to keep its
+content height and be scrolled by `MapSidePanel`'s outer container — reachable, but the
+reader asked for the popup **itself** to carry a scrollbar, and an outer scroll rolls the
+imagery header out of view along with the body. The root is now
+`flex flex-1 min-h-0 flex-col`, the header `shrink-0`, and the body `flex-1 min-h-0
+overflow-y-auto ds-gm-scroll p-4 space-y-4` — the same structure as the leader list and the
+event log, so both branches (list / detail) are one kind of thing in the same flex container.
+The full-height set is now the leader list, the event log, the faction ranking **and** the
+place detail; 統計 and 系統 remain content-height, scrolled by the outer container.
 
 ### 野心不動了，變的是叛變值 / Ambition is fixed; the defection value moves
 

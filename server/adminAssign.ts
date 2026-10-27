@@ -20,10 +20,13 @@
 //   reading this first.
 // - 被免職 → 寫入一筆 +DEFECTION_ADMIN_REPLACED_DELTA 的 DefectionEvent
 //   Removed from the post → writes a +DEFECTION_ADMIN_REPLACED_DELTA DefectionEvent
-// - 任何行政官異動（指派 / 免職 / 清空）都會把 Place.adminChangedRound 更新為
-//   該回合；AI 路徑在 ADMIN_CHANGE_COOLDOWN_ROUNDS 回合內不得更換
-//   Every change (grant / revoke / clear) stamps Place.adminChangedRound;
-//   AI paths may not change it again for ADMIN_CHANGE_COOLDOWN_ROUNDS rounds.
+// - 指派與免職都會把該地的 Place.adminChangedRound 更新為該回合；**搬 seats 的清空
+//   動作刻意不打點**（見 grantAdminTx）——舊地從來沒有過任何比較或 contest，只是
+//   被人帶走了，它應該立刻就有資格被 AI 指派新領導
+//   A grant or revoke stamps that place's adminChangedRound; the seat-clearing that
+//   *moves* a seat deliberately does NOT stamp (see grantAdminTx) - the old place saw
+//   no comparison and no contest, someone simply took the leader away, so it should be
+//   immediately eligible for a new AI assignment
 // - Place.administratorId 全域唯一（角色最多管一地），任命前必須先清除
 //   該角色在其他地點的職務，避免唯一約束衝突
 //   administratorId is globally unique (one seat per character), so a grant
@@ -74,16 +77,27 @@ export interface GrantAdminParams {
 }
 
 /**
- * 指派行政官：清掉他在別處的職務 → 更新地點（含冷卻錨點）→
- * 野心暫時 -1（10 回合後自動回復）→ 記錄事件。
- * Grant the administrator post: clear his seat elsewhere → update the place
- * (stamping the cooldown anchor) → temporary -1 defectionBase (auto-reverting) →
- * log events.
+ * 指派行政官：清掉他在別處的職務（**不打冷卻錨點**，見下）→ 更新地點
+ * （含冷卻錨點）→ 更新升遷回合 → 記錄事件。
+ * Grant the administrator post: clear his seat elsewhere (**without** a cooldown
+ * stamp, see below) → update the place (stamping the cooldown anchor on the NEW
+ * place) → record the promotion round → log events.
  *
- * 若角色已有尚未到期的減免（表示職務未中斷，例如換地點連任），
- * 只順延到期回合而不再重複扣減。
- * If a reduction is already pending (continuous service, e.g. a seat transfer)
- * the expiry is extended instead of deducting twice.
+ * 清空舊地為什麼**不**打點：搬 seat 不是舊地的「異動」——那裡沒有比較、沒有
+ * 戰鬥，行政官只是把職務帶去了新地。冷卻的目的是「剛換過領導，讓安排安定」，
+ * 而舊地什麼都沒換，只是空了；蓋上錨點會把它凍結十回合，40% 的行政官分成跟著
+ * 沒人領。空出來的舊地因此在**下一回合**就重新有資格被 AI 指派（assignAdmins 的
+ * `where` 過濾只看 `adminChangedRound`）。新地照樣打點——那裡才真的換了領導。
+ *
+ * Why clearing the old place does **not** stamp: moving a seat is not a "change" at
+ * the old place — nothing was compared there, nothing was fought there, the
+ * administrator simply carried the post to the new place. The cooldown exists so a
+ * freshly changed seat settles; the old seat did not change, it merely emptied, and
+ * stamping it would freeze the place for ten rounds with its 40% administrator share
+ * left unpocketed. So the vacated place is eligible for a new AI assignment again as
+ * early as **next round** (`assignAdmins`'s `where` filter reads only
+ * `adminChangedRound`). The NEW place is stamped as before — that is where the leader
+ * actually changed.
  */
 export async function grantAdmin(params: GrantAdminParams): Promise<void> {
   await inTransaction((tx) => grantAdminTx(tx, params));
@@ -105,16 +119,26 @@ async function grantAdminTx(
   tx: TxClient,
   { worldId, round, place, char, logEvent = true, eventData }: GrantAdminParams
 ): Promise<void> {
-  // 清除該角色在其他地點的總督職（唯一約束），並替那些地點打上冷卻錨點 /
-  // Clear the character's seat elsewhere (unique constraint) and stamp the
-  // cooldown anchor on those places
+  // 清除該角色在其他地點的總督職（唯一約束）。**刻意不搬動 adminChangedRound**：
+  // 搬 seat 不是舊地的「異動」——那裡沒有比較也沒有戰鬥，行政官只是把職務帶走了。
+  // 打上錨點會讓 assignAdmins 把空著的舊地凍結整整十回合（`where` 只讀
+  // `adminChangedRound`），40% 的行政官分成跟著沒人領。舊地下一回合立刻有資格
+  // 被指派新行政官。
+  //
+  // Clear the character's seat elsewhere (unique constraint). **adminChangedRound is
+  // deliberately left alone here**: moving a seat is not a "change" at the old place —
+  // nothing was compared and nothing was fought there, the administrator simply carried
+  // the post away. Stamping the anchor would freeze the now-empty old place for a full
+  // ten rounds in `assignAdmins` (its `where` reads only `adminChangedRound`), with the
+  // 40% administrator share left unpocketed the whole time. The old place becomes
+  // eligible for a new administrator as early as next round.
   await tx.place.updateMany({
     where: {
       worldId,
       administratorId: char.id,
       id: { not: place.id },
     },
-    data: { administratorId: null, adminChangedRound: round },
+    data: { administratorId: null },
   });
 
   // 地點換領導：記錄行政官 + 冷卻錨點 / Place changes leader: administrator + cooldown anchor

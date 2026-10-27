@@ -132,9 +132,19 @@ export async function runRound(
     where: { id: worldId },
   });
 
-  if (!world.active) {
-    throw new Error(`World ${worldId} is not active`);
-  }
+  // ── 沒有 active 檢查（Oct 2026 多世界）──
+  // 舊制只有一個世界，`active` 等於「唯一可跑的世界」，所以在這裡擋非 active 世界。
+  // 多世界之後 `active` 降級成「預設世界」標記（沒有選擇 cookie 的訪客落在它身上），
+  // 不是可跑性的閘門——admin 帶 worldId 對任何世界跑回合是明確的指定。回合的可跑性
+  // 由「世界存在 + currentRound 對得上（expectedRound 冪等檢查）」決定。
+  //
+  // ── No active check (Oct 2026, multi-world) ──
+  // With a single world `active` meant "the one runnable world", so this used to
+  // refuse non-active ones. In the multi-world model `active` is demoted to the
+  // "default world" mark (where a cookie-less visitor lands), not a runnability
+  // gate — an admin passing a worldId to run a round on any world is an explicit
+  // pick. Runnability is decided by "the world exists + the round matches
+  // (the expectedRound idempotency check)".
 
   // 從儲存狀態初始化 RNG / Initialize RNG from saved state
   const rng = createRng(world.seed, world.rngState);

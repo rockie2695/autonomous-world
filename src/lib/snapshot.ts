@@ -34,6 +34,19 @@ export interface WorldState {
     name: string;
     factionId: string | null;
     administratorId: string | null;
+    /**
+     * 行政官上次異動回合（冷卻錨點）。**選填是刻意的**：舊快照沒有這個鍵，讀出來
+     * 是 `undefined`——那代表「這份歷史快照不帶這項資料」，不是「從未異動」。把
+     * `undefined` 補成 `null` 會讓舊回合謊報「從未換過帥」，所以兩者要分開；彈窗
+     * 對兩者都不顯示冷卻列。
+     *
+     * The administrator-seat's last change round (the cooldown anchor). **Optional on
+     * purpose**: older snapshots lack the key and read back as `undefined` — meaning
+     * "this historical snapshot does not carry the field", NOT "never changed".
+     * Defaulting it to `null` would make old rounds lie about never having changed, so
+     * the two stay distinct; the popup hides the cooldown row for both.
+     */
+    adminChangedRound?: number | null;
     garrison: number;      // 駐軍 / Garrison
     fortress: number;      // 堡壘 / Fortress
     market: number;        // 市場 / Market
@@ -214,6 +227,10 @@ export async function createSnapshot(
       name: p.name,
       factionId: p.factionId,
       administratorId: p.administratorId,
+      // 冷卻錨點：地點彈窗要回答「為什麼這裡還沒有行政官」（見 PlaceDetail）/
+      // The cooldown anchor: the place popup answers "why is there no administrator
+      // here yet" with it (see PlaceDetail)
+      adminChangedRound: p.adminChangedRound,
       garrison: p.garrison,
       fortress: p.fortress,
       market: p.market,

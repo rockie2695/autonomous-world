@@ -144,6 +144,7 @@ src/
     ├── gameConfig.ts      # All tunable game values (the project's ONE config)
     ├── rng.ts             # Seeded RNG (mulberry32, FNV-1a hashed seed, serialisable state)
     ├── snapshot.ts        # Snapshot compression (gzip)
+    ├── worldSelect.ts     # The selected world: cookie aw_world → fallback active world
     ├── defection.ts       # Defection value + chance, PURE — the stat is never stored
     ├── placeEffects.ts    # Building effects + place output, one definition four consumers
     ├── relations.ts       # Friend / discontent inversion (pure logic, dedupes)
@@ -169,8 +170,9 @@ src/
 ```
 server/
 ├── runRound.ts            # Main game loop orchestrator (14 phases + layout + snapshot)
-├── roundJob.ts            # The round as a BACKGROUND job (idempotency + progress polling)
-├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (used by aiMove + battle escape)
+├── roundJob.ts            # The round as a BACKGROUND job (202 + polling; World.roundRunning
+│                           # flag + the 5-min watchdog reconcileRoundRunFlag)
+├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (battle escape; aiMove batches its own — see AGENTS.md)
 ├── adminAssign.ts         # grantAdmin/revokeAdmin — the ONLY writers of Place.administratorId
 ├── income.ts              # splitIncome() + othersOf() — king 30% / admin 40% / the controlling faction's others 30%
 ├── battleReport.ts        # PLACE_CAPTURED arithmetic behind the event log's 戰報 panel
@@ -179,7 +181,7 @@ server/
 ├── graph/
 │   └── layout.ts          # ForceAtlas2 layout calculation (recalculateLayout, shouldRecalculate)
 └── phases/                # Individual game phases (14 total)
-    ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent, road limit enforced)
+    ├── spawnPlaces.ts     # Phase 1 (incremental layout near parent, road limit enforced, one spawn per round — see the round-job section)
     ├── spawnCharacters.ts # Phase 2 (faction-controlled places only; returns spawned IDs + assigns spawn-place admin)
     └── ...               # Phases 3-14
 ```
@@ -227,7 +229,9 @@ everything it delegates to lives in a sibling file:
 ├── EventLog.tsx            # Bilingual event log (i18n t() with parameter substitution) + the faction / category / info-kind filters; header shows the displayed round zero-padded to 4 digits (`RND 0001` style)
 ├── stats-charts.tsx        # Stats panel: 9 time-series charts in 4 switchable styles, the faction-power treemap, the character radar, and the shared ChartTooltip / ChartLegend. See "Stats Charts" below.
 ├── BattleReport.tsx       # 戰報 panel for PLACE_CAPTURED; portalled to document.body so it does not scroll away with the log
-└── leader-detail.tsx       # DetailModal + FactionRanking. These two MUST stay together: the modal embeds the ranking, and the radar's hover preview opens the modal — splitting them would make stats-charts.tsx import page.tsx back
+├── WorldPicker.tsx        # Header world selector: every signed-in user can switch (cookie);
+│                          # the ＋ create button is admin-only (POST /api/admin/worlds)
+└── leader-detail.tsx      # DetailModal + FactionRanking. These two MUST stay together: the modal embeds the ranking, and the radar's hover preview opens the modal — splitting them would make stats-charts.tsx import page.tsx back
 ```
 
 **Why `leader-detail.tsx` exists.** `stats-charts.tsx` needs `DetailModal`
@@ -357,7 +361,23 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
   were deleted together. `DEFECTION_ADMIN_ASSIGNED_DELTA` itself is still used: as a **permanent**
   ledger entry, with no revert. Do not reintroduce the revert without reading this first.
 - **Paths**: `spawnCharacters.ts` (phase 2, cooldown-gated) · `assignAdmins.ts` (phase 12, cooldown-gated) · `battle.ts` capture sites (phase 10, **not** gated — captures still apply) · `POST /api/admin/assign-admin` (manual, **not** gated)
-- **Cooldown** (`CONFIG.ADMIN_CHANGE_COOLDOWN_ROUNDS` = 10): any administrator change (assign, revoke, or the seat-clearing in `grantAdmin`) stamps `Place.adminChangedRound`. While `round - adminChangedRound < 10` the **AI paths only** (phase 2 assignment, phase 12 `assignAdmins`) skip that place. `assignAdmins` filters in its `where` clause (`adminChangedRound: null` OR `<= round - 10`); `spawnCharacters` uses `isAdminChangeCoolingDown()`
+- **Cooldown** (`CONFIG.ADMIN_CHANGE_COOLDOWN_ROUNDS` = 10): a **grant** or a **revoke** stamps that
+  place's `adminChangedRound`. While `round - adminChangedRound < 10` the **AI paths only** (phase 2
+  assignment, phase 12 `assignAdmins`) skip that place. `assignAdmins` filters in its `where` clause
+  (`adminChangedRound: null` OR `<= round - 10`); `spawnCharacters` uses `isAdminChangeCoolingDown()`
+- **The seat-clearing inside `grantAdmin` deliberately does NOT stamp** (`server/adminAssign.noStamp.test.ts`
+  guards the `data:` objects, Oct 2026). When a leader takes a seat at a new place, the clearing vacates
+  his **old** place — nothing was compared and nothing was fought there, the administrator simply carried
+  the post away. Stamping the old place would freeze an **empty** place for ten rounds in `assignAdmins`
+  (its `where` filter reads only `adminChangedRound`), with the 40% administrator share left unpocketed
+  the whole time. The vacated place becomes eligible for a new AI assignment as early as next round; the
+  NEW place is stamped as before. Do not "fix" a missing anchor on a vacated place — that is the rule.
+- **The place popup shows the cooldown** (Oct 2026): `adminChangedRound` now travels with
+  `/api/world/state` (both snapshot and live paths), and `PlaceDetail` renders an 行政官冷卻 row —
+  remaining rounds in cyan while cooling, grey ("last change RND 000N") once over. `undefined` (old
+  snapshots, which never carried the field) and `null` (never changed) both hide the row, and they are
+  deliberately distinct: `undefined` means "this historical payload carries no such field", not "never
+  changed" — defaulting it to `null` would make old rounds lie.
 - **The manual API revokes the outgoing admin** before granting (defection value +1 + `ADMIN_REMOVED` Event) and clears the incoming character's seat elsewhere for the unique constraint
 - **The ledger is the only destination.** Deltas go to the `DefectionEvent` table and nowhere else:
   there is no `Event.data.ambitionDelta` any more, and no visible ambition suffix in the log. That
@@ -379,7 +399,7 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - `GET /api/world/state?round=N` returns `spotlights: Array<{placeId, kind: 'created'|'attacked'}>` and `moves: Array<{fromPlaceId, toPlaceId, factionId}>` (computed from the events table; works for both snapshot and live paths)
 - Spotlight window: rounds `N - CONFIG.SPOTLIGHT_ROUNDS + 1 .. N` (with `SPOTLIGHT_ROUNDS: 1` → only round `N`) over `PLACE_CREATED` (kind `created`) and `PLACE_CAPTURED`/`BATTLE_DEATH`/`ESCAPE_SUCCESS` (kind `attacked`; `created` wins ties)
 - `moves` includes only `CHARACTER_MOVED` events with `round === N` (the displayed round exactly)
-- `CHARACTER_MOVED` events are written by `server/moveEvent.ts#recordMove()` from all four `aiMove.ts` movement sites and the three `battle.ts` escape sites; no-op when `fromPlaceId === toPlaceId`
+- `CHARACTER_MOVED` events come from two writers (Oct 2026): `battle.ts`'s three escape sites still call `server/moveEvent.ts#recordMove()`, but **aiMove batches its own** — its four sites push into `moveRows` and the phase flushes one merged placeId UPDATE plus one `CHARACTER_MOVED` createMany at the end (payload identical to `recordMove`'s, including its no-op when `fromPlaceId === toPlaceId`). Do not re-inline aiMove's writes: its decisions read only pre-loop snapshots (see "The economy phase commits once, in three statements")
 - Animation timing lives in `gameConfig.ts`: `SPOTLIGHT_ROUNDS: 1`, `MOVE_ANIM_DURATION: 1500`, `MOVE_ANIM_PAUSE: 2500`
 - The spotlight layer is the map's **only** rAF loop and it obeys the animation rules: it pauses when the canvas leaves the viewport (`IntersectionObserver`) and when `document.hidden`, and under `prefers-reduced-motion` it renders a single static frame (`STATIC_FRAME_MS`) with no loop at all. It listens for a mid-session `matchMedia` change too. Keep the gate in `isAnimating()` and keep the initial `resize()` call **after** `isAnimating`/`renderFrame` are declared (an earlier call hits the temporal dead zone)
 - **Do NOT reintroduce an early return for "no spotlights and no moves".** One existed, and it silently blanked the map. It was originally sound — the loop existed only for those two animated things — but the loop now also owns **persistent decoration**: the node border and shadow, and at star zoom the sun glow, orbits, planets and moons. A freshly seeded world is at round 1 with zero `PLACE_CREATED` and zero `CHARACTER_MOVED`, so both arrays are empty and that gate tripped: the places stayed visible (sigma paints the discs itself) while the whole overlay never started. **The symptom is a split screen — bare discs, no decoration — which looks like a rendering bug rather than a skipped loop.** Under `prefers-reduced-motion` the single static frame is still drawn, so nothing has to give for that rule.
@@ -397,7 +417,7 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
 - **將領數 / 事件日誌 / 勢力排行 / 所有地方 use the panel's whole height** (Oct 2026). Each is `flex flex-1 min-h-0 flex-col` with a `shrink-0` head and a `flex-1 min-h-0 overflow-y-auto ds-gm-scroll` body, so the list uses every pixel of the panel and scrolls **inside itself**. This replaced three unrelated caps: `max-h-60` on the leader list, `max-h-[55vh]` on the place list (**viewport**-relative, so it clipped short panels and left dead space on tall ones), and EventLog's uncapped list.
   - **`MapSidePanel`'s content box is what makes this possible**: it is `flex-1 min-h-0 flex flex-col`, a *definite* flex item of the panel shell, so a tab takes the rest with plain `flex-1`. **Do not introduce `h-full` here** — a percentage resolving against a flex layout is unreliable (older Safari), and `h-full` inside a scroller is the classic way to get a layout that is right on one machine only.
   - **EventLog's filter row is permanently visible, not `sticky`.** The request was sticky, and the flex column gives the identical result: sticky only works when an *outer* element scrolls, this panel needs an *inner* scroller, and a sticky element additionally needs an opaque background to cover the rows sliding under it. A structural pin cannot drift or need a background patch.
-  - Other tabs (統計, 系統, the place **detail**) keep their content height and are still scrolled by the outer container — both kinds coexist in the same flex column, and only one tab is ever mounted. The `PanelSkeleton` is an ordinary content-height item.
+  - Other tabs (統計, 系統) keep their content height and are still scrolled by the outer container — both kinds coexist in the same flex column, and only one tab is ever mounted. The `PanelSkeleton` is an ordinary content-height item. **The place detail joined the full-height kind in Oct 2026** (its body gained `overflow-y`, so the imagery header stays pinned while the body scrolls; it previously kept content height under the outer scroll).
   - `DetailModal`'s body is `flex-1 min-h-0 flex flex-col` for the same reason: `FactionRanking` also renders inside the modal, and its `flex-1` would resolve against an `auto`-height parent (i.e. do nothing) without it.
 - `GM_HUD_CONTROLS_OPEN` shifts the zoom controls left by `31rem` so they clear the open panel, and **from `md` up** (Oct 2026: was `lg`/`26rem`, which left the 768-1023px tablet band with the controls underneath the open panel) — below md the panel is an overlay drawer and the controls keep `right-4`
 - The **zoom slider** sits between the zoom-out and zoom-in buttons and scrubs the camera ratio directly (`setState`, no animation, so the handle tracks the pointer; Sigma still owns the real ratio). `MapCameraControls` carries `getZoom` / `setZoom` / `onZoomChange`; `ZoomSlider` subscribes in an effect and unsubscribes in its cleanup. Bounds: `MAP_ZOOM_MIN_RATIO: 0.05`, `MAP_ZOOM_MAX_RATIO: 3`
@@ -1201,6 +1221,43 @@ twice).
   presses "next round" again; the idempotency check keeps the finished round from being
   re-applied. On a serverless deployment the background work would be killed with the
   response, so the round runner assumes a long-lived process.
+- **A MID-round kill is not the same as a lost job** (Oct 2026, real case: round 10 carried
+  two `PLACE_CREATED` events and the map lit two created rings). The idempotency check only
+  protects a **finished** round — `currentRound` advances after every phase, so an attempt
+  killed after `spawnPlaces` but before the rest left its spawn behind, and the retry
+  re-ran the whole round and spawned a *second* place for the same round. A spawn is the
+  one phase whose half-write is **permanent** (a place never heals or gets removed by any
+  rule), so `spawnPlaces` now short-circuits when a `PLACE_CREATED` for its `(worldId,
+  round)` already exists — the phase is re-entered only on a retried attempt, the query
+  draws no RNG, and a normal single execution never fires it. Gold double-paid by a retried
+  round is the accepted self-correcting drift; a phantom place is not — do not remove the
+  guard on idempotency grounds.
+- **The running state is also in the DATABASE** (Oct 2026): `World.roundRunning` +
+  `World.roundStartedAt` are set by `startRoundJob` and cleared in the background job's
+  `finally` (success **and** failure). The in-memory registry dies with the process, but a
+  refreshed page must lock the 下一回合 button **immediately**, so the flag has to
+  outlive `globalThis`. `reconcileRoundRunFlag()` (`server/roundJob.ts`) is the watchdog:
+  called on every poll (`GET /api/admin/run-round`), every enqueue (`POST`) and every
+  world-state fetch, it clears a flag that has stood past
+  `CONFIG.ROUND_RUNNING_WATCHDOG_MS` (5 min) **while this process holds no running job** —
+  a flag up while the job is genuinely still executing is left alone. The client's
+  `NextRoundButton` probes once on mount (a refresh adopts an in-flight round from another
+  tab or the previous process) and mirrors the flag into `dbRunning`, which participates in
+  the button's `disabled` condition. `roundRunning` also rides on `/api/world/state`
+  (both paths), so any client's routine poll doubles as the watchdog.
+- **Closing the browser never stops a round** (Oct 2026, guarded by
+  `server/roundJob.detach.test.ts`). The POST answers 202 and the round executes as a
+  **void-detached IIFE** inside the server process — nothing awaits it, and neither
+  handler reads `request.signal`, so a client disconnect has zero effect on the round.
+  The enqueue path never does `await runRound` (that would tie the round back to the
+  request's lifecycle), and a **failed flag write must not stop the round**: if the DB
+  blips at enqueue time the flag may be missing, but the round still starts — a
+  poisoned phantom 'running' registry entry with no round behind it is the alternative.
+  Verified: enqueue ~100ms, round finishes ~4.5s later with no client attached, world
+  advanced, flag cleared. One subtlety: `job.status` flips to `done` in the `try`,
+  *before* the `finally` clears the flag — a poller reading the DB the instant the
+  status flips races the clear (that is a client-side cosmetics race; the flag lands
+  within a second and the reopen path re-checks).
 
 ### The round inspector: what a round did, and where the time went
 
@@ -1679,6 +1736,18 @@ instead of scattering.
   with the place, the same floor as the simulation). The count and the list share **one** `othersOf()`
   result, so they cannot drift; foreign-faction leaders standing here appear under 駐紮將領 but **not** in
   the split. No administrator → 無人領取.
+- **Every 分成 row carries its EFFECTIVE portion, and the pie is derived, not implied** (Oct 2026 —
+  the user's report: 總收入 10 beside 👑 +2 / 👤 +5 read as an unbalanced ledger). The 總收入 row
+  prints the **base** income and a derivation line under it (`總收入 10 × 經濟倍率 0.82（行政官
+  jing 12）→ 產出 8`), because the split is computed against the **grown** pie
+  (`placeOutput`) — printed against the base alone, the rows cannot sum and the reader concludes
+  gold vanished. Each row's percentage comes from `splitIncome`'s new `portions` field
+  (`{ king, admin, others }`), which carries the **absorption-inclusive** shares: with the king
+  absent the administrator is 70%, with nobody else present he absorbs the others' 30% too (the
+  real case above: 40% + absorbed 30% = **70%**, and 2 + 6 = 8 reconciles). **Never print the
+  nominal 40%** — a hard-coded share makes the rows fail to sum to the pie. The "others" bucket
+  prints as a lead-in row (`其他人 ×N（30%）` with the actually-paid total), and the floor
+  remainder (paid < bucket) is stated as staying with the place.
 - **`tong` is 統領 / Leadership and now does exactly one thing: it scales the size of a single troop
   purchase** — the base batch is `CHAR_BUY_TROOP_BASE (30) × tongPurchaseMultiplier(tong)`, jittered
   ±`CHAR_BUY_TROOP_JITTER` (25%), hard-capped by gold and the spec's batch max (100). The old cap
@@ -1734,24 +1803,47 @@ instead of scattering.
   would make every pre-existing leader helpless in defence and lose nearly every fight they were
   about to win. Do not run `prisma migrate reset` against this database.
 
-### The economy phase commits once (batched transaction)
+### The economy phase commits once, in three statements (batched transaction)
 
-**The whole `economy` phase writes inside ONE `inTransaction`** (Oct 2026; it used to open one
-per place). The split, the recruits, the purchases and their events all land together or not at
-all: every amount is computed rather than derived from a stored total, so a half-written phase
-would leave part of the world's gold absent with nothing to reconcile it against. A per-place
-transaction protected the same per-place invariant at the cost of hundreds of commits a round.
+**The whole `economy` phase writes inside ONE `inTransaction`, and the transaction holds exactly
+THREE statements** (Oct 2026; a per-place transaction before that, then a one-statement-per-write
+batch). The three are: one merged characters `UPDATE ... FROM (VALUES ...)` (every character's net
+gold/troop delta applied in a single statement), one merged places `UPDATE` (garrison recruits), and
+one `event.createMany` of every INCOME and TROOPS_BOUGHT row (**array order = simulation order**,
+so the log's `{ round asc, createdAt asc, id asc }` ordering restores the original sequence — cuid
+ids are client-generated monotonic). The split, the recruits, the purchases and their events all
+land together or not at all: every amount is computed rather than derived from a stored total, so a
+half-written phase would leave part of the world's gold absent with nothing to reconcile it against.
 
+- **The event `*After` values come from a simulated ledger, not a write's return value.** The gold
+  and troop amounts are all known at **computation** time — the only thing the old per-row
+  `update().gold` provided is the "after balance" the events print. An in-memory ledger seeds from
+  the read snapshots (`charInitial`) and accumulates every increment **in the same loop order** the
+  old sequential updates applied them (`runningGold` / `runningTroops`), which reproduces the same
+  numbers byte-for-byte: the database was stacking the same increments in the same order anyway.
+  Purchase decisions still read the snapshot `char.gold` — unchanged semantics.
 - **It is NOT concurrency.** The transaction wraps only the DB writes. Income, purchase batches
   and every `rng.float` draw happen in exactly the same order as before — one seed still grows
   one world. Reaching for `Promise.all` inside the loop would make the draw order depend on
   scheduling, which is the one thing a seeded simulation cannot survive.
-- **Only `tx` inside the callback.** The reads (`place.findMany`, `character.findMany`) stay
-  outside on purpose; the module-level `prisma` called inside the callback would escape the
-  transaction and not roll back with it (`server/tx.ts`).
+- **Only `tx` inside the callback.** The reads (`place.findMany`, `character.findMany` for kings
+  and admins) stay outside on purpose; the module-level `prisma` called inside the callback would
+  escape the transaction and not roll back with it (`server/tx.ts`).
 - **`TX_TIMEOUT_MS` is 60s** (raised from 20s). The clock starts when the transaction does, so a
-  timeout discards the phase's entire write and reruns it; at `PLACE_MAX_COUNT` (2000) places ×
-  5–8 sequential writes each, 20s was tight against a remote database.
+  timeout discards the phase's entire write and reruns it; 20s was tight against a remote database
+  back when the phase still held hundreds of writes. With three statements the transaction is short
+  and the timeout is headroom.
+- **Why merge, and when it is SAFE:** this collapse was only possible because `aiMove` (phase 9)
+  and `loyaltyCheck` (phase 8) were audited the same way — **aiMove's decisions read only
+  pre-loop snapshots** (residents / defence estimates / place factions / signal targets), so its
+  moves are collected into `moveRows` and flushed once at the end of the phase: one merged
+  placeId UPDATE + one `CHARACTER_MOVED` createMany (not in a transaction, matching the old
+  per-statement non-atomicity; `recordMove`'s import is gone, the file still serves `battle.ts`).
+  **Do not re-inline those writes for a future feature that reads a mid-loop update's
+  effect** — if a new rule ever needs "the place I just moved to's state as written", the
+  collect-then-flush shape has to be rethought, not quietly patched. `loyaltyCheck` similarly
+  fetches all kings' loyalty tags with one `findMany` into a map (no alive filter — the old
+  per-character `findUnique`'s exact basis).
 
 ### Building effects — one definition, four consumers
 
@@ -2309,14 +2401,61 @@ sigma, `pointInRotatedRect` for the label hit test, and the overlay's four-corne
 territory section). `focusNode` **keeps the current angle**; only the reset (↺) returns to 0. The
 graph-rebuild effect already snapshots and restores `angle`.
 
-### World initialisation is shared by seed and reset
+### World initialisation is shared by seed, reset and create-world
 
 `server/initWorld.ts` is the **only** way a runnable world is built — the full place set (the king's
 seat with initial buildings and garrison), geographic-MST roads (1-3 per place, degree-capped), a
 ForceAtlas2 layout, king + faction + administrators, and the round-0 snapshot before advancing to round 1.
-`prisma/seed.ts` and the reset-world endpoint both call it; the reset endpoint used to create ten
-placeholder places (no roads, no faction, no king), which produced a world that could not run. The RNG
-draw order is identical to the original seed — one seed grows one world.
+`prisma/seed.ts`, the reset-world endpoint **and** `POST /api/admin/worlds` all call it; the reset
+endpoint used to create ten placeholder places (no roads, no faction, no king), which produced a world
+that could not run. The RNG draw order is identical to the original seed — one seed grows one world.
+
+### Multiple worlds (Oct 2026)
+
+- **"Which world am I looking at" lives in a cookie**, not in a role or a global:
+  `getSelectedWorldId()` (`src/lib/worldSelect.ts`, cookie `aw_world`) — a valid cookie wins,
+  otherwise fall back to the active world. **Selection is role-blind**: every signed-in user can
+  switch (`POST /api/worlds/select`, the header `WorldPicker`); only *creating* a world
+  (`POST /api/admin/worlds`, admin-only) and *running a round* are admin-gated. The create route
+  points the cookie at the new world, so "create then land on it" is one step.
+- **`World.active` is now a "default world" mark, not an exclusive switch.** Multiple worlds may be
+  `active: true` (the DB never had a unique constraint on it — the uniqueness was only ever an
+  application assumption in `findFirst({ where: { active: true } })`). Reset-world keeps its
+  "reset = make the new one the sole default" semantics; create-world touches nothing else.
+- **Admin actions on a world, all from the header picker, all two-step confirmed** (Oct 2026):
+  - **⟲ Reset this world** — `POST /api/admin/worlds/reset` `{ worldId, confirm: true }`: the
+    world's entire game dataset is torn down (`server/teardownWorld.ts`, one transaction) and
+    `initWorld` runs again against the **same world id** — the world survives with its name,
+    history zeroed, `currentRound` back to 1. Unlike `POST /api/admin/reset-world` (which creates
+    a NEW world and makes it the sole default), this is "tear down and rebuild the world you are
+    pointing at".
+  - **🗑 Delete this world** — `DELETE /api/admin/worlds` `{ worldId, confirm: true }`: teardown,
+    then the World row itself. The **last world cannot be deleted** (400), and if the deleted
+    world was the selected one the selection cookie is cleared so the fallback takes over.
+  - Both refuse with **409 while a round is running** for that world (in-memory job or the DB
+    flag both count) — never tear data down under a running round.
+  - `teardownWorldData` nulls the FKs on the schema's two **cycles** first
+    (`Place.administratorId` ↔ `Character.placeId`, `Faction.kingId` ↔ `Character.factionId`),
+    then deletes in dependency order inside one `inTransaction`. `BattleStrike` has no FKs by
+    design and goes by worldId alone.
+- **Running a round by explicit world id** (Oct 2026): `POST /api/admin/run-round` accepts an
+  optional `worldId` in the body and `GET` accepts `?worldId=` — an admin can run/poll **any**
+  world without switching cookies; without the param the selected world is used. This required
+  removing `runRound`'s old `if (!world.active) throw` gate: with `active` demoted to a
+  default-world mark it was a single-world leftover that made every non-active world
+  un-runnable. Runnability is "the world exists + `expectedRound` matches", nothing else.
+- **Every read route resolves the world through `getSelectedWorldId()`** — world/current, world/state,
+  world/events, world/inspect, world/rounds, world/stats, admin/run-round (both verbs),
+  admin/assign-admin. **Do not reintroduce a bare `findFirst({ active: true })` in a session-authed
+  route**: with two worlds it silently pins every reader to the default world and the picker reads
+  as "selected but nothing happened". The home page's public endpoint (`/api/public/world` +
+  `src/lib/publicWorld.ts`) deliberately keeps the active-world read — it has no session to carry a
+  cookie selection.
+- **Switching worlds reloads the whole page** (`window.location.reload()` in `WorldPicker`): a world
+  change rewrites the meaning of every query (state, events, snapshots, inspector, the round
+  dropdowns), and invalidating them one by one is both more code and easier to miss one. The
+  round-running flag is per-world, so the 下一回合 button reads the selected world's flag after the
+  reload; the run-round routes run the **selected** world, not "the active world".
 
 ### Type Safety
 
@@ -2381,7 +2520,7 @@ exactly why a mojibake scan reporting "clean" is not evidence of anything.
 
 The seed script (`prisma/seed.ts`) shares its initialisation with the reset-world endpoint
 (`server/initWorld.ts` — one definition, see the World-initialisation section above) and creates:
-- **1 world** (global, unique)
+- **1 world** (the seed creates the first; more worlds can be created afterwards — see "Multiple worlds")
 - **100 places** with roads connecting them
 - **1 character** (king) with 1 faction
 - Uses project functions: `createRng()`, `generateUniquePlaceName()`, `generatePersonName()`, plus `uniqueAliveFactionName()`/`uniqueAliveKingName()` from `server/uniqueNames.ts`

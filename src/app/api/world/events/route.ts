@@ -16,6 +16,7 @@ import { prisma } from '@/lib/prisma';
 import { auth } from '@/lib/auth';
 import { EventsQuerySchema } from '@/lib/validations';
 import { withRetry } from '@/lib/retry';
+import { getSelectedWorldId } from '@/lib/worldSelect';
 
 export async function GET(request: NextRequest) {
   // 需要認證 / Require authentication
@@ -61,14 +62,20 @@ export async function GET(request: NextRequest) {
     ? Math.min(1000, Math.max(1, parsedLimit))
     : 500;
 
-  // 尋找活躍的世界 / Find the active world
-  const world = await prisma.world.findFirst({
-    where: { active: true },
-  });
+  // 目前選中的世界（cookie；無 cookie 時回退 active 世界）/
+  // The selected world (the cookie; falls back to the active world without one)
+  const worldId = await getSelectedWorldId();
+  if (!worldId) {
+    return NextResponse.json(
+      { error: 'No world found' },
+      { status: 404 }
+    );
+  }
+  const world = await prisma.world.findUnique({ where: { id: worldId } });
 
   if (!world) {
     return NextResponse.json(
-      { error: 'No active world found' },
+      { error: 'No world found' },
       { status: 404 }
     );
   }

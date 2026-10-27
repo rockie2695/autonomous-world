@@ -26,7 +26,6 @@ import {
   isThreatened,
 } from '@/lib/warEstimate';
 import { type Rng } from '@/lib/rng';
-import { recordMove } from '../moveEvent';
 
 /**
  * 將所有角色朝其目標移動。
@@ -171,6 +170,47 @@ export async function aiMove(
     defenceEstimate.set(place.id, estimatePlaceDefence(place, defenders));
   }
 
+  // ── 移動先收集、最後一次寫入 ──
+  // 主迴圈的**每一次決策都只讀初始快照**：residentsByPlace / defenceEstimate /
+  // placeFactionMap / signalTargets 全部在迴圈前建成，迴圈內從不重讀資料庫，
+  // 也從不因前一人的移動而改變（昔日 `character.update` 立即落地，但沒有任何後續
+  // 決策去讀它——逐筆寫入對結果毫無作用，只對雲端的 round trip 有貢獻）。所以把
+  // 移動收進記憶體、回合結尾一次 UPDATE + 一次 createMany，行為逐位元組相同，
+  // 每人兩次 round trip 變成整階段兩次。
+  //
+  // ── Collect the moves, write once at the end ──
+  // Every decision in the main loop reads only the **initial snapshots**:
+  // residentsByPlace / defenceEstimate / placeFactionMap / signalTargets are all
+  // built before the loop, and the loop never re-reads the database nor can it be
+  // changed by an earlier character's move (the old `character.update` landed
+  // immediately, but no later decision ever read it — the per-move write had no
+  // effect on the outcome, only on the cloud round trips). So the moves are
+  // collected in memory and flushed once at the end — one UPDATE plus one
+  // createMany — which is byte-for-byte the same behaviour at two round trips for
+  // the whole phase instead of two per character.
+  //
+  // 事件寫進 createMany 的陣列依排序後的角色次序——與昔日逐筆建立的順序完全相同，
+  // 事件日誌的 `{ round asc, createdAt asc, id asc }` 排序照樣還原原序。
+  //
+  // The createMany's array follows the sorted character order — exactly the order the
+  // old per-move creates ran in, so the log's `{ round asc, createdAt asc, id asc }`
+  // ordering restores the same sequence.
+  //
+  // 透明寫入（不用交易）：昔日每句也各自落地，中途失敗一樣留下半套——新的暴露面
+  // 不大於舊的，而回合尚未推進，失敗的回合會整個重跑。
+  //
+  // Left outside a transaction on purpose: the old statements each landed on their
+  // own, and a mid-loop failure left a partial set then too — the new exposure is no
+  // larger, and the round has not advanced, so a failed round reruns in full.
+  type MoveRow = {
+    charId: string;
+    charName: string;
+    factionId: string | null;
+    fromPlaceId: string;
+    toPlaceId: string;
+  };
+  const moveRows: MoveRow[] = [];
+
   // 移動每個角色 / Move each character
   for (const char of sorted) {
     // 本回合出生的角色原地待命（出生回合不移動）/
@@ -198,13 +238,7 @@ export async function aiMove(
           estimateAttack(char) >=
             (defenceEstimate.get(signalTarget) ?? 0) * CONFIG.AI_ATTACK_ADVANTAGE;
         if (winnable) {
-          await prisma.character.update({
-            where: { id: char.id },
-            data: { placeId: signalTarget },
-          });
-          await recordMove({
-            worldId,
-            round,
+          moveRows.push({
             charId: char.id,
             charName: char.name,
             factionId: char.factionId,
@@ -225,13 +259,7 @@ export async function aiMove(
       for (const neighbor of neighbors) {
         const neighborFaction = placeFactionMap.get(neighbor);
         if (neighborFaction !== null && neighborFaction !== char.factionId) continue; // 跳過敵方地點 / Skip hostile places
-        await prisma.character.update({
-          where: { id: char.id },
-          data: { placeId: neighbor },
-        });
-        await recordMove({
-          worldId,
-          round,
+        moveRows.push({
           charId: char.id,
           charName: char.name,
           factionId: char.factionId,
@@ -358,13 +386,7 @@ export async function aiMove(
           .sort((a, b) => a.defence - b.defence);
         const target = viable[0]?.id;
         if (target) {
-          await prisma.character.update({
-            where: { id: char.id },
-            data: { placeId: target },
-          });
-          await recordMove({
-            worldId,
-            round,
+          moveRows.push({
             charId: char.id,
             charName: char.name,
             factionId: char.factionId,
@@ -390,13 +412,7 @@ export async function aiMove(
         );
         const next = rng.pick(nextHops);
         if (next) {
-          await prisma.character.update({
-            where: { id: char.id },
-            data: { placeId: next },
-          });
-          await recordMove({
-            worldId,
-            round,
+          moveRows.push({
             charId: char.id,
             charName: char.name,
             factionId: char.factionId,
@@ -408,5 +424,50 @@ export async function aiMove(
     }
 
     // 4. 若無目標則原地不動（不移動）/ If no target, stay put (no movement)
+  }
+
+  // ── 一次落地：合併的 placeId UPDATE + 一次 createMany ──
+  // 移動事件不經 recordMove()，因為那一行本來就讀不到批量場景要的形狀；payload
+  // 與 moveEvent.ts 的同一組欄位逐字相同（含 from === to 就不記的規則——本階段的
+  // 四個移動點全部指向不同的地點，但在這裡守約一次，規則就不會在某個未來的移動點
+  // 被遺忘）。
+  //
+  // ── Land it all at once: one merged placeId UPDATE plus one createMany ──
+  // The move events bypass recordMove(), which cannot take a batch; the payloads
+  // carry exactly the same fields as moveEvent.ts's (including its "no row when
+  // from === to" rule — none of this phase's four move sites can produce a no-op,
+  // but honouring it here keeps the rule true for any future site too).
+  if (moveRows.length > 0) {
+    const writeRows = moveRows.filter((m) => m.fromPlaceId !== m.toPlaceId);
+    if (writeRows.length > 0) {
+      const params: (string | number)[] = [];
+      const values = writeRows
+        .map((m, i) => {
+          params.push(m.charId, m.toPlaceId);
+          return `($${i * 2 + 1}::text, $${i * 2 + 2}::text)`;
+        })
+        .join(', ');
+      await prisma.$executeRawUnsafe(
+        `UPDATE "Character" AS c
+           SET "placeId" = v.pid
+           FROM (VALUES ${values}) AS v(id, pid)
+           WHERE c.id = v.id`,
+        ...params,
+      );
+      await prisma.event.createMany({
+        data: writeRows.map((m) => ({
+          worldId,
+          round,
+          type: 'CHARACTER_MOVED',
+          data: {
+            charId: m.charId,
+            charName: m.charName,
+            factionId: m.factionId,
+            fromPlaceId: m.fromPlaceId,
+            toPlaceId: m.toPlaceId,
+          },
+        })),
+      });
+    }
   }
 }

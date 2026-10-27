@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { auth, isAdmin } from '@/lib/auth';
 import { AssignAdminBodySchema } from '@/lib/validations';
+import { getSelectedWorldId } from '@/lib/worldSelect';
 import { grantAdmin, revokeAdmin } from '../../../../../server/adminAssign';
 
 export async function POST(request: Request) {
@@ -46,10 +47,16 @@ export async function POST(request: Request) {
 
   const { placeId, characterId } = bodyResult.data;
 
-  // 尋找活躍的世界 / Find the active world
-  const world = await prisma.world.findFirst({
-    where: { active: true },
-  });
+  // 目前選中的世界（cookie；無 cookie 時回退 active 世界）/
+  // The selected world (the cookie; falls back to the active world without one)
+  const worldId = await getSelectedWorldId();
+  if (!worldId) {
+    return NextResponse.json(
+      { error: 'No world found' },
+      { status: 404 }
+    );
+  }
+  const world = await prisma.world.findUnique({ where: { id: worldId } });
 
   if (!world) {
     return NextResponse.json(

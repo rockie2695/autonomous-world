@@ -53,6 +53,7 @@ import { StatsCharts, CharacterRadarHover, RADAR_AXES } from './stats-charts';
 import { DetailModal, FactionRanking, LeaderRelations } from './leader-detail';
 import { abilityTipLines, useAbilityTip } from './tooltip';
 import { RoundInspector, type RoundInspectPayload } from './RoundInspector';
+import { WorldPicker } from './WorldPicker';
 import type { RoundJobView, WorldInfo, WorldState } from './types';
 import { GM_BACKDROP, GM_BTN, GM_BTN_ACCENT, GM_BTN_DANGER, GM_CORNER_BL, GM_CORNER_BR, GM_CORNER_TL, GM_CORNER_TR, GM_FRAME, GM_HUD_CONTROLS_CLOSED, GM_HUD_CONTROLS_OPEN, GM_HUD_LEGEND, GM_KPI, GM_KPI_FIRST, GM_KPI_LABEL, GM_KPI_VALUE, GM_LEGEND, GM_LEGEND_ITEM, GM_MODAL, GM_MODAL_PHOTO, GM_MODAL_VEIL, GM_PANEL, GM_PHOTO, GM_RAIL, GM_SKEL, GM_STAT, GM_STAT_LABEL, GM_STAT_VALUE, GM_STRIP, GM_STRIP_INLINE, GM_STRIP_PHOTO, GM_STRIP_VEIL, GM_TIMELINE, GM_TITLE, GM_VEIL } from './styles';
 
@@ -831,6 +832,8 @@ export default function GamePage() {
             </Ic>
           </button>
 
+          <WorldPicker isAdmin={isAdmin} />
+
           <NextRoundButton
             isAdmin={isAdmin}
             // 冪等鍵必須是**世界的真實下一回合**（worldInfo.currentRound），不是畫面
@@ -1158,6 +1161,7 @@ export default function GamePage() {
                 characters={worldState?.characters ?? []}
                 roads={worldState?.roads ?? []}
                 places={worldState?.places ?? []}
+                round={round}
                 onClose={closePopup}
                 canGoBack={popupStack.length > 1}
                 onBack={popupBack}
@@ -1499,12 +1503,16 @@ function MapSidePanel({
                 不需要靠 `h-full` 的百分比解析（百分比對著 flex 佈局求值在舊版
                 Safari 上不穩）。其餘分頁維持 `flex: 0 1 auto`（內容多高就多高），
                 容器照樣用 overflow-y-auto 捲它們 —— 兩種分頁在同一個容器裡共存。
+                （地點詳情在 Oct 2026 加了 overflow-y 後也加入了前一套：標頭固定
+                內文自捲——讀者要的是彈窗自己帶 scrollbar，而不是外層箱子在捲。）
                 The content box: itself a definite flex item of this motion.div (flex-1 +
                 min-h-0), so a full-height tab can take the rest with plain `flex-1`
                 instead of a percentage `h-full` (percentages resolving against a flex
                 layout are unreliable on older Safari). Other tabs keep their content
                 height and the container scrolls them exactly as before — both kinds
-                coexist in one container. */}
+                coexist in one container. (The place detail joined the first kind in
+                Oct 2026 when the popup gained overflow-y: header pinned, body scrolls
+                — the reader asked for the popup's own scrollbar, not the outer box's.) */}
             <div className="flex-1 min-h-0 flex flex-col overflow-y-auto ds-gm-scroll p-3 pt-0">
               {loading ? <PanelSkeleton /> : children}
             </div>
@@ -1598,8 +1606,27 @@ function NextRoundButton({
   const [error, setError] = useState<string | null>(null);
   // 背景回合工作的進度（跑到哪個階段了）/ The background job's progress
   const [job, setJob] = useState<RoundJobView | null>(null);
+  // ── 持久化旗標（World.roundRunning 的鏡像）──
+  // 工作狀態住在 globalThis（行程重啟就沒了），旗標在資料庫裡。重整頁面後本地
+  // 沒有任何工作可言，但**別的分頁／前一次行程**留下的執行仍在跑：掛載時查一次，
+  // 之後每次輪詢都同步——旗標 true 就鎖按鈕，輪詢入口同時是看門狗。
+  // ── The persisted flag (a mirror of World.roundRunning) ──
+  // The job state lives on globalThis (gone on restart); the flag lives in the
+  // database. After a page refresh this tab holds no job, but a run left by
+  // **another tab or the previous process** may still be executing: check once on
+  // mount, then on every poll — flag true locks the button, and polling doubles as
+  // the watchdog's entry point.
+  const [dbRunning, setDbRunning] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const queryClient = useQueryClient();
+
+  /** GET /api/admin/run-round 的回應形狀 / The GET /api/admin/run-round payload shape */
+  interface RunRoundStatus {
+    job: RoundJobView | null;
+    currentRound: number;
+    roundRunning?: boolean;
+    roundStalled?: boolean;
+  }
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) {
@@ -1618,22 +1645,88 @@ function NextRoundButton({
     try {
       const res = await apiFetch('/api/admin/run-round');
       if (!res.ok) return;
-      const data = await res.json();
-      const current = (data.job ?? null) as RoundJobView | null;
+      const data = (await res.json()) as RunRoundStatus;
+      const current = data.job ?? null;
       setJob(current);
-      if (current && current.status === 'running') return;
+      setDbRunning(!!data.roundRunning);
+      if (current?.status === 'running' || data.roundRunning) return;
       stopPolling();
       loadingRef.current = false;
       setLoading(false);
-      // job.round 是**剛執行完**的回合；fallback 是「我以為的下一回合 − 1」，同一個語義
-      // job.round is the round that **just ran**; the fallback is "the round I
-      // believed was next" − 1, the same semantics
-      onSuccess(current?.round ?? nextRound - 1);
+      if (current?.status === 'failed') {
+        // 工作自己回報失敗：把原因給讀者看，而不是無聲解鎖 /
+        // The job reported its own failure: show why rather than unlocking silently
+        setError(current.error ?? 'Failed');
+        return;
+      }
+      if (current?.status === 'done') {
+        // job.round 是**剛執行完**的回合 / job.round is the round that **just ran**
+        onSuccess(current.round);
+      }
+      // current === null 且旗標也清了：工作在另一個行程收尾（看門狗自癒）。
+      // 沒有任何「剛跑完的回合」可跳，靜默解鎖即可。
+      // current === null with the flag cleared: the job finished in another process
+      // (the watchdog healed). There is no just-run round to jump to; a silent
+      // unlock is right.
     } catch {
       // 網路抖動不是失敗：繼續輪詢就好 /
       // A network blip is not a failure: keep polling.
     }
-  }, [nextRound, onSuccess, stopPolling]);
+  }, [onSuccess, stopPolling]);
+
+  // 間隔透過 ref 呼叫**最新的** poll：poll 依賴 onSuccess（呼叫端的 inline arrow，
+  // 每次 render 都是新身分），把 startPolling 做成穩定靠這層轉手——ref 的寫入在
+  // effect 裡（render 期間碰 ref 是 lint 錯誤），startPolling 本身依賴穩定的
+  // stopPolling，掛載 effect 不會因此重跑。
+  // The interval calls the **latest** poll through a ref: poll depends on onSuccess
+  // (the call site's inline arrow, a new identity every render), and this hop is
+  // what keeps startPolling stable — the ref write happens in an effect (touching
+  // refs during render is a lint error), startPolling depends only on the stable
+  // stopPolling, so the mount effect never re-runs because of it.
+  const pollFnRef = useRef<() => void>(stopPolling);
+  useEffect(() => {
+    pollFnRef.current = poll;
+  }, [poll]);
+
+  /** 開始輪詢（先停掉舊的間隔）/ Start polling (any old interval first) */
+  const startPolling = useCallback(() => {
+    stopPolling();
+    pollRef.current = setInterval(() => pollFnRef.current(), 1000);
+  }, [stopPolling]);
+
+  // 掛載即查一次：重整後若 DB 旗標還掛著（另一個分頁或前一個行程留下的回合），
+  // 按鈕**立刻**鎖上並接上進度輪詢，而不是等使用者點了一次之後才開始同步。
+  // 查完發現沒有在跑 → 什麼都不做（不導航——本來就停在最新回合的解鎖狀態）。
+  // Check once on mount: if the DB flag still stands after a refresh (a round left
+  // by another tab or the previous process), the button locks **immediately** and
+  // adopts the progress polling, instead of syncing only after the user's first
+  // click. Finding nothing running → do nothing (no navigation — the unlocked state
+  // on the latest round is where we already are).
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/admin/run-round');
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as RunRoundStatus;
+        if (cancelled) return;
+        const running = data.roundRunning || data.job?.status === 'running';
+        if (!running) return;
+        setJob(data.job ?? null);
+        setDbRunning(true);
+        loadingRef.current = true;
+        setLoading(true);
+        startPolling();
+      } catch {
+        // 查不到就算了：下一次點擊時 POST 會把現況帶回來 /
+        // If the probe fails, so be it: the next click's POST reports the real state
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, startPolling]);
 
   const handleRun = async () => {
     if (!isAdmin || loadingRef.current) return;
@@ -1667,10 +1760,8 @@ function NextRoundButton({
         //    the right key, and say "stale view" rather than blaming the click.
         if (res.status === 409 && data.job) {
           setJob(data.job as RoundJobView);
-          stopPolling();
-          pollRef.current = setInterval(() => {
-            void poll();
-          }, 1000);
+          setDbRunning(true);
+          startPolling();
           return;
         }
         if (res.status === 409) {
@@ -1684,12 +1775,10 @@ function NextRoundButton({
         return;
       }
       setJob((data.job ?? null) as RoundJobView | null);
+      setDbRunning(true);
       // 回合在背景跑，請求立刻就回來了 → 開始輪詢進度 /
       // The round runs in the background and the request answered at once -> poll.
-      stopPolling();
-      pollRef.current = setInterval(() => {
-        void poll();
-      }, 1000);
+      startPolling();
     } catch {
       setError('Network error');
       loadingRef.current = false;
@@ -1701,18 +1790,23 @@ function NextRoundButton({
     <div className="relative">
       <button
         onClick={handleRun}
-        disabled={!isAdmin || loading}
+        disabled={!isAdmin || loading || dbRunning}
         // 原本是「基底 + 條件式 accent 疊加」。疊加在單一 utilities 層不可靠，
         // 所以改成二選一的完整按鈕。停用游標交給 GM_BTN 的 disabled: 變體——
-        // 鈕的停用條件恰好就是 !isAdmin || loading，行為與原式完全相同。
+        // 鈕的停用條件恰好就是 !isAdmin || loading || dbRunning，行為與原式相同。
+        // dbRunning（別的分頁／前一個行程留下的回合）也算停用：旗標掛著時按鈕
+        // 必須鎖，這正是持久化旗標存在的理由。
         // Was base-plus-conditional-accent. Layering is unreliable in one
         // utilities layer, so this picks one complete button. The disabled
         // cursor rides GM_BTN's disabled: variant, whose condition matches the
-        // button's own disabled={!isAdmin || loading} exactly.
-        className={`${!isAdmin ? GM_BTN : GM_BTN_ACCENT} px-3 py-1.5 text-xs font-display tracking-wider`}
+        // button's own disabled={!isAdmin || loading || dbRunning}. dbRunning
+        // (a round left by another tab or the previous process) disables too:
+        // while the flag stands the button must stay locked — that is exactly
+        // why the persisted flag exists.
+        className={`${!isAdmin || dbRunning ? GM_BTN : GM_BTN_ACCENT} px-3 py-1.5 text-xs font-display tracking-wider`}
         title={isAdmin ? t('admin.runRound') : t('game.adminOnly')}
       >
-        {loading ? (
+        {loading || dbRunning ? (
           <Ic className="w-3.5 h-3.5 animate-spin">
             <path d="M12 3a9 9 0 1 0 9 9" />
           </Ic>
@@ -2749,6 +2843,7 @@ function PlaceDetail({
   characters,
   roads,
   places,
+  round,
   onClose,
   canGoBack,
   onBack,
@@ -2760,6 +2855,8 @@ function PlaceDetail({
   characters: WorldState['characters'];
   roads: WorldState['roads'];
   places: WorldState['places'];
+  /** 正在顯示的回合（與快照同一回合，冷卻的剩餘數以它計算）/ The displayed round (the same one as the payload; the cooldown's remaining count is measured against it) */
+  round: number;
   onClose: () => void;
   canGoBack: boolean;
   onBack: () => void;
@@ -3052,6 +3149,29 @@ function PlaceDetail({
   // 管理此地點的行政官（可能人在他處）/ The place's administrator (may be elsewhere)
   const adminChar = characters.find((c) => c.id === place.administratorId) ?? null;
 
+  // 行政官冷卻：這個地方為什麼還沒有（或剛換過）行政官。錨點 `adminChangedRound`
+  // 與 `round` 來自**同一份 payload**（同一回合的快照或同一次即時查詢），所以剩餘
+  // 回合數在歷史回合上也是對的。舊快照沒有這個欄位（`undefined`）→ 視同無錨點、
+  // 不顯示列——那是「這份歷史資料不帶此欄位」，不是「從未異動」。
+  //
+  // The administrator cooldown: why this place has no administrator yet, or just
+  // changed one. The anchor `adminChangedRound` and `round` come from the **same
+  // payload** (one round's snapshot, or one live query), so the remaining count is
+  // right even on historical rounds. Older snapshots lack the field (`undefined`) →
+  // treated as no anchor and the row is hidden — that means "this historical payload
+  // carries no such field", not "never changed".
+  const adminAnchor = place.adminChangedRound ?? null;
+  // 冷卻是否仍然蓋住 AI 指派路徑（與 `isAdminChangeCoolingDown` 同一條式子；客戶端
+  // 不 import server 模組，所以這裡寫同一個比較。兩邊用的是同一個 CONFIG 值）/
+  // Whether the cooldown still blocks the AI assignment paths (the same expression as
+  // `isAdminChangeCoolingDown`; the client cannot import the server module, so the
+  // comparison is restated here — both read the same CONFIG value)
+  const adminRoundsLeft =
+    adminAnchor === null
+      ? null
+      : CONFIG.ADMIN_CHANGE_COOLDOWN_ROUNDS - (round - adminAnchor);
+  const adminCooling = adminRoundsLeft !== null && adminRoundsLeft > 0;
+
   // 這個地方每回合實際給行政官多少。**直接呼叫真正的分配函式**，而不是在 UI 裡重寫一遍
   // 比例：沒有行政官就一分不發（新規則），若這裡顯示「40%」會讓人以為他照樣有錢。
   // 預覽與模擬若各寫一份，兩者遲早會對不上。
@@ -3078,6 +3198,17 @@ function PlaceDetail({
     place.administratorId
   );
   const othersHere = splitRecipients.length;
+  // **實際的餅**：總收入先乘行政官的 jing 倍率（與模擬同一份 placeOutput）。彈窗
+  // 的「總收入」列印的是**基礎**收入，下面的推導列說明它如何變成產出——分成若
+  // 直接對著基礎收入印，+2 與 +5 的加總就會「不等於 10」，讀者以為錢憑空少了。
+  // The **actual pie**: the total income scaled by the administrator's jing
+  // multiplier (the same placeOutput as the simulation). The 總收入 row prints the
+  // **base** income and the derivation line under it explains how it becomes the
+  // output — printing the split against the base alone makes +2 and +5 fail to
+  // sum to 10, and the reader concludes gold simply vanished.
+  const outputGold = adminChar
+    ? placeOutput(place.market, adminChar.jing)
+    : placeIncome(place.market);
   const placeSplit = adminChar
     ? splitIncome(
       // 與模擬同一份規則：**整塊餅**先乘行政官的 jing 倍率（地方產出），分配階段
@@ -3086,7 +3217,7 @@ function PlaceDetail({
       // administrator's jing first (the place's output), and the split no longer
       // multiplies the administrator again. A dead king does not count (the
       // simulation alive-filters).
-      placeOutput(place.market, adminChar.jing),
+      outputGold,
       kingCharOfPlace && kingCharOfPlace.alive ? kingCharOfPlace.jing : null,
       adminChar.jing,
       othersHere
@@ -3113,7 +3244,22 @@ function PlaceDetail({
 
   return (
     <motion.div
-      className={`relative w-full ${GM_MODAL} overflow-hidden`}
+      className={`relative w-full ${GM_MODAL} overflow-hidden flex flex-1 min-h-0 flex-col`}
+      // 彈窗用**撐滿面板高度**的結構（與將領數／事件日誌同一套）：標頭固定，
+      // 內文 flex-1 + min-h-0 + overflow-y-auto 自己捲。昔日本分支維持內容高度、
+      // 由 MapSidePanel 的外層容器捲動——外層照樣捲得到，但讀者要的是**彈窗自己**
+      // 帶一條 scrollbar，而不是整個分頁箱在捲；外面加捲也讓標頭跟著內文滾出視線。
+      // 與列表分支（沒有選中地點時）的 `flex flex-1 min-h-0 flex-col` 同一個做法：
+      // 兩個分支在同一個 flex 容器裡是同一種東西。
+      //
+      // The popup joins the full-height tab structure (the same one as the leader /
+      // event tabs): the header stays put and the body scrolls itself with
+      // flex-1 + min-h-0 + overflow-y-auto. The selected branch used to keep its
+      // content height and be scrolled by MapSidePanel's outer container — reachable,
+      // but the reader asked for the popup **itself** to carry a scrollbar, and an
+      // outer scroll also rolls the imagery header out of view along with the body.
+      // Same structure as the list branch (nothing selected), so both branches are
+      // one kind of thing inside the same flex container.
       // 錄影腳本等這個元素來確認「地點詳情真的顯示出來了」。它以前是一個浮動彈出視窗，
       // 錄影腳本等的是 `div.fixed.z-50`；改成側欄分頁內容之後那個選擇器就永遠配不上，
       // 於是腳本只印一行 WARN、少拍一段影片，而且沒有人會注意到。
@@ -3128,8 +3274,11 @@ function PlaceDetail({
       exit={{ opacity: 0, x: 28 }}
       transition={{ duration: 0.2, ease: 'easeOut' }}
     >
-      {/* 影像標頭 / Imagery header */}
-      <div className="relative h-24 overflow-hidden">
+      {/* 影像標頭 / Imagery header。flex 容器的 column item——`shrink-0` 對固定高度
+          的標頭是顯式的（min-height:auto 反正也擋得住捲動縮短，寫明不靠它）/
+          A column flex item — `shrink-0` makes the fixed height explicit (min-height:auto
+          would protect it anyway; state it rather than lean on it) */}
+      <div className="relative h-24 overflow-hidden shrink-0">
         <Image
           src="/space/cosmic-cliffs.jpg"
           alt=""
@@ -3176,7 +3325,12 @@ function PlaceDetail({
         </div>
       </div>
 
-      <div className="p-4 space-y-4">
+      {/* 內文：吃滿剩下的高度，自己捲（`ds-gm-scroll` 同一條 scrollbar 樣式）。
+          底部 padding 來自 p-4，捲到底時最後一列不再貼著邊框 /
+          The body: takes the remaining height and scrolls itself (`ds-gm-scroll`,
+          the same scrollbar styling). p-4 carries the bottom padding, so the last
+          row never sits against the border when scrolled to the end */}
+      <div className="flex-1 min-h-0 overflow-y-auto ds-gm-scroll p-4 space-y-4">
         {/* 相連地點 / Linked Places */}
         {linkedPlaces.length > 0 && (
           <div>
@@ -3499,15 +3653,45 @@ function PlaceDetail({
               {placeIncome(place.market)}
             </span>
           </div>
+          {/* 推導列：基礎收入怎麼變成實際的餅。倍率來自行政官的 jing（jingIncomeMultiplier，
+                與模擬同一份 placeOutput），沒有行政官時不印——沒有倍率可言，推導列只會
+                讀成雜訊。這一列是「分成加總 ≠ 總收入」的解釋：讀者需要看到 10 × 0.7 = 7
+                才不會以為錢憑空少了。
+                The derivation line: how the base income becomes the actual pie. The
+                multiplier comes from the administrator's jing (jingIncomeMultiplier, the
+                same placeOutput as the simulation) and is printed only when an
+                administrator exists — with none there is no multiplier and the line
+                would be noise. This is the explanation for "the split rows do not sum
+                to the total income": seeing 10 × 0.7 = 7 stops the reader concluding
+                gold vanished. */}
+          {adminChar && placeSplit && (
+            <div className="-mt-1 flex items-baseline justify-end gap-1 text-[11px] text-gray-500 tabular-nums">
+              <span>
+                {t('place.outputFormula', {
+                  income: String(placeIncome(place.market)),
+                  mult: outputMultiplier.toFixed(2),
+                  jing: String(adminChar.jing),
+                  output: String(outputGold),
+                })}
+              </span>
+            </div>
+          )}
           {/* 依新的分配規則，沒有行政官就誰都不拿，所以這裡必須寫明實際結果而不是比例 /
                 Under the new split nobody is paid without an administrator, so this states the
                 outcome rather than the nominal share */}
           {/* 本回合分成：**每個人**在此地拿多少（君王與行政官可能人在別處，錢仍來自
                 這裡；其他人在場者平分，餘數留在地方上——與模擬同一份 splitIncome）。
+                每列帶**有效比例**（splitIncome.portions，缺位吸收算在內）：君王缺席時
+                行政官是 70%、沒有其他人時他把「其他人」的 30% 也吸掉——印死 40% 會讓
+                加總對不上，讀者以為帳目有誤。
                 This round's split: **everyone's** take here (the king and the
                 administrator may be elsewhere, but their gold still comes from this
                 place; the others present split their bucket evenly with the remainder
-                staying put — the same splitIncome as the simulation). */}
+                staying put — the same splitIncome as the simulation). Each row carries
+                the **effective** portion (splitIncome.portions, absorption included):
+                with no king the administrator is 70%, with nobody else he absorbs the
+                others' 30% too — a hard 40% would fail to sum, reading as a ledger
+                error. */}
           {adminLeaderShare === null ? (
             <div className="flex items-baseline justify-between gap-2 text-base">
               <span className="text-gray-400">{t('place.roundSplit')}</span>
@@ -3528,6 +3712,9 @@ function PlaceDetail({
                   </span>
                   <span className="font-display tabular-nums text-amber-300">
                     +{placeSplit.king}
+                    <span className="ml-0.5 text-[11px] text-gray-500">
+                      {t('place.sharePct', { pct: String(Math.round(placeSplit.portions.king * 100)) })}
+                    </span>
                   </span>
                 </div>
               )}
@@ -3541,7 +3728,29 @@ function PlaceDetail({
                   </span>
                   <span className="font-display tabular-nums text-amber-300">
                     +{placeSplit.admin}
+                    <span className="ml-0.5 text-[11px] text-gray-500">
+                      {t('place.sharePct', { pct: String(Math.round(placeSplit.portions.admin * 100)) })}
+                    </span>
                   </span>
+                </div>
+              )}
+              {splitRecipients.length > 0 && placeSplit && (
+                <div className="flex items-baseline justify-between gap-2 text-[11px] text-gray-500">
+                  <span>
+                    {t('place.othersBucket', {
+                      count: String(splitRecipients.length),
+                      amount: String(perOther * splitRecipients.length),
+                      pct: String(Math.round(placeSplit.portions.others * 100)),
+                    })}
+                  </span>
+                  {perOther * splitRecipients.length < placeSplit.others && (
+                    // floor 的餘數留在地方上——印出來，加總才對得回去 /
+                    // The floor's remainder stays with the place — print it, so the
+                    // arithmetic reconciles
+                    <span className="text-gray-600">
+                      {t('place.remainderUnpaid', { amount: String(placeSplit.others - perOther * splitRecipients.length) })}
+                    </span>
+                  )}
                 </div>
               )}
               {splitRecipients.map((c) => (
@@ -3579,6 +3788,32 @@ function PlaceDetail({
             <span className="text-base text-gray-400">{t('place.noAdmin')}</span>
           )}
         </div>
+
+        {/* 行政官冷卻。錨點存在才顯示（`null` = 從未異動，`undefined` = 舊快照不帶此
+            欄位）——兩種情況都沒有冷卻可言，多一列「沒有冷卻」只是雜訊。冷卻中的
+            數字用分配色（cyan），冷卻已過變回灰：讀者掃一眼就知道哪邊是「還被封著」
+            / The administrator cooldown. Shown only when an anchor exists (`null` =
+            never changed, `undefined` = an old snapshot without the field) — neither
+            state has a cooldown to speak of, and a "no cooldown" row is noise. A
+            cooling value takes the accent colour (cyan) and drops back to grey once
+            over, so a glance separates "still locked" from "free". */}
+        {adminAnchor !== null && (
+          <div className="flex items-center justify-between p-2.5 rounded-lg bg-white/5 border border-white/10">
+            <span className="text-base text-gray-400">{t('place.adminCooldown')}</span>
+            <span
+              className={`text-sm font-display tabular-nums shrink-0 ${adminCooling ? 'text-cyan-300' : 'text-gray-500'}`}
+            >
+              {adminCooling
+                ? t('place.adminCooling', {
+                    rounds: String(adminRoundsLeft),
+                    round: String(adminAnchor).padStart(4, '0'),
+                  })
+                : t('place.adminCooled', {
+                    round: String(adminAnchor).padStart(4, '0'),
+                  })}
+            </span>
+          </div>
+        )}
 
         {/* 駐紮將領 / Stationed Characters */}
         <div>

@@ -11,6 +11,7 @@
 - ⚡ **即時模擬** — 每回合自動計算所有事件
 - ♾️ **無限世界** — 沒有終點，只有持續的變化
 - 🎯 **純觀測** — 觀看與分析，無需玩家操作
+- 🪐 **多世界** — 所有登入使用者都能從頁首切換世界；管理員可以建立新世界（各自跑各自的回合）
 
 ## 技術架構
 
@@ -81,6 +82,7 @@ autonomous-world/
 │   │   ├── api/
 │   │   │   ├── auth/
 │   │   │   │   └── [...nextauth]/ # Auth.js 路由處理器
+│   │   │   ├── worlds/            # GET /api/worlds（列表）· POST /api/worlds/select（cookie）
 │   │   │   ├── world/             # 世界資料 API 端點
 │   │   │   │   ├── current/       # GET /api/world/current
 │   │   │   │   ├── state/         # GET /api/world/state?round=N
@@ -90,11 +92,14 @@ autonomous-world/
 │   │   │   ├── public/            # 免登入唯讀端點（僅供首頁）
 │   │   │   │   └── world/         # GET /api/public/world
 │   │   │   └── admin/             # 管理員專屬 API 端點
-│   │   │       ├── run-round/     # POST /api/admin/run-round
+│   │   │       ├── run-round/     # POST /api/admin/run-round（202 + GET 進度；body/?worldId= 可指定任何世界）
+│   │   │       ├── worlds/        # POST /api/admin/worlds（建立）· DELETE（刪除世界）
+│   │   │       │   └── reset/     # POST /api/admin/worlds/reset（就地重置世界）
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
 │   │   │       └── assign-admin/  # POST /api/admin/assign-admin
 │   │   ├── game/                  # 主遊戲頁面 — page.tsx 負責協調，EventLog.tsx、
-│   │   │                          # stats-charts.tsx、leader-detail.tsx、types/icons/styles 為其餘模組
+│   │   │                          # stats-charts.tsx、leader-detail.tsx、WorldPicker.tsx、
+│   │   │                          # types/icons/styles 為其餘模組
 │   │   ├── layout.tsx             # 根佈局（含 QueryProvider）
 │   │   ├── page.tsx               # 首頁
 │   │   └── globals.css            # 全域樣式
@@ -107,6 +112,7 @@ autonomous-world/
 │       ├── gameConfig.ts          # 所有可調整的遊戲數值
 │       ├── rng.ts                 # 可複製的隨機數生成器 (mulberry32)
 │       ├── snapshot.ts            # 快照壓縮/解壓縮（gzip）
+│       ├── worldSelect.ts         # 目前選中的世界（cookie aw_world → 回退 active 世界）
 │       ├── territory.ts           # 領地形力場（純邏輯，不碰 DOM）
 │       ├── spaceGalaxy.ts          # 背景銀河：核、星雲、星點（純邏輯）
 │       ├── spaceFog.ts             # 銀河之上、地圖之下的暖色星塵，緩慢漂移（純邏輯）
@@ -132,6 +138,9 @@ autonomous-world/
 │                                  # （事件日誌與統計圖表位於 src/app/game/）
 ├── server/
 │   ├── runRound.ts                # 主遊戲迴圈協調器（14 階段 + 佈局 + 快照）
+│   ├── roundJob.ts                # 回合＝背景工作（202 + 輪詢；World.roundRunning 旗標
+│   │                              # + 5 分鐘看門狗 reconcileRoundRunFlag）
+│   ├── initWorld.ts               # 唯一的世界初始化（seed / reset / create 共用）
 │   ├── adminAssign.ts             # grantAdmin/revokeAdmin — 共用的行政官任命規則（野心 + 冷卻）
 │   ├── graph/
 │   │   └── layout.ts              # ForceAtlas2 佈局計算
@@ -166,8 +175,12 @@ autonomous-world/
 - 角色、勢力、地方會隨模擬增長
 
 ### 世界
-- 單一共享世界，`active = true` 標記當前世界
-- 所有玩家觀察同一個世界
+- **多世界。**「我現在在看哪個世界」存在每個 session 的 cookie 裡（`aw_world`，無 cookie
+  時回退 active 世界），**所有登入使用者都能從頁首選擇器切換** —— 只有*建立世界*
+  （`POST /api/admin/worlds`，管理員限定，與 seed 共用同一份 `initWorld`）和*跑回合*是
+  管理員限定。建立成功後直接落在新世界上。
+- `World.active` 標記**預設**世界（沒有選擇 cookie 的訪客落在它身上）——不再是互斥開關；
+  reset-world 保留「重置＝新世界成為唯一預設」的語義。
 - 沒有勝利條件 — 遊戲無限運行
 
 ### 角色
@@ -415,10 +428,15 @@ autonomous-world/
 
 ### 公開（需要認證）
 
+每個讀取路由都透過**選中世界的 cookie** 解析世界（`src/lib/worldSelect.ts`），無 cookie
+時回退 active 世界——見上方「世界」一節。
+
 | 方法 | 端點 | 說明 |
 |------|------|------|
-| GET | `/api/world/current` | 取得當前世界資訊 |
-| GET | `/api/world/state?round=N` | 取得特定回合的完整狀態 |
+| GET | `/api/worlds` | 列出所有世界 + 呼叫者的 `selectedId` |
+| POST | `/api/worlds/select` | 選擇世界（寫入 `aw_world` cookie） |
+| GET | `/api/world/current` | 取得**選中**世界的資訊 |
+| GET | `/api/world/state?round=N` | 取得特定回合的完整狀態（帶 `roundRunning` 旗標） |
 | GET | `/api/world/rounds` | 列出可用回合 |
 | GET | `/api/world/events?round=N` | 取得特定回合的事件 |
 | GET | `/api/world/stats?from=A&to=B` | 取得圖表資料 |
@@ -440,9 +458,26 @@ autonomous-world/
 
 | 方法 | 端點 | 說明 |
 |------|------|------|
-| POST | `/api/admin/run-round` | 執行下一回合 |
-| POST | `/api/admin/reset-world` | 建立新世界 |
+| POST | `/api/admin/run-round` | 執行下一回合——**背景工作**：立刻回 `202`；以 `GET` 輪詢進度。body 可帶 `worldId` 對**任何**世界執行 |
+| GET | `/api/admin/run-round` | 工作進度 + `currentRound` + `roundRunning`（`?worldId=` 可查任何世界） |
+| POST | `/api/admin/worlds` | 建立額外的世界（共用 `initWorld`；cookie 落在新世界） |
+| DELETE | `/api/admin/worlds` | 刪除世界（`{ worldId, confirm: true }`；最後一個會被拒絕） |
+| POST | `/api/admin/worlds/reset` | 就地重置指定世界（同一個 id，歷史歸零，回到第 1 回合） |
+| POST | `/api/admin/reset-world` | 重置：建立一個成為唯一預設的新世界 |
 | POST | `/api/admin/assign-admin` | 指派行政官 |
+
+**下一回合按鈕重整後不丟狀態。** 執行狀態持久化在世界身上（`World.roundRunning` +
+`roundStartedAt`），重整後的頁面立刻鎖住按鈕並接上進行中工作的進度。看門狗
+（`reconcileRoundRunFlag`）會清掉超過 `ROUND_RUNNING_WATCHDOG_MS`（5 分鐘）仍未清除、
+而行程裡沒有 running 工作的旗標——這是伺服器重啟丟掉記憶體工作後的標準復原路徑。
+
+**關掉瀏覽器不會停止回合。** POST 先回 202，回合以 void 脫鉤的工作在伺服器行程裡跑——
+處理器不讀 `request.signal`，客端突然斷線對回合零影響。重新開啟頁面後透過持久化旗標
+接回進行中的工作（由 `server/roundJob.detach.test.ts` 守住）。
+
+**重置與刪除都是兩段式確認。** 頁首選擇器的 ⟲（就地重置選中的世界——同一個 id、歷史
+歸零、回到第 1 回合）與 🗑（刪除世界；最後一個會被拒絕）都先展開行內確認面板再執行，
+而且該世界有回合正在跑時都回 409。
 
 ## 開發指南
 
@@ -656,12 +691,12 @@ any later code path repair this?**
 - `economy` 的**整階段**發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以寫到一半
   崩潰，不會有任何一筆錢移動到別處：部分世界的金幣就是消失了，而沒有任何階段會對帳（每
   個金額都是算出來的，不是從某個總帳扣的，所以無從對回）。整階段一筆交易同時解決了成本：
-  舊制每地點一筆，一回合數百次提交。
+  交易裡只有**三句話**（見下一節）。
   The economy phase's payout is atomic because `splitIncome` is exact: a half-written phase
   moves the missing gold nowhere - part of the world's gold simply ceases to exist, and no
   later phase reconciles totals (every amount is computed, not derived from a stored total,
   so there is nothing to reconcile against). Batched into one transaction it also costs less:
-  the old per-place version committed hundreds of times a round.
+  the transaction holds exactly **THREE statements** (see the next section).
 
 **刻意排除 / Deliberately excluded**
 
@@ -673,20 +708,41 @@ any later code path repair this?**
 `prisma` 會逃出這筆交易，不會隨之回滾——這個輔助存在的理由就是把這個陷阱寫在程式碼裡。
 
 逾時是 `TX_TIMEOUT_MS`（**60 秒**，2026-10 由 20 秒提高），比 Prisma 預設的 5 秒寬——
-一個地點的發放就可能超過 5 秒，而 economy 現在是**整階段一筆交易**，時鐘覆蓋最多
-2000 個地點 × 每地 5–8 次依序寫入（見下一節）。
+曾是整階段一筆交易、時鐘覆蓋 2000 個地點 × 每地 5–8 次依序寫入；現在交易裡只剩三句話
+（見下一節），60 秒是餘裕。
 
-### 經濟階段只提交一次（批量交易）/ The economy phase commits once (batched transaction)
+### 經濟階段只提交一次，交易裡只有三句話 / The economy phase commits once, in three statements
 
-**每個地點一筆交易改成整階段一筆。** 舊制對每個地點各開一筆 `inTransaction`：一回合數百
-次提交，保護的卻是同一條逐地點成立的不變量（君王／行政官／其他人的三份加總剛好等於
-`income`）。交易的成本是 round trip，不變量又不依賴「一次提交」——所以現在整階段的發錢、
-徵兵、購兵與事件全部落在同一筆交易裡，2000 個地點的世界仍然只提交一次。
-One transaction **per place** became one transaction **per phase**. The old rule opened an
-`inTransaction` around each place — hundreds of commits a round protecting the same
-per-place invariant (king / administrator / others summing exactly to `income`). A
-transaction costs a round trip and the invariant does not need a commit, so the whole
-phase's writes now share one transaction: a 2000-place world still commits once.
+**每個地點一筆交易改成整階段一筆，而且交易裡只有三句話**（Oct 2026）：一段合併的角色
+`UPDATE ... FROM (VALUES ...)`（每個角色的金幣／兵力淨增量一次套上）、一段合併的地方
+`UPDATE`（駐軍招募），與一次 `event.createMany`（全部 INCOME 與 TROOPS_BOUGHT，
+**陣列順序＝模擬順序**——cuid 由用戶端按序產生，事件日誌的
+`{ round asc, createdAt asc, id asc }` 排序因此仍還原原序）。
+One transaction **per place** became one transaction **per phase**, and the transaction holds
+only **THREE statements** (Oct 2026): one merged characters `UPDATE ... FROM (VALUES ...)`,
+one merged places `UPDATE` (garrison recruits), and one `event.createMany` of every INCOME
+and TROOPS_BOUGHT row (**array order = simulation order** — cuid ids are client-generated
+monotonic, so the log's ordering restores the original sequence).
+
+**事件裡的「之後餘額」來自模擬帳本，不是寫入回傳值。** 金額全部在計算時已知；舊的逐列
+`update().gold` 唯一提供的是事件要印的餘額。記憶體帳本從讀取快照播種，按昔日逐筆更新
+**同一個迴圈順序**累加每筆增量，逐位元組重現同一組數字。購兵決策照舊讀快照 `char.gold`。
+**The events' `*After` balances come from a simulated ledger, not a write's return value.**
+The amounts are all known at computation time; the old per-row `update().gold` provided only
+the after-balance the events print. The in-memory ledger seeds from the read snapshots and
+accumulates every increment **in the same loop order** the old sequential updates applied
+them, reproducing the numbers byte-for-byte. Purchase decisions still read the snapshot
+`char.gold`.
+
+**同批合併的還有 aiMove 與 loyaltyCheck。** aiMove 的每個決策只讀迴圈前的快照，所以移動
+先收進 `moveRows`、階段結尾一次合併 placeId UPDATE + 一次 `CHARACTER_MOVED` createMany
+（不包交易——與昔日逐筆各自落地相同）。loyaltyCheck 則用一次 `findMany` 把所有君王的
+忠誠標籤抓成 map。
+**aiMove and loyaltyCheck got the same treatment.** aiMove's decisions read only pre-loop
+snapshots, so its moves are collected into `moveRows` and flushed once at the end of the
+phase: one merged placeId UPDATE plus one `CHARACTER_MOVED` createMany (not in a
+transaction — the old per-statement non-atomicity). `loyaltyCheck` fetches all kings' loyalty
+tags with one `findMany` into a map.
 
 **計算順序完全沒變，這不是併發化。** 交易只包住 DB 寫入；收益、購買批次與每一次
 `rng.float` 的抽取順序與昔日逐一相同，同一個種子仍然長出同一個世界。把寫入改成併發會讓

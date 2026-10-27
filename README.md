@@ -13,6 +13,7 @@ Autonomous World is a browser-based simulation game where hundreds of AI charact
 - ⚡ **Real-time Simulation** — Each round calculates all events automatically
 - ♾️ **Infinite World** — No endpoint, only continuous change
 - 🎯 **Purely Observational** — Watch and analyze, no player actions needed
+- 🪐 **Multiple Worlds** — Every signed-in user can switch worlds from the header; admins create new ones (each world runs its own rounds)
 
 ## Tech Stack
 
@@ -83,6 +84,7 @@ autonomous-world/
 │   │   ├── api/
 │   │   │   ├── auth/
 │   │   │   │   └── [...nextauth]/ # Auth.js route handler
+│   │   │   ├── worlds/            # GET /api/worlds (list) · POST /api/worlds/select (cookie)
 │   │   │   ├── world/             # World data API endpoints
 │   │   │   │   ├── current/       # GET /api/world/current
 │   │   │   │   ├── state/         # GET /api/world/state?round=N
@@ -92,11 +94,14 @@ autonomous-world/
 │   │   │   ├── public/            # Unauthenticated read-only (homepage only)
 │   │   │   │   └── world/         # GET /api/public/world
 │   │   │   └── admin/             # Admin-only API endpoints
-│   │   │       ├── run-round/     # POST /api/admin/run-round
+│   │   │       ├── run-round/     # POST /api/admin/run-round (202 + GET progress; body/?worldId= targets any world)
+│   │   │       ├── worlds/        # POST /api/admin/worlds (create) · DELETE (delete world)
+│   │   │       │   └── reset/     # POST /api/admin/worlds/reset (reset a world in place)
 │   │   │       ├── reset-world/   # POST /api/admin/reset-world
 │   │   │       └── assign-admin/  # POST /api/admin/assign-admin
 │   │   ├── game/                  # Main game page — page.tsx orchestrates; EventLog.tsx,
-│   │   │                          # stats-charts.tsx, leader-detail.tsx, types/icons/styles hold the rest
+│   │   │                          # stats-charts.tsx, leader-detail.tsx, WorldPicker.tsx,
+│   │   │                          # types/icons/styles hold the rest
 │   │   ├── layout.tsx             # Root layout (with QueryProvider)
 │   │   ├── page.tsx               # Homepage
 │   │   └── globals.css            # Global styles
@@ -109,6 +114,7 @@ autonomous-world/
 │       ├── gameConfig.ts          # All tunable game values
 │       ├── rng.ts                 # Seeded RNG (mulberry32)
 │       ├── snapshot.ts            # Snapshot compression/decompression (gzip)
+│       ├── worldSelect.ts         # Selected world (cookie aw_world → fallback active world)
 │       ├── territory.ts           # Territory force field (pure logic, no DOM)
 │       ├── spaceGalaxy.ts         # Background galaxy: core, nebula, stars (pure logic)
 │       ├── spaceFog.ts            # Seeded cloud layer over the map, faded by zoom (pure logic)
@@ -134,6 +140,9 @@ autonomous-world/
 │                                #   (the event log and charts live in src/app/game/)
 ├── server/
 │   ├── runRound.ts                # Main game loop orchestrator (14 phases + layout + snapshot)
+│   ├── roundJob.ts                # The round as a BACKGROUND job (202 + polling; roundRunning
+│   │                              # flag on World + 5-min watchdog reconcileRoundRunFlag)
+│   ├── initWorld.ts               # The ONLY world initialisation (seed / reset / create share it)
 │   ├── battleReport.ts           # Pure battle-report builder (no DB, so it is testable)
 │   ├── battle.eventOrder.test.ts  # Guards that PLACE_CAPTURED is written before grantAdmin
 │   ├── adminAssign.ts             # grantAdmin/revokeAdmin — shared admin assignment rules (ambition + cooldown)
@@ -170,8 +179,14 @@ autonomous-world/
 - Characters, factions, and places grow over time through simulation
 
 ### World
-- Single shared world, `active = true` marks the current world
-- All players observe the same world
+- **Multiple worlds.** "Which world am I looking at" lives in a per-session cookie
+  (`aw_world`, falling back to the active world), and **every signed-in user can switch**
+  from the header picker — only *creating* a world (`POST /api/admin/worlds`, admin-only,
+  sharing the same `initWorld` as the seed) and *running rounds* are admin-gated. Creating
+  lands you on the new world.
+- `World.active` marks the **default** world (where a visitor with no selection cookie
+  lands) — it is no longer an exclusive switch, and reset-world keeps its
+  "reset = the new world becomes the sole default" semantics.
 - No victory conditions — the game runs infinitely
 
 ### Characters
@@ -193,10 +208,6 @@ autonomous-world/
   heir the faction enters "collapsing" state and dissolves. Dead administrators' seats are cleared by
   the same aftermath, so a corpse never holds a place or keeps collecting its share
 - Only faction-controlled places can be assigned an administrator (auto-assign skips unowned places; the admin API returns 400 for them)
-- **Signals**: the king commands the faction by posture — a place about to fall is always relieved first;
-  with nothing urgent an aggressive king attacks the weakest border, guardian/merchant kings stand down.
-  Followers march to the call through friendly territory, and a hostile target must still pass the same
-  win-estimate gate as a self-chosen assault
 - **Signals**: the king commands the faction by posture — a place about to fall is always relieved first;
   with nothing urgent an aggressive king attacks the weakest border, guardian/merchant kings stand down.
   Followers march to the call through friendly territory, and a hostile target must still pass the same
@@ -499,10 +510,15 @@ for the same address.
 
 ### Public (requires authentication)
 
+Every read route resolves the world through the **selected-world cookie**
+(`src/lib/worldSelect.ts`), falling back to the active world — see "World" above.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/world/current` | Get active world info |
-| GET | `/api/world/state?round=N` | Get full state for a round |
+| GET | `/api/worlds` | List all worlds + the caller's `selectedId` |
+| POST | `/api/worlds/select` | Select a world (sets the `aw_world` cookie) |
+| GET | `/api/world/current` | Get the **selected** world's info |
+| GET | `/api/world/state?round=N` | Get full state for a round (carries `roundRunning`) |
 | GET | `/api/world/rounds` | List available rounds |
 | GET | `/api/world/events?round=N` | Get events for a round |
 | GET | `/api/world/stats?from=A&to=B` | Get chart data |
@@ -526,9 +542,29 @@ keep polling cheap on a world of up to 2,000 settlements.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/admin/run-round` | Execute next round |
-| POST | `/api/admin/reset-world` | Create new world |
+| POST | `/api/admin/run-round` | Execute next round — **background job**: answers `202` immediately; poll `GET` for progress. Body may carry an explicit `worldId` to run **any** world |
+| GET | `/api/admin/run-round` | Job progress + `currentRound` + `roundRunning` (`?worldId=` polls any world) |
+| POST | `/api/admin/worlds` | Create an additional world (shared `initWorld`; the cookie lands on it) |
+| DELETE | `/api/admin/worlds` | Delete a world (`{ worldId, confirm: true }`; the last one is refused) |
+| POST | `/api/admin/worlds/reset` | Reset a specific world **in place** (same id, history zeroed, back to round 1) |
+| POST | `/api/admin/reset-world` | Reset: create a world that becomes the sole default |
 | POST | `/api/admin/assign-admin` | Assign administrator |
+
+**The next-round button survives a refresh.** The running state is persisted on the world
+(`World.roundRunning` + `roundStartedAt`), so a refreshed page locks the button immediately
+and adopts the in-flight job's progress. A watchdog (`reconcileRoundRunFlag`) clears a flag
+that has stood past `ROUND_RUNNING_WATCHDOG_MS` (5 min) with no running job in the process —
+the standard recovery after a server restart drops the in-memory job.
+
+**Closing the browser never stops a round.** The POST answers 202 and the round runs as a
+void-detached job inside the server process — nothing in the handlers reads
+`request.signal`, so a sudden client disconnect has zero effect. Reopening re-adopts the
+running job via the persisted flag (guarded by `server/roundJob.detach.test.ts`).
+
+**Reset and delete are two-step confirmed.** The header picker's ⟲ (reset the selected world
+in place — same id, history zeroed, back to round 1) and 🗑 (delete the world; the last one
+is refused) both open an inline confirmation before firing, and both refuse with 409 while a
+round is running for that world.
 
 ## Development
 
@@ -783,12 +819,12 @@ any later code path repair this?**
 - `economy` 的**整階段**發放 — `splitIncome` 保證三份加總剛好等於 `income`，所以寫到一半
   崩潰，不會有任何一筆錢移動到別處：部分世界的金幣就是消失了，而沒有任何階段會對帳（每
   個金額都是算出來的，不是從某個總帳扣的，所以無從對回）。整階段一筆交易同時解決了成本：
-  舊制每地點一筆，一回合數百次提交。
+  交易裡只有**三句話**（見下一節）。
   The economy phase's payout is atomic because `splitIncome` is exact: a half-written phase
   moves the missing gold nowhere - part of the world's gold simply ceases to exist, and no
   later phase reconciles totals (every amount is computed, not derived from a stored total,
   so there is nothing to reconcile against). Batched into one transaction it also costs less:
-  the old per-place version committed hundreds of times a round.
+  the transaction holds exactly **THREE statements** (see the next section).
 
 **刻意排除 / Deliberately excluded**
 
@@ -800,20 +836,41 @@ any later code path repair this?**
 `prisma` 會逃出這筆交易，不會隨之回滾——這個輔助存在的理由就是把這個陷阱寫在程式碼裡。
 
 逾時是 `TX_TIMEOUT_MS`（**60 秒**，2026-10 由 20 秒提高），比 Prisma 預設的 5 秒寬——
-一個地點的發放就可能超過 5 秒，而 economy 現在是**整階段一筆交易**，時鐘覆蓋最多
-2000 個地點 × 每地 5–8 次依序寫入（見下一節）。
+曾是整階段一筆交易、時鐘覆蓋 2000 個地點 × 每地 5–8 次依序寫入；現在交易裡只剩三句話
+（見下一節），60 秒是餘裕。
 
-### 經濟階段只提交一次（批量交易）/ The economy phase commits once (batched transaction)
+### 經濟階段只提交一次，交易裡只有三句話 / The economy phase commits once, in three statements
 
-**每個地點一筆交易改成整階段一筆。** 舊制對每個地點各開一筆 `inTransaction`：一回合數百
-次提交，保護的卻是同一條逐地點成立的不變量（君王／行政官／其他人的三份加總剛好等於
-`income`）。交易的成本是 round trip，不變量又不依賴「一次提交」——所以現在整階段的發錢、
-徵兵、購兵與事件全部落在同一筆交易裡，2000 個地點的世界仍然只提交一次。
-One transaction **per place** became one transaction **per phase**. The old rule opened an
-`inTransaction` around each place — hundreds of commits a round protecting the same
-per-place invariant (king / administrator / others summing exactly to `income`). A
-transaction costs a round trip and the invariant does not need a commit, so the whole
-phase's writes now share one transaction: a 2000-place world still commits once.
+**每個地點一筆交易改成整階段一筆，而且交易裡只有三句話**（Oct 2026）：一段合併的角色
+`UPDATE ... FROM (VALUES ...)`（每個角色的金幣／兵力淨增量一次套上）、一段合併的地方
+`UPDATE`（駐軍招募），與一次 `event.createMany`（全部 INCOME 與 TROOPS_BOUGHT，
+**陣列順序＝模擬順序**——cuid 由用戶端按序產生，事件日誌的
+`{ round asc, createdAt asc, id asc }` 排序因此仍還原原序）。
+One transaction **per place** became one transaction **per phase**, and the transaction holds
+only **THREE statements** (Oct 2026): one merged characters `UPDATE ... FROM (VALUES ...)`,
+one merged places `UPDATE` (garrison recruits), and one `event.createMany` of every INCOME
+and TROOPS_BOUGHT row (**array order = simulation order** — cuid ids are client-generated
+monotonic, so the log's ordering restores the original sequence).
+
+**事件裡的「之後餘額」來自模擬帳本，不是寫入回傳值。** 金額全部在計算時已知；舊的逐列
+`update().gold` 唯一提供的是事件要印的餘額。記憶體帳本從讀取快照播種，按昔日逐筆更新
+**同一個迴圈順序**累加每筆增量，逐位元組重現同一組數字。購兵決策照舊讀快照 `char.gold`。
+**The events' `*After` balances come from a simulated ledger, not a write's return value.**
+The amounts are all known at computation time; the old per-row `update().gold` provided only
+the after-balance the events print. The in-memory ledger seeds from the read snapshots and
+accumulates every increment **in the same loop order** the old sequential updates applied
+them, reproducing the numbers byte-for-byte. Purchase decisions still read the snapshot
+`char.gold`.
+
+**同批合併的還有 aiMove 與 loyaltyCheck。** aiMove 的每個決策只讀迴圈前的快照，所以移動
+先收進 `moveRows`、階段結尾一次合併 placeId UPDATE + 一次 `CHARACTER_MOVED` createMany
+（不包交易——與昔日逐筆各自落地相同）。loyaltyCheck 則用一次 `findMany` 把所有君王的
+忠誠標籤抓成 map。
+**aiMove and loyaltyCheck got the same treatment.** aiMove's decisions read only pre-loop
+snapshots, so its moves are collected into `moveRows` and flushed once at the end of the
+phase: one merged placeId UPDATE plus one `CHARACTER_MOVED` createMany (not in a
+transaction — the old per-statement non-atomicity). `loyaltyCheck` fetches all kings' loyalty
+tags with one `findMany` into a map.
 
 **計算順序完全沒變，這不是併發化。** 交易只包住 DB 寫入；收益、購買批次與每一次
 `rng.float` 的抽取順序與昔日逐一相同，同一個種子仍然長出同一個世界。把寫入改成併發會讓

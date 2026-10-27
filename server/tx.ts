@@ -27,12 +27,17 @@ import { prisma, Prisma } from '@/lib/prisma';
 //   - adminAssign.grantAdmin / revokeAdmin - the seat moves but the defectionBase delta never
 //     lands, so no revert is ever scheduled, and nothing will ever credit it back. That
 //     character is then permanently quieter in defectionBase than the rules allow.
-//   - economy's payout - the WHOLE phase is one transaction (batch mode): every place's
-//     income split, recruitment, troop purchase and its events land together or not at
-//     all. A half-written phase would leave part of the world's gold simply absent - the
-//     amounts are computed, never derived from a stored total, so no later phase can
-//     reconcile them. Batching is what makes the invariant affordable: it used to open
-//     one transaction PER PLACE (hundreds of commits a round) to protect the same rule.
+//   - economy's payout - the WHOLE phase is one transaction, and the transaction holds
+//     only THREE statements (batch mode, Oct 2026): one merged characters
+//     UPDATE ... FROM (VALUES ...) (every character's net gold/troop delta), one merged
+//     places UPDATE (garrison recruits), and one createMany of every INCOME and
+//     TROOPS_BOUGHT row. Every place's income split, recruitment, troop purchase and its
+//     events land together or not at all. A half-written phase would leave part of the
+//     world's gold simply absent - the amounts are computed, never derived from a stored
+//     total, so no later phase can reconcile them. The event payloads' "after" balances
+//     come from an in-memory simulated ledger (same increments, same loop order), not
+//     from a write's return value. Batching is what makes the invariant affordable: it
+//     used to be one statement per write, then one transaction PER PLACE.
 //
 // 刻意排除 / Deliberately excluded
 // -----------------------------------------------------------------------
@@ -45,21 +50,21 @@ import { prisma, Prisma } from '@/lib/prisma';
 export type TxClient = Prisma.TransactionClient;
 
 /**
- * Prisma 互動式交易的預設逾時是 5 秒；一個地點的發放可能超過它。
+ * Prisma 互動式交易的預設逾時是 5 秒。
  *
- * economy 現在是**整階段一筆交易**：最多 `PLACE_MAX_COUNT`（2000）個地點，每地 5–8 次
- * 寫入，每一次都是依序的 round trip。20 秒在本地資料庫上夠用，但在遠端（Neon）曾經是
- * 緊繃的 —— 交易是在**開始後**才計時的，所以逾時等於整階段的經濟寫入全部作廢、重跑。
- * 60 秒留出餘量，又不至於讓一筆交易無限期開著：`maxWait` 與 `timeout` 共用這個值，
- * 等待與執行兩邊都有上限。
+ * economy 的整階段交易在 2026-10 收斂成**三句話**（合併的角色 UPDATE、合併的地方
+ * UPDATE、一次 createMany），早已不再是「2000 地點 × 每地 5–8 次依序寫入」；60 秒
+ * 從那時起是餘裕而不是必需。交易是在**開始後**才計時的，所以逾時等於整階段的經濟
+ * 寫入全部作廢、重跑。`maxWait` 與 `timeout` 共用這個值，等待與執行兩邊都有上限。
  *
- * Prisma's default interactive-transaction timeout is 5s; a single place's payout can
- * exceed it. economy is now ONE transaction spanning the whole phase: at most
- * `PLACE_MAX_COUNT` (2000) places × 5-8 writes each, every one a sequential round trip.
- * 20s was tight against a remote database (Neon) - and the clock starts when the
- * transaction does, so a timeout discards the phase's entire economy write and reruns
- * it. 60s leaves headroom without holding a transaction open indefinitely: maxWait and
- * timeout share this value, so both the wait and the run are bounded.
+ * Prisma's default interactive-transaction timeout is 5s.
+ *
+ * economy's whole-phase transaction collapsed to THREE statements in Oct 2026 (a merged
+ * characters UPDATE, a merged places UPDATE, one createMany) and no longer spans
+ * "2000 places × 5-8 sequential writes each"; the 60s has been headroom since. The
+ * clock starts when the transaction does, so a timeout discards the phase's entire
+ * economy write and reruns it. maxWait and timeout share this value, so both the wait
+ * and the run are bounded.
  */
 export const TX_TIMEOUT_MS = 60000;
 
