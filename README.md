@@ -473,11 +473,11 @@ view of faction power rather than another rendering of one metric.
 
 ### Economy
 - Each territory generates income based on market level
-- Income is split: **30% king, 40% administrator, 30% shared among everyone else** — "everyone else" means the **controlling faction's** leaders present; a leader of another faction standing in the place (an invader) is not paid from it. A vacant king or an empty "everyone else" bucket has its share absorbed by whoever is present, because the total is fixed and gold cannot vanish
+- Income is split: **10% king, 60% administrator, 30% shared among everyone else** (Oct 2026: changed from 30/40/30, moving the king's 20% to the administrator) — "everyone else" means the **controlling faction's** leaders present; a leader of another faction standing in the place (an invader) is not paid from it. A vacant king or an empty "everyone else" bucket has its share absorbed by whoever is present, because the total is fixed and gold cannot vanish
 - **No administrator means nobody is paid.** The administrator is the person actually running the place, so without one the place is ungoverned, and quietly routing the money to a distant king would pay someone who is not there
 - **Economy (jing)** scales the place's whole output through the **administrator**: the pie is
   `placeIncome(market) × (1 + (admin jing − 17.5) / 30)` (floored to whole gold), so a high-`jing`
-  administrator genuinely makes the place richer. The king's 30% and the others' shares are **flat
+  administrator genuinely makes the place richer. The king's 10% and the others' shares are **flat
   ratios of that grown pie** — no personal multiplier acts on them, and every jing applies at most once
   (the founding king is usually the administrator himself; scaling the pie *and* his share would square it)
 - Characters buy troops with personal gold: 2 gold per troop. **統領 (tong) decides how big one

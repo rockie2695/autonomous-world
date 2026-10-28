@@ -1412,35 +1412,33 @@ income = PLACE_BASE_INCOME(10) + market × PLACE_MARKET_INCOME_PER_LV(5)
 ```
 例：market 3 級 → 10 + 3×5 = 25 金/回合。
 
-**分配 / Distribution**（每地點每回合）：
+**行政官的 jing 放大整塊餅 / The administrator's jing scales the whole pie：**
+```
+pie = floor(income × jingIncomeMultiplier(adminJing))
+```
+`jing` 是**行政官**的經濟能力：他讓地方更富裕（倍率 `1 + (jing − 17.5) / 30`，
+jing 5 → ×0.58、jing 17.5 → ×1.00、jing 30 → ×1.42）。倍率**只作用一次**——在
+split 裡再乘就是 ×jing²。沒有行政官時誰都不領（見下），餅照算但一分不發。
+
+**分配 / Distribution**（每地點每回合，比例為**固定**的、對放大後的餅抽成；Oct 2026
+由 30/40/30 改為 10/60/30，把君王的 20% 挪給實際管事的行政官）：
 
 | 情況 | 結果 |
 |---|---|
-| 有國王 + 有總督 | 國王 `floor(income × 0.4 × jing倍率)`；總督 `floor(income × 0.3 × jing倍率)`；剩餘平均分給該地點其他角色（`floor`，餘數不分配） |
-| 僅國王（無總督） | **國王得全部 `income`（100%）**，其他人得 0 |
-| 僅總督（無國王） | 總督得全部 `income`（100%） |
-| 無國王無總督 | 無人分配（收入蒸發） |
-
-**jing = 經濟 / jing is Economy**
-
-`jing` 是領導者的**經濟能力**，會放大他自己實得的份額（不是「智力」也不是「策略」）：
-
-```typescript
-// server/income.ts
-mul = 1 + (jing − INCOME_JING_MIDPOINT(17.5)) / CHAR_ABILITY_MAX(30)
-// jing 5 → ×0.58     jing 17.5 → ×1.00     jing 30 → ×1.42
-```
-
-以**平均值**為基準，所以一般將領與舊規則（40/30/30）完全相同，高 jing 多拿、低 jing
-少拿；否則連平均的領導者都會從部屬身上多拿，悄悄改變整個世界的經濟基準。
+| 有國王 + 有行政官 + 有其他將領 | 國王 `floor(pie × 0.1)`；行政官 `floor(pie × 0.6)`；其餘 30% 平分給該地其他角色（`floor`，餘數留在地方） |
+| 有國王 + 有行政官，無其他將領 | 國王 `floor(pie × 0.1)`；行政官拿**剩餘全部**（≈ 90%） |
+| 無國王（在場或缺席皆同） | 國王的 10% 併入行政官 → 行政官 70%，其他人 30% |
+| 無國王也無其他將領 | 行政官 100% |
+| **無行政官** | **無人分配**（收入留在地方） |
 
 兩條不變量 / two invariants:
 
-- **總額永不超過 `income`**：兩位高 jing 領導者加總可能超過收入，此時按比例縮回並保留
-  兩人的相對高低 / when the two requested shares exceed the income, both are scaled back
-  proportionally, preserving which leader is richer
-- **只有一位領導者時不套倍率**：他本來就獨得全部，套倍率會印錢 / a lone leader already
-  takes everything, so a multiplier would mint gold
+- **三份加總永遠等於 pie**（「其他人」是剩餘額；無其他角色時行政官拿 `floor(pie − king)`，
+  餘數不會蒸發）/ the three shares always sum to the pie ("everyone else" is the remainder;
+  with no other characters the administrator takes `floor(pie − king)` — the remainder never
+  vanishes)
+- **只有一位領導者時不套倍率**：倍率已在餅上作用一次，split 是固定抽成 / the multiplier
+  already acted once on the pie; the split is a flat cut
 
 規則與分配拆在純函式 `server/income.ts#splitIncome`，不需要資料庫就能測試
 （`server/income.test.ts` 會驗證「平均 jing 時與舊的 40/30/30 完全相同」這個回歸點）。
@@ -1451,8 +1449,10 @@ garrison += PLACE_BASE_RECRUIT(2) + barracks × PLACE_BARRACKS_RECRUIT_PER_LV(3)
 ```
 
 **購兵 / Troop purchase**（每個在地點的存活角色）：
-- `maxBuyable = floor(gold / CHAR_BUY_TROOP_PRICE(2))`；若 `maxBuyable ≥ 10` 才購買
-- `buyCount = rng.int(10, min(100, maxBuyable))`；花費 `buyCount × 2` 金，`troops += buyCount`
+- `maxBuyable = floor(gold / CHAR_BUY_TROOP_PRICE(2))`；若 `maxBuyable ≥ CHAR_BUY_TROOP_MIN(10)` 才購買
+- `buyCount = purchaseBatch(tong, maxBuyable, rng.float(-1, 1))`：基準批量
+  `CHAR_BUY_TROOP_BASE(30) × tongPurchaseMultiplier(tong)`，隨機 ±25% 抖動，金幣與規格
+  上限（100）是硬上限（見 `server/income.ts#purchaseBatch`）
 
 ##### 建築效果共用模組 / Shared building effects
 
@@ -1798,8 +1798,8 @@ rendering all 27 combinations:
 - **一個地方要有住在這裡的角色才算被掌握**：`place.characters` 為空時，連國王的份也不發——否則一座
   空城照樣把收益送給遠方的國王。作法是把空位視為未填補（`kingId` / `adminId` 都是 `null`），
   於是三個分配分支都不會執行。
-- 收益分配：**君王 30%、行政官 40%、其他人 30%**（「其他人」＝**受控勢力**的駐場將領，`othersOf()`；異勢力的將領站在這裡不領這裡的錢）；`jing`（經濟）會放大領導者實拿的金額（見 `server/income.ts`）。行政官拿最大的一份，因為實際管事的是他。
-  **當君王與行政官是同一個人**時，他理所當然拿到兩份（30% + 40%），事件日誌必須合併成一行，
+- 收益分配：**君王 10%、行政官 60%、其他人 30%**（Oct 2026 由 30/40/30 改來，把君王的 20% 挪給實際管事的行政官；「其他人」＝**受控勢力**的駐場將領，`othersOf()`；異勢力的將領站在這裡不領這裡的錢）；`jing`（經濟）會放大領導者實拿的金額（見 `server/income.ts`）。行政官拿最大的一份，因為實際管事的是他。
+  **當君王與行政官是同一個人**時，他理所當然拿到兩份（10% + 60%），事件日誌必須合併成一行，
   否則會出現「某某 得 3 金 · 某某 得 2 金」這種看起來像重複的紀錄。
 - **徵兵**（`PLACE_BASE_RECRUIT` + `barracks × PLACE_BARRACKS_RECRUIT_PER_LV`）加的是**地方的駐軍**，
   不會變成任何角色的個人兵力。
@@ -1811,22 +1811,22 @@ rendering all 27 combinations:
 
 - **沒有行政官 → 誰都不拿。** 舊規則是「總督份額歸國王」，現在相反。行政官是實際管事的人，
   沒有他代表這個地方沒有人治理，把錢轉給遠方的國王等於付給一個不在場的人；錢留在地方上。
-- **沒有其他人 → 行政官拿 70%**（30% + 40%）。倍率只作用一次，所以不會被重複放大。
-- **沒有君王 → 行政官拿 100%**（40% + 30% + 30%）。
+- **沒有其他人 → 行政官拿 90%**（60% + 30%；君王仍拿 10%）。倍率只作用一次，所以不會被重複放大。
+- **沒有君王 → 行政官拿 100%**（60% + 10% + 30%——君王的 10% 與其他人的 30% 都無人可分時）。
 - 三份加起來**永遠等於 income**。縮放回來之後的餘額在沒有其他人時歸行政官——早期版本直接回傳
   `others: 0`，那筆錢會憑空消失，是測試抓出來的。
 - **彈窗的每一列分成帶**有效**比例，餅要推導出來**（Oct 2026——用戶回報：總收入 10 旁邊印
   👑 +2、👤 +5，讀起來像帳目不平）。`splitIncome` 的回傳多了 `portions`
   `{ king, admin, others }`：**含缺位吸收**的有效比例（君王缺席時行政官 70%、沒有其他人時
-  再吸掉 30%）。地方彈窗的「總收入」列印**基礎**收入，底下跟一行推導
-  （`總收入 10 × 經濟倍率 0.82（行政官 jing 12）→ 產出 8`），因為分成對著**放大後的餅**
+  再吸掉 30% → 90%）。地方彈窗的「總收入」列印**基礎**收入，底下跟一行推導
+  （`總收入 10 × 經濟倍率 1.42（行政官 jing 30）→ 產出 14`），因為分成對著**放大後的餅**
   （`placeOutput`）算——直接對基礎收入印，加總永遠對不上，讀者會以為錢憑空少了。
   「其他人」印成一列合計（`其他人 ×N（30%）`，金額是**實發**的 `floor(others/N) × N`），
-  floor 的餘數註明留在地方。**絕不印死 40%**——寫死的比例會讓列加總對不上餅。
+  floor 的餘數註明留在地方。**絕不印死 60%**——寫死的比例會讓列加總對不上餅。
   The place popup's split rows carry their **effective** portions and the pie is derived, not
   implied (Oct 2026 — a user report read 總收入 10 beside 👑 +2 / 👤 +5 as an unbalanced
   ledger). `splitIncome` now returns `portions { king, admin, others }`: absorption-inclusive
-  (70% for an absent king, +30% more when nobody else is present). The popup's 總收入 row prints
+  (70% for an absent king, +30% more → 90% when nobody else is present). The popup's 總收入 row prints
   the **base** income with a derivation line under it, because the split is computed against the
   **grown** pie (`placeOutput`) — against the base alone the rows can never sum, and the reader
   concludes gold vanished. The others bucket prints as one lead-in row with the **actually paid**

@@ -2582,10 +2582,27 @@ function CharacterList({
               <div className="flex items-center gap-1.5">
                 <span className="font-medium">{char.name}</span>
                 {char.isKing && <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" label={t('character.isKing')} />}
-                <span className="ml-auto flex items-center gap-1 text-xs text-gray-400 font-display">
-                  <Ic className="w-3.5 h-3.5"><path d="m6 13 6-6 6 6M6 18l6-6 6 6" /></Ic>
-                  <span className="sr-only">{t('character.troops')}: </span>
-                  {char.troops}
+                <span className="ml-auto flex items-center gap-2 text-xs font-display">
+                  {/* 金錢：錢幣小圖示 + 數字（琥珀色＝全站的「錢」用色；將領詳情的
+                      基礎群組、事件日誌的 INCOME 都用它）。與兵力並列——一列看完
+                      「有多少兵、有多少錢」，不用點進詳情。
+                      Gold: a coin glyph + the amount (amber = the app-wide colour of
+                      money — the leader detail's basics group and the event log's
+                      INCOME rows use it). Beside the troops, so one row answers
+                      "how many soldiers, how much money" without opening the detail. */}
+                  <span className="flex items-center gap-1 text-amber-300/80">
+                    <Ic className="w-3.5 h-3.5">
+                      <circle cx="12" cy="12" r="8" />
+                      <circle cx="12" cy="12" r="3.2" />
+                    </Ic>
+                    <span className="sr-only">{t('character.gold')}: </span>
+                    {char.gold}
+                  </span>
+                  <span className="flex items-center gap-1 text-gray-400">
+                    <Ic className="w-3.5 h-3.5"><path d="m6 13 6-6 6 6M6 18l6-6 6 6" /></Ic>
+                    <span className="sr-only">{t('character.troops')}: </span>
+                    {char.troops}
+                  </span>
                 </span>
               </div>
 

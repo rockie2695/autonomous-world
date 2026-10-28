@@ -7,11 +7,13 @@
 //
 // 規則（來自規格）/ Rules (from spec):
 // - 地點收入 = BASE_INCOME + MARKET_LV × MARKET_PER_LV / Place income = BASE_INCOME + MARKET_LV × MARKET_PER_LV
-// - 分配：君王 30%、行政官 40%、其他人 30%（平分）——行政官拿最大份，因為實際管事的
-//   是他（詳見 server/income.ts）/
-//   Split: king 30%, administrator 40%, everyone else 30% (shared equally) — the
+// - 分配：君王 10%、行政官 60%、其他人 30%（平分）——行政官拿最大份，因為實際管事的
+//   是他（Oct 2026 由 30/40/30 改為 10/60/30，把君王的 20% 挪給行政官；詳見
+//   server/income.ts）/
+//   Split: king 10%, administrator 60%, everyone else 30% (shared equally) — the
 //   administrator's cut is the largest because they are the one actually running the
-//   place (see server/income.ts)
+//   place (Oct 2026: changed from 30/40/30, moving the king's 20% to the admin;
+//   see server/income.ts)
 // - **沒有行政官就誰都不領**：刻意反轉舊制（舊制把行政官份額轉給君王）——付錢給
 //   不在場的君王比誰都不付更糟，錢留在地方上 /
 //   **No administrator means nobody is paid**: this deliberately inverts the old

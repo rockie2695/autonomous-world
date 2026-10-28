@@ -95,21 +95,25 @@ describe('Income split', () => {
   });
 
   describe('splitIncome shares', () => {
-    it('should split 30 / 40 / 30 at the midpoint', () => {
-      // 比例規則本身：君王 30%、行政官 40%、其他人 30% /
-      // The shares themselves: king 30%, administrator 40%, everyone else 30%
+    it('should split 10 / 60 / 30 at the midpoint', () => {
+      // 比例規則本身：君王 10%、行政官 60%、其他人 30%（Oct 2026 由 30/40/30 改來，
+      // 把君王的 20% 挪給實際管事的行政官）/
+      // The shares themselves: king 10%, administrator 60%, everyone else 30%
+      // (Oct 2026: changed from 30/40/30, moving the king's 20% to the one
+      // actually running the place)
       const split = splitIncome(100, MID, MID, 2);
-      expect(split.king).toBe(30);
-      expect(split.admin).toBe(40);
+      expect(split.king).toBe(10);
+      expect(split.admin).toBe(60);
       expect(split.others).toBe(30);
     });
 
-    it('should give the administrator 70% when there are no other characters', () => {
-      // 沒有其他人可分，那 30% 由行政官接手：30% + 40% = 70% /
-      // With nobody else to share with, the 30% goes to the administrator: 30% + 40% = 70%
+    it('should give the administrator 90% when there are no other characters', () => {
+      // 沒有其他人可分，那 30% 由行政官接手：60% + 30% = 90%（君王仍拿 10%）/
+      // With nobody else to share with, the 30% goes to the administrator:
+      // 60% + 30% = 90% (the king still gets his 10%)
       const split = splitIncome(100, MID, MID, 0);
-      expect(split.king).toBe(30);
-      expect(split.admin).toBe(70);
+      expect(split.king).toBe(10);
+      expect(split.admin).toBe(90);
       expect(split.others).toBe(0);
     });
 
@@ -138,11 +142,11 @@ describe('Income split', () => {
       // king the administrator is 70%; with nobody else he absorbs the others' 30%
       // too. A hard 40% would fail to sum to the pie, reading as a ledger error.
       const full = splitIncome(100, MID, MID, 2);
-      expect(full.portions).toEqual({ king: 0.3, admin: 0.4, others: 0.3 });
+      expect(full.portions).toEqual({ king: 0.1, admin: 0.6, others: 0.3 });
       const noKing = splitIncome(100, null, MID, 2);
       expect(noKing.portions).toEqual({ king: 0, admin: 0.7, others: 0.3 });
       const alone = splitIncome(100, MID, MID, 0);
-      expect(alone.portions).toEqual({ king: 0.3, admin: 0.7, others: 0 });
+      expect(alone.portions).toEqual({ king: 0.1, admin: 0.9, others: 0 });
       // 沒有君王也沒有其他人：行政官獨得全部（30% + 40% + 30% = 100%）/
       // No king and no others: the administrator takes everything (30+40+30 = 100%)
       const sole = splitIncome(100, null, MID, 0);
@@ -276,8 +280,8 @@ describe('Income split', () => {
       // (the caller scales the whole pie); the king's and the others' shares are flat
       // ratios of that grown pie.
       const split = splitIncome(100, 0, 0, 2);
-      expect(split.king).toBe(30);
-      expect(split.admin).toBe(40);
+      expect(split.king).toBe(10);
+      expect(split.admin).toBe(60);
       expect(split.others).toBe(30);
     });
 
@@ -306,13 +310,14 @@ describe('Income split', () => {
       // usually the administrator himself) would be ×jing².
       const low = splitIncome(100, 0, MID, 2);
       const high = splitIncome(100, 30, MID, 2);
-      expect(low.king).toBe(30);
-      expect(high.king).toBe(30);
+      expect(low.king).toBe(10);
+      expect(high.king).toBe(10);
     });
 
     it('should hand a strong administrator the largest share by default', () => {
-      // 40% 是最大的份額，因為實際管事的是行政官 /
-      // 40% is the largest share because the administrator is the one actually running it
+      // 60% 是最大的份額，因為實際管事的是行政官（Oct 2026 由 40% 提高）/
+      // 60% is the largest share because the administrator is the one actually running
+      // it (raised from 40% in Oct 2026)
       const split = splitIncome(100, MID, MID, 3);
       expect(split.admin).toBeGreaterThan(split.king);
       expect(split.admin).toBeGreaterThan(split.others);

@@ -8,8 +8,10 @@
 //      the rule lives in exactly one place
 //
 // 分配比例 / The shares:
-//   君王 30% · 行政官 40% · 其他角色 30%（平分）
-//   King 30% · Administrator 40% · Everyone else 30% (shared equally)
+//   君王 10% · 行政官 60% · 其他角色 30%（平分）——Oct 2026 由 30/40/30 改為 10/60/30，
+//   把君王的 20% 挪給實際管事的行政官。
+//   King 10% · Administrator 60% · Everyone else 30% (shared equally) — Oct 2026
+//   changed from 30/40/30, moving the king's 20% to the one actually running the place.
 //
 // **沒有行政官就誰都不拿**。這是刻意的：行政官是「實際管事的人」，沒有他代表這個地方
 // 根本沒有人治理，把錢自動轉給國王等於讓一個不在場的人白拿。錢留在地方上。
@@ -46,13 +48,13 @@ export interface IncomeSplit {
   others: number;
   /**
    * 三份的**有效**比例（含缺位吸收）。缺位者的份額由在場者接手，所以行政官的
-   * 比例可能是 40%、70% 甚至 100%——彈窗要印的就是這個有效比例，印死「40%」
+   * 比例可能是 60%、70%、90% 甚至 100%——彈窗要印的就是這個有效比例，印死「60%」
    * 會讓分成加總對不上餅，讀者以為錢憑空少了。
    *
    * The three shares' **effective** portions (absorption included). An absent
    * holder's share folds into whoever is present, so the administrator's portion
-   * can be 40%, 70% or even 100% — the popup prints exactly these, and a hard
-   * "40%" would make the rows fail to sum to the pie, reading as gold vanishing.
+   * can be 60%, 70%, 90% or even 100% — the popup prints exactly these, and a hard
+   * "60%" would make the rows fail to sum to the pie, reading as gold vanishing.
    */
   portions: {
     king: number;
@@ -208,36 +210,36 @@ export function splitIncome(
   }
 
   // 缺席者的份額由在場者接手，比例先合併再套倍率。這樣「沒有其他人」時行政官拿到
-  // 30% + 40% = 70%，而倍率只作用一次，不會被重複放大。
+  // 10% + 60% = 70%，而倍率只作用一次，不會被重複放大。
   //
   // An absent holder has their share folded into whoever is present, and the multiplier is
   // applied once to the combined figure. So with no other characters the administrator
-  // receives 30% + 40% = 70%, and their jing scales that 70% exactly once rather than twice.
+  // receives 10% + 60% = 70%, and their jing scales that 70% exactly once rather than twice.
   const kingShare = CONFIG.INCOME_KING_SHARE;
   const othersShare = CONFIG.INCOME_OTHER_SHARE;
   const hasOthers = othersCount > 0;
 
-  // 君王份額：有君王就是 30%，沒有就併入行政官。君王的 **jing 值**在這裡不參與——
+  // 君王份額：有君王就是 10%，沒有就併入行政官。君王的 **jing 值**在這裡不參與——
   // 只判斷他在不在位。一個地方的收入只受**行政官的 jing**影響（呼叫端已用它放大
-  // 整塊餅），君王的 30% 是變大後的餅的**固定抽成**。這讓「每個 jing 至多作用一次」
+  // 整塊餅），君王的 10% 是變大後的餅的**固定抽成**。這讓「每個 jing 至多作用一次」
   // 结构上成立：開國君王通常自己就是行政官，同一個人的 jing 若在餅上、又在份額上
   // 各作用一次就是 ×jing²。
   //
-  // The king's share: 30% when he exists, otherwise folded into the administrator.
+  // The king's share: 10% when he exists, otherwise folded into the administrator.
   // The king's **jing value** plays no part here — only whether he is on the throne.
   // A place's income is affected by the **administrator's jing alone** (the caller
-  // already scaled the whole pie with it), and the king's 30% is a **flat cut** of
+  // already scaled the whole pie with it), and the king's 10% is a **flat cut** of
   // that grown pie. This makes "every jing applies at most once" *structural*: the
   // founding king is usually the administrator himself, and the same person's jing
   // acting on both the pie and the share would be ×jing².
   const kingPortion = kingJing === null ? 0 : kingShare;
-  // 行政官份額：自己的 40%，外加沒有君王時的 30%、沒有其他人時的 30%
-  // The administrator's share: their own 40%, plus the king's 30% when vacant and the
+  // 行政官份額：自己的 60%，外加沒有君王時的 10%、沒有其他人時的 30%
+  // The administrator's share: their own 60%, plus the king's 10% when vacant and the
   // others' 30% when there is nobody else to share it with
   const adminPortion =
     CONFIG.INCOME_ADMIN_SHARE + (kingJing === null ? kingShare : 0) + (hasOthers ? 0 : othersShare);
 
-  // 比例是**結構性**的（總和 ≤ 100%）：君王在場時 30 + 40 + 30 = 100；君王缺席時
+  // 比例是**結構性**的（總和 ≤ 100%）：君王在場時 10 + 60 + 30 = 100；君王缺席時
   // 行政官最多 70 + 30 = 100。沒有任何倍率會再加乘（jing 的收入效果只有「行政官
   // 放大整塊餅」一條，已在呼叫端作用），所以**不需要**比例縮回——floor 的餘數由
   // 「其他人」吸收，三份照樣加總等於收入。
@@ -256,11 +258,16 @@ export function splitIncome(
   const admin = Math.floor(income * adminPortion);
 
   // 有效比例（含缺位吸收）一次算好，三個回傳路徑共用——彈窗印的就是這三個數。
+  // round 到 1e-6：浮點加法會吐 0.6 + 0.3 = 0.8999999999999999，彈窗的百分比
+  // （×100 取整）不受影響，但測試的 toEqual 會——也給未來的比較者一個乾淨的數。
   // The effective portions (absorption included), computed once and shared by all
-  // three return paths — these are exactly what the popup prints.
+  // three return paths — these are exactly what the popup prints. Rounded to 1e-6:
+  // float addition produces 0.6 + 0.3 = 0.8999999999999999, which the popup's
+  // percentage (×100 rounded) shrugs off but a strict toEqual does not — keep the
+  // number clean for whoever compares it next.
   const portions = {
-    king: kingPortion,
-    admin: adminPortion,
+    king: Math.round(kingPortion * 1e6) / 1e6,
+    admin: Math.round(adminPortion * 1e6) / 1e6,
     others: hasOthers ? othersShare : 0,
   };
 

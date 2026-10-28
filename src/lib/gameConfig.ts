@@ -276,8 +276,18 @@ export const CONFIG = {
   // share absorbed by whoever is present. See server/income.ts.
   PLACE_BASE_INCOME: 10, // 每回合每個地點基礎金錢 / Base gold per round per place
   PLACE_MARKET_INCOME_PER_LV: 5, // 每級市場額外金錢 / Extra gold per market level
-  INCOME_KING_SHARE: 0.3, // 君王的收入份額（可被 jing 放大）/ King's cut of place income (scaled by jing)
-  INCOME_ADMIN_SHARE: 0.4, // 行政官的收入份額（可被 jing 放大；金額最大，因為實際管事）/ Administrator's cut (scaled by jing; the largest, since they actually run the place)
+  // ── 收入分配比例（Oct 2026：君王 30→10，行政官 40→60——把君王的 20% 挪給實際管事的人）──
+  // 三份是**結構性**的：君王在場 10 + 60 + 30 = 100；君王缺席時行政官吸走他的 10%
+  // （70%）；沒有其他人時行政官再吸走 30%（90%）——加總永遠 ≤ 100%，floor 的餘數
+  // 由「其他人」或行政官接手。
+  // ── The income shares (Oct 2026: king 30→10, admin 40→60 — 20% moved from the
+  // king to the one actually running the place) ──
+  // The three shares are **structural**: king present 10 + 60 + 30 = 100; with the
+  // king absent the administrator absorbs his 10% (70%); with nobody else present
+  // he absorbs the others' 30% too (90%) — the sum is always ≤ 100%, and the floor
+  // remainder is folded into "everyone else" or the administrator.
+  INCOME_KING_SHARE: 0.1, // 君王的收入份額（可被 jing 放大）/ King's cut of place income (scaled by jing)
+  INCOME_ADMIN_SHARE: 0.6, // 行政官的收入份額（金額最大，因為實際管事）/ Administrator's cut (the largest, since they actually run the place)
   INCOME_OTHER_SHARE: 0.3, // 其他角色共享 / Shared among other characters
   // jing（經濟）以「平均」為基準放大或縮小領導者的份額：一般將領的倍率是 1.0，
   // 高 jing 多拿、低 jing 少拿。17.5 是 jing 均勻分佈 (5–30) 的平均值。

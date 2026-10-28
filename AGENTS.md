@@ -174,7 +174,7 @@ server/
 │                           # flag + the 5-min watchdog reconcileRoundRunFlag)
 ├── moveEvent.ts           # recordMove() — writes CHARACTER_MOVED events (battle escape; aiMove batches its own — see AGENTS.md)
 ├── adminAssign.ts         # grantAdmin/revokeAdmin — the ONLY writers of Place.administratorId
-├── income.ts              # splitIncome() + othersOf() — king 30% / admin 40% / the controlling faction's others 30%
+├── income.ts              # splitIncome() + othersOf() — king 10% / admin 60% / the controlling faction's others 30% (Oct 2026: was 30/40/30)
 ├── battleReport.ts        # PLACE_CAPTURED arithmetic behind the event log's 戰報 panel
 ├── uniqueNames.ts         # DB-backed alive-only uniqueness scans over the pure name generators
 ├── tx.ts                  # Transaction helpers — only where a half-write destroys something
@@ -369,7 +369,7 @@ All four admin-changing paths go through `server/adminAssign.ts` (`grantAdmin` /
   guards the `data:` objects, Oct 2026). When a leader takes a seat at a new place, the clearing vacates
   his **old** place — nothing was compared and nothing was fought there, the administrator simply carried
   the post away. Stamping the old place would freeze an **empty** place for ten rounds in `assignAdmins`
-  (its `where` filter reads only `adminChangedRound`), with the 40% administrator share left unpocketed
+  (its `where` filter reads only `adminChangedRound`), with the 60% administrator share left unpocketed
   the whole time. The vacated place becomes eligible for a new AI assignment as early as next round; the
   NEW place is stamped as before. Do not "fix" a missing anchor on a vacated place — that is the rule.
 - **The place popup shows the cooldown** (Oct 2026): `adminChangedRound` now travels with
@@ -1696,7 +1696,8 @@ instead of scattering.
 
 ### Income Split, Abilities & Troop Purchases
 
-- **The shares are 30% king / 40% administrator / 30% everyone else** (shared equally), all in
+- **The shares are 10% king / 60% administrator / 30% everyone else** (shared equally; Oct 2026 —
+  changed from 30/40/30, moving the king's 20% to the administrator), all in
   `server/income.ts`. The administrator takes the largest cut because they are the one actually
   running the place. **The three shares always sum to `income`.** "Everyone else" is `othersOf()` —
   the **controlling faction's** leaders present, minus the king and the administrator. A leader of
@@ -1738,14 +1739,16 @@ instead of scattering.
   the split. No administrator → 無人領取.
 - **Every 分成 row carries its EFFECTIVE portion, and the pie is derived, not implied** (Oct 2026 —
   the user's report: 總收入 10 beside 👑 +2 / 👤 +5 read as an unbalanced ledger). The 總收入 row
-  prints the **base** income and a derivation line under it (`總收入 10 × 經濟倍率 0.82（行政官
-  jing 12）→ 產出 8`), because the split is computed against the **grown** pie
+  prints the **base** income and a derivation line under it (`總收入 10 × 經濟倍率 1.42（行政官
+  jing 30）→ 產出 14`), because the split is computed against the **grown** pie
   (`placeOutput`) — printed against the base alone, the rows cannot sum and the reader concludes
   gold vanished. Each row's percentage comes from `splitIncome`'s new `portions` field
   (`{ king, admin, others }`), which carries the **absorption-inclusive** shares: with the king
-  absent the administrator is 70%, with nobody else present he absorbs the others' 30% too (the
-  real case above: 40% + absorbed 30% = **70%**, and 2 + 6 = 8 reconciles). **Never print the
-  nominal 40%** — a hard-coded share makes the rows fail to sum to the pie. The "others" bucket
+  absent the administrator is 70%, with nobody else present he absorbs the others' 30% too (e.g.
+  產出 14 → 👑 +1（10%）、👤 +8（60%）、其他人 ×2 合計 +4（30% — bucket 5, the floor leaves
+  1 with the place）— 1 + 8 + 4 + 1 = 14 reconciles; with no others the same pie reads
+  👤 +13（90%）). **Never print the
+  nominal 60%** — a hard-coded share makes the rows fail to sum to the pie. The "others" bucket
   prints as a lead-in row (`其他人 ×N（30%）` with the actually-paid total), and the floor
   remainder (paid < bucket) is stated as staying with the place.
 - **`tong` is 統領 / Leadership and now does exactly one thing: it scales the size of a single troop
