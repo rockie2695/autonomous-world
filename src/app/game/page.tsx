@@ -798,13 +798,13 @@ export default function GamePage() {
           </span> */}
         </div>
 
-        <div className="hidden sm:flex items-center gap-3 min-w-0 text-gray-400">
+        {/* <div className="hidden sm:flex items-center gap-3 min-w-0 text-gray-400">
           <span className="h-px w-8 bg-gradient-to-r from-transparent to-cyan-400/40" aria-hidden="true" />
           <span className="text-xs font-display tracking-widest truncate">
             {worldState?.world.name ?? '—'}
           </span>
           <span className="h-px w-8 bg-gradient-to-l from-transparent to-cyan-400/40" aria-hidden="true" />
-        </div>
+        </div> */}
 
         {/* 世界概況併入這一列，地圖因此多出一整列的高度 /
             世界概況 lives in this row, giving the map that height back */}
