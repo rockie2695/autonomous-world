@@ -825,7 +825,11 @@ describe('factionRegions', () => {
     // hundred labels usually misses them entirely and the test passes for the wrong reason.
     expect(checked).toBeGreaterThan(400);
     expect(smallestGap).toBeLessThan(Infinity);
-  });
+    // 這個取樣是刻意做大的（>400 個標籤、200 次試驗），在平行 worker 底下跑
+    // 13–17 秒，超過全域預設的 10 秒 —— 只這一個測試單獨放寬時限，不拉高全域值。
+    // This sample is deliberately large (>400 labels, 200 trials) and takes 13-17s under
+    // parallel workers, past the 10s global default — extend this one test's timeout only.
+  }, 30000);
 
   it('should place the name where the largest rectangle is, not where the circle is', () => {
     // 「最大內切圓的圓心」是**圓形**問題的答案，但標籤要的是**矩形**。一塊領地可以某點很圓
