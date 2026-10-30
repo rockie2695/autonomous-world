@@ -936,7 +936,9 @@ field: buildTerritoryField(
       CONFIG.TERRITORY_BLOB_RADIUS,
       CONFIG.TERRITORY_MIN_FORCE,
       CONFIG.TERRITORY_CORE_FORCE,
-      CONFIG.TERRITORY_CORE_RADIUS
+      CONFIG.TERRITORY_CORE_RADIUS,
+      CONFIG.TERRITORY_CELLS_PER_RADIUS,
+      CONFIG.TERRITORY_VOID_MASK_RATIO
     ),
     };
   }, [
@@ -945,6 +947,8 @@ field: buildTerritoryField(
     CONFIG.TERRITORY_MIN_FORCE,
     CONFIG.TERRITORY_CORE_FORCE,
     CONFIG.TERRITORY_CORE_RADIUS,
+    CONFIG.TERRITORY_CELLS_PER_RADIUS,
+    CONFIG.TERRITORY_VOID_MASK_RATIO,
   ]);
 
   // 要標名字的勢力區域；同時當成位置表與名字表的共同來源，兩者才會對齊 /
@@ -1045,7 +1049,10 @@ useEffect(() => {
   // border. This replaces the offscreen bitmap — a bitmap's resolution is the grid's, so
   // zoomed in its edge is always a staircase or a blur, while a path fill is vector and
   // stays smooth at any zoom.
-  const outlines = factionOutlines(field, 2);
+  // 切角次數走 config：3 之後核心盤的圓弧在視覺上成一個真正的圓。
+  // Corner-cutting passes live in config: 3 turns the core disc's arc into a
+  // visually true circle.
+  const outlines = factionOutlines(field, CONFIG.TERRITORY_BORDER_SMOOTH_ITERATIONS);
   /** 邊界色 / the border colour */
   const borderRgb = CONFIG.TERRITORY_BORDER_RGB.split(',').map((v) => Number.parseInt(v.trim(), 10));
   /** 路徑快取：每個勢力的填色路徑只建一次 / one Path2D per faction, built once */

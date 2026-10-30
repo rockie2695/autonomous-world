@@ -2321,6 +2321,88 @@ radius, four together ~83%.
    swamps any single unowned place at nearly every point, so the unowned place gets absorbed.
    The rule is **nearest-site**: a cell nearer unowned land than to any owned place is that
    place's own ground and goes unpainted.
+   **但直線邊是錯的，正解是**比值遮罩**（2026 年 10 月）。`d_void < ratio × d_owned`
+   才留白（`TERRITORY_VOID_MASK_RATIO` = 0.8），邊界是以無主地方為焦點的**圓弧**
+   （阿波羅尼烏斯圓，圓心在背側），留白圈沿軸推進約 `ratio/(1+ratio)` ≈ 間距 44%——
+   無主之地保住幾乎一半間距的圓形留白（它的「力」），有主節點那一側保有 56%，比舊
+   平分線的 50% 更寬。這條換掉過三個都失敗的版本：原版 `d_void < d_owned`（比值 1，
+   垂直平分線）直線貼著節點切過去——實測低近崖旁 23 單位的無主冰鯊湖，缺口直接
+   切進地方；其後一版「核心盤內遮罩讓路」更糟——核心盤是**全域相對尺度**（0.35 ×
+   宣稱半徑，實測世界數百單位），把無主之地**自己的周圍**也吞進了有主領色，無主
+   之地看起來變成有主的；再一版把比值壓到 0.45——無主之地只剩一圈細環，讀起來
+   像「沒有力」。兩把絕對的尺對貼近的兩點必錯一邊；比值壓太低又讓無主之地失聲。
+   0.8 同時保住兩端。**不要**改回絕對半徑的例外，也不要壓低比值。
+   **But the straight border is wrong; the correct rule is a ratio mask** (Oct 2026).
+   Blank iff `d_void < ratio × d_owned` (`TERRITORY_VOID_MASK_RATIO` = 0.8): the
+   border is a **circular arc** (an Apollonius circle centred on the far side of the
+   void site), the void keeps a round blank claim of roughly `ratio/(1+ratio)` ≈ 44%
+   of the gap — its "force" — and the owned node keeps 56%, wider than the old
+   bisector's 50%. Three designs failed here before it: the original bisector
+   (ratio 1) cut a straight line against the node — measured live, 低近崖 notched by
+   unowned 冰鯊湖 23 units away; the next variant ("the mask yields inside the core
+   disc") was worse — the core is **globally scaled** (0.35 × the claim radius,
+   hundreds of units live), so it swallowed the void's own surroundings into owned
+   colour and the unowned place read as claimed; then a too-low ratio (0.45) shrank
+   the void to a thin ring that read as having no force. With two close sites, two
+   absolute scales must get one side wrong, and a starved ratio silences the void.
+   0.8 keeps both ends. **Do not** go back to absolute-radius exceptions, and do not
+   lower the ratio.
+   **駐地格釘住**（2026 年 10 月）：場與遮罩都以**格心**計算，而實況世界的格邊長
+   （約 25-40 單位）可以比兩個緊鄰地方的間距還大（實測 23）——格心落在哪一側是純
+   格網相位，會讓有主地方的家門口格被翻成留白（缺口）、或無主之地的被翻成領色
+   （吞併）。主迴圈之後，`buildTerritoryField` 把每個地方自己所在的**那一格**釘住：
+   無主格先釘（留白）、有主格後釘（同格時有主優先）。只釘一格，隨格網自然縮放。
+   這條刻意修訂了舊的「不做格網後處理」規則——那條反對的是翻**整片**；釘住只有
+   一格，而且只裁決力場自己看不見的吸附平手。
+   **Site-cell pin** (Oct 2026): the field and the mask both evaluate at **cell
+   centres**, and the live cell pitch (~25-40 units) can exceed the gap between two
+   neighbouring places (23, measured) — which side a centre lands on is pure grid
+   phase, flipping a controlled place's doorstep cell to blank (the notch) or an
+   unowned place's to faction colour (the swallow). After the main loop,
+   `buildTerritoryField` pins the single cell each place sits in: void cells first
+   (blank), then owned cells — a shared cell keeps the owned place's faction. One
+   cell only, scaling with the grid. This deliberately amends the older "no grid
+   post-pass" rule — that argument was against flipping *regions*; the pin is one
+   cell and only resolves the snap tie the field itself cannot see.
+   **實測驗證**：低近崖周圍 d=5/10 全方位歸自己（節點格正確歸白虎王庭）；冰鯊湖
+   節點 d=2 一百百分比白、d≤25 圓盤約 73% 留白，無第三方勢力滲入。
+   **Verified live**: rings 5/10 around 低近崖 are fully its own faction (its node
+   cell correctly 白虎王庭); 冰鯊湖's node keeps a 100%-blank halo at d=2 and a
+   73%-blank disc out to d≤25, with no third faction leaking in.
+   **測試的幾何陷阱**：`factionAt` 對**超出場範圍**的取樣點回 null 是正確行為。兩個地方
+   在 y 上沒有跨度時，範圍會被撐回 ~1.4 高；而且小場景的解析度會撞上 48 格的下限，
+   一格 3-6 單位——**離軸取樣需要誘餌地方，且每一筆都必須離遮罩邊界 ≥ 半格**，否則
+   格點化的抖動會讓斷言時好時壞。寬間距場景**不要**加近距離誘餌：誘餌比間距還近
+   會縮小 dOwned、把遮罩拉向無主之地；共線兩點的場景在 x 上有 48 個細格，y=0 的
+   取樣照樣落在補回的範圍內。
+   **Test geometry traps**: `factionAt` legitimately returns null for points **outside
+   the field extent**. Two sites with no y-span get padded to ~1.4 height; and small
+   scenes hit the 48-cell resolution floor (3-6 units per cell), so off-axis samples
+   need decoy sites **and every probe must sit ≥ half a cell from the mask's
+   boundary**, or grid jitter makes assertions flaky. Wide-gap scenes must **not** take
+   close decoys: a decoy closer than the gap shrinks dOwned and pulls the mask toward
+   the void; a collinear two-site scene is still sliced into 48 fine columns along x,
+   and y=0 samples land inside the padded extent.
+   **填色挖洞靠繞向正規化**（2026 年 10 月）：`factionOutlines` 的邊串接是**無向**的
+   （`edgeKey` 不分方向），每圈起走的方向任意；而 SigmaMap 用預設 **nonzero** 填色——
+   洞圈與外圈**同向**時洞內繞數是 1+1=2 而非 0，無主湖被整片蓋上勢力色（實測世界
+   冰鯊湖、墟黑津周圍共 96 格，正是「無主領地仍有顏色」的回報）。
+   `orientLoopsForNonzeroFill` 把每圈先轉成同一方向、再反轉**奇數層**巢狀的圈（洞），
+   nonzero 於是 +1/−1 相消；洞中島（深度 2）保持正向。切角不改變繞向，所以正規化
+   在切角**之前**跑。**不要**把這一步「簡化」掉，也**不要**把填色改成 `evenodd`——
+   nonzero 加正規化還能容錯部分重疊的圈，evenodd 會把重疊處挖成洞。
+   **The fill cuts holes via winding normalisation** (Oct 2026): `factionOutlines`
+   chains edges **undirected**, so loop winding is arbitrary — while SigmaMap fills
+   with the default **nonzero** rule. A hole loop wound the *same* way as its
+   container leaves the hole at winding 1+1=2, and the void lake is painted over
+   with faction colour (96 live cells around 冰鯊湖 and 墟黑津 — the reported
+   "no-faction territory still has colour"). `orientLoopsForNonzeroFill` canonicalises
+   every loop to one direction and reverses those nested an **odd** number of levels
+   deep (holes), so nonzero cancels (+1/−1); an island inside a hole (depth 2) stays
+   positive. Chaikin preserves winding, so normalisation runs **before** smoothing.
+   Do not "simplify" the pass away, and do not switch the fill to `evenodd` — nonzero
+   plus normalised winding also tolerates partially overlapping loops, which evenodd
+   would punch holes into.
 2. **半徑要相對。** 用「最近鄰距離平均 × 倍數」，不要用固定世界座標常數，否則地方一多
    就糊成一片、地方一少就小到看不見。
 3. **邊界要逐邊畫。** 把整格點亮會變成厚白塊；共用接縫又會變成兩條線。要用

@@ -1135,6 +1135,38 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   // claim's own scale (smaller when dense, larger when sparse) and never drifts
   // with grid resolution.
   TERRITORY_CORE_RADIUS: 0.35,
+  // 無主之地的**比值遮罩**：留白條件是「離無主之地 < 0.8 × 離最近有主地方」。
+  // 邊界是以無主地方為焦點的**圓弧**（阿波羅尼烏斯圓，圓心在背側），留白圈沿軸
+  // 推進約 0.8/1.8 ≈ 間距 44%——無主之地保住幾乎一半間距的圓形留白（它的「力」），
+  // 有主節點那一側保有 56%，比舊平分線的 50% 更寬。1 = 舊的垂直平分線（直線邊、
+  // 貼著節點切過去，實測低近崖被無主冰鯊湖切掉缺口）；0 = 遮罩全關（無主之地整個
+  // 被有主領色吞掉——實測冰鯊湖整圈被橙色包住）。**不要**改用兩個絕對半徑做例外
+  // （曾試過「核心盤內遮罩讓路」）：核心盤是全域相對尺度，反而會把無主之地自己的
+  // 周圍吞進有主領色。也不要壓太低（試過 0.45）：無主之地只剩一圈細環，讀起來像
+  // 沒有力。配合「駐地格釘住」使用：釘住保證節點自己那格讀對，比值只管其餘格子。
+  // The unowned land's **ratio mask**: blank iff the cell is nearer an unowned
+  // place than 0.8 × the nearest owned one. The border is a circular arc focused
+  // on the void site (an Apollonius circle, centred on the far side); the blank
+  // halo advances ~0.8/1.8 ≈ 44% of the gap along the axis — the void keeps
+  // almost half the gap as its own round blank claim (its "force") and the owned
+  // node keeps 56%, wider than the old bisector's 50%. 1 = the old perpendicular
+  // bisector (straight border cut against the node — measured: 低近崖 notched by
+  // unowned 冰鯊湖); 0 = mask off (void land swallowed by owned colour — measured:
+  // 冰鯊湖 ringed by orange). **Do not** replace this with exceptions built from
+  // two absolute radii (the tried "mask yields inside the core disc" variant):
+  // the core is globally scaled and swallowed the void's own surroundings into
+  // owned colour instead. Do not push it too low either (0.45 was tried): the
+  // void shrank to a thin ring and read as having no force at all. Pairs with
+  // the site-cell pin: the pin guarantees each node's own cell reads correctly,
+  // and the ratio governs every other cell.
+  TERRITORY_VOID_MASK_RATIO: 0.8,
+  // 每個宣稱半徑的格數——密度場的解析度，也就是邊界有多「圓」。10 是省成本的下限
+  // （拉遠仍讀得出階梯），14 幾乎看不出格子；總格數仍受 TERRITORY_MAX_RESOLUTION
+  // 上限約束。
+  // Cells per claim radius — the field's resolution, hence how *round* the borders
+  // look. 10 is the cost-saving floor (steps readable zoomed out); 14 makes the
+  // grid essentially invisible. TERRITORY_MAX_RESOLUTION still caps the total.
+  TERRITORY_CELLS_PER_RADIUS: 14,
   // 每軸的格數上限；實際解析度還會再依地方數量縮小 /
   // Cap on cells per axis; the real resolution also scales down with place count
   // 每軸的格數上限。格數越多，邊界曲線越平滑（放大後不會看到階梯），但密度場是
@@ -1169,6 +1201,16 @@ TERRITORY_FADE_RATIO: 0.74,     // 拉近到此比例以下完全消失 / Fully 
   TERRITORY_BORDER_ALPHA: 0.5,
   /** 邊界線寬（**螢幕像素**，與縮放無關）/ border stroke width in **screen pixels**, independent of zoom */
   TERRITORY_BORDER_PX: 1.4,
+  /**
+   * 邊界曲線的切角次數（Chaikin passes）。2 是原設定——放大後在核心盤的圓弧上仍讀得出
+   * 折角；3 之後弧線在視覺上成一個真正的圓。點數隨次數翻倍（2→4n，3→8n），成本可忽略。
+   *
+   * Chaikin corner-cutting passes for the border curve. 2 was the old setting — dig
+   * into the core disc's arc and a kink is still readable; 3 renders the arc as a
+   * true circle to the eye. Point count doubles per pass (2→4n, 3→8n); the cost
+   * is negligible.
+   */
+  TERRITORY_BORDER_SMOOTH_ITERATIONS: 3,
   // ── 領地名稱 / Territory label ────────────────────────────────────────────
   // 字級由領地的大小決定：`labelRadius`（最大內切圓的半徑）越大字越大，塞滿整塊領地。
   // 上下限是必要的——沒有下限小領地的字會消失，沒有上限大領地的字會蓋掉整張圖。

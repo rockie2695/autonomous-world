@@ -814,6 +814,53 @@ read territory and topography at the same time.
   force swamps any single unowned place at nearly every point, so the unowned place simply gets
   absorbed — which is the bug this rule exists to prevent. Unowned places still count toward
   `meanNeighbourDistance()`, because the claim radius has to match the density of the whole map.
+- **The unowned mask is a *ratio*, not two absolute radii** (Oct 2026). The bare
+  nearest-site rule (`nearestUnowned < nearestOwned`, a perpendicular bisector) cut a
+  **straight** line right against the node — measured live: 低近崖 had 冰鯊湖 just 23
+  units away, and the place read as sitting *outside its own territory*. The first fix
+  (mask yields inside a place's core disc) made the void land read as claimed instead:
+  the core is globally scaled (`0.35 × the claim radius`, hundreds of units live), so it
+  swallowed 冰鯊湖's own surroundings into the owned faction's colour. The rule is now
+  `nearestUnowned < TERRITORY_VOID_MASK_RATIO × nearestOwned` (0.8): the border is a
+  **circular arc** (an Apollonius circle centred on the far side of the void site), the
+  void keeps a round blank claim of roughly `ratio/(1+ratio) ≈ 44%` of the gap — its
+  "force" — and the owned node keeps 56%, *wider* than the old bisector's 50%. One
+  relative rule keeps both ends safe at any gap; **do not** replace it with exceptions
+  built from two absolute scales, and do not push the ratio low (0.45 was tried: the
+  void shrank to a thin ring and read as having no force). Verified live: rings 5/10
+  around 低近崖 are fully its own faction, 冰鯊湖's node keeps a 100%-blank halo at
+  d=2 and a 73%-blank disc out to d≤25.
+- **Every place's own cell is pinned** (Oct 2026). The field and the mask both evaluate
+  at **cell centres**, and the live cell pitch (~25-40 units) can exceed the gap
+  between two neighbouring places (23, here) — which side a centre lands on is pure
+  grid phase, so a controlled place's doorstep cell could snap to blank (the notch) or
+  an unowned place's to faction colour (the swallow). After the main loop,
+  `buildTerritoryField` pins the single cell each place sits in: void cells first
+  (blank), then owned cells — a shared cell keeps the owned place's faction, because a
+  controlled place's cell must show its faction. One cell only: it scales with the
+  grid naturally and never paints a large square patch that disagrees with the field's
+  semantics. This deliberately amends the older "not a grid post-pass" rule — that
+  argument was against flipping *regions*; the pin is one cell and only ever resolves
+  the snap tie the field itself cannot see.
+- **The fill cuts holes only because loop winding is normalised** (Oct 2026). `factionOutlines`
+  chains boundary edges **undirected** (`edgeKey` ignores direction), so each loop's winding
+  direction is arbitrary — while `SigmaMap` fills with the default **nonzero** rule. A hole
+  loop wound the *same* way as its container leaves the hole's winding at 1+1=2 instead of 0,
+  and the void lake is **painted over with faction colour** — measured live: 96 cells of
+  unowned land around 冰鯊湖 and 墟黑津, reported as "the no-faction territory still has
+  colour". `orientLoopsForNonzeroFill` therefore canonicalises every loop to one direction
+  and reverses those nested an **odd** number of levels deep (holes), so nonzero cancels
+  (+1 outer, −1 hole); an island inside a hole (depth 2) stays positive. Chaikin smoothing
+  preserves winding, so the normalisation runs before it. Do not "simplify" the pass away,
+  and do not switch the fill to `evenodd` — nonzero plus normalised winding also survives
+  partially overlapping loops, which evenodd would punch holes into.
+- **Border rounding is grid resolution + Chaikin, both in config** (Oct 2026). The fill cells
+  are the grid's size, so a claim radius spanning too few cells shows steps; the field now aims
+  for `TERRITORY_CELLS_PER_RADIUS` (14) cells across the claim radius (the old hardcoded 10 was
+  readable as stairs), still capped by `TERRITORY_MAX_RESOLUTION`. The outline is then
+  corner-cut with `TERRITORY_BORDER_SMOOTH_ITERATIONS` (3, was a hardcoded 2) Chaikin passes —
+  dig into the core disc's arc at high zoom and 2 passes still showed a kink; 3 renders the arc
+  as a visually true circle. Point count doubles per pass; the cost is negligible.
 - **`factionAt(field, gx, gy)` answers hover from the field, not from the nearest node.** The
   zoomed-out view draws *areas*, so "whose ground is this" is answered by the cell under the cursor;
   using the nearest node names an unrelated place and reports somewhere the cursor isn't.

@@ -227,14 +227,105 @@ export function smoothLoop(loop: OutlinePoint[], iterations: number): OutlinePoi
 }
 
 /**
+ * 鞋帶公式的有向面積 / The signed shoelace area of a closed polyline.
+ *
+ * 這裡只取**正負號**：它說明這一圈現在往哪個方向繞。「正」對應哪個視覺方向由
+ * y 向下的座標系決定，但整個模組只需要相對關係——所有圈同向、洞反向。
+ * Only the **sign** matters: it says which way the loop is currently wound. Which
+ * visual direction "positive" is depends on the y-down coordinate system; the module
+ * only needs the relative rule — all loops one way, holes the other.
+ */
+function signedLoopArea(points: OutlinePoint[]): number {
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]!;
+    const b = points[(i + 1) % points.length]!;
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area / 2;
+}
+
+/**
+ * 射線法的點包含測試 / Ray-cast point-in-polygon test.
+ */
+function pointInLoop(points: OutlinePoint[], x: number, y: number): boolean {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i]!;
+    const b = points[j]!;
+    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+/**
+ * 依巢狀深度正規化迴圈繞向，讓 renderer 的 **nonzero** 填色能把洞挖掉。
+ * Normalise loop winding by nesting depth so the renderer's **nonzero** fill cuts holes.
+ *
+ * 邊的串接是**無向**的（`edgeKey` 不分方向），所以每一圈起走的方向是任意的；而
+ * SigmaMap 的填色用預設 nonzero 規則——洞圈若與外圈**同向**，洞內的 winding 是
+ * 1+1=2 而非 0，洞就被整片填掉（實測世界：無主的冰鯊湖、墟黑津周圍共 96 格被
+ * 勢力色蓋掉，正是「無主領地仍有顏色」的回報）。做法：先把每圈正規化成同一方向，
+ * 再反轉「被奇數層其他圈包含」的圈（洞）。nonzero 於是外圈 +1、洞 −1 相消；
+ * 洞中島（深度 2）保持正向，更深的巢狀也成立。
+ *
+ * The edge chaining is **undirected** (`edgeKey` ignores direction), so which way
+ * each loop is walked is arbitrary — while SigmaMap fills with the default nonzero
+ * rule: a hole loop wound the *same* way as its container leaves the hole's winding
+ * at 1+1=2 instead of 0, and the hole is painted over (measured live: 96 cells of
+ * unowned land around 冰鯊湖 and 墟黑津 — exactly the reported "unowned territory
+ * still has colour"). The fix: canonicalise every loop to one direction, then
+ * reverse the loops nested an **odd** number of levels deep (holes). Nonzero then
+ * cancels (+1 outer, −1 hole); an island inside a hole (depth 2) stays positive,
+ * and deeper nesting keeps working.
+ */
+function orientLoopsForNonzeroFill(loops: OutlinePoint[][]): OutlinePoint[][] {
+  if (loops.length < 2) return loops;
+  // 先全部轉成同一方向（面積非負）/ first make every loop the same direction (non-negative area)
+  const canonical = loops.map((pts) => (signedLoopArea(pts) < 0 ? pts.slice().reverse() : pts));
+  // 探測點：第一條邊的中點往法線挪邊長的 1%。無向串接不保證繞向，所以「內側」
+  // 用射線法兩側都試出來，不假設方向；兩側都失敗（自交的退化圈）就當深度 0。
+  // Probe point: the first edge's midpoint nudged 1% of the edge length along the
+  // normal. The undirected walk gives no guaranteed winding, so "interior" is found
+  // by probing both sides with the ray cast rather than assumed; a degenerate
+  // self-intersecting loop that fails both sides counts as depth 0.
+  const probes = canonical.map((pts) => {
+    const a = pts[0]!;
+    const b = pts[1]!;
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    const nx = -(b.y - a.y) * 0.01;
+    const ny = (b.x - a.x) * 0.01;
+    if (pointInLoop(pts, mx + nx, my + ny)) return { x: mx + nx, y: my + ny };
+    if (pointInLoop(pts, mx - nx, my - ny)) return { x: mx - nx, y: my - ny };
+    return null;
+  });
+  const depth = probes.map((probe, i) => {
+    if (!probe) return 0;
+    let n = 0;
+    for (let j = 0; j < canonical.length; j++) {
+      if (j !== i && pointInLoop(canonical[j]!, probe.x, probe.y)) n += 1;
+    }
+    return n;
+  });
+  return canonical.map((pts, i) => (depth[i]! % 2 === 1 ? pts.slice().reverse() : pts));
+}
+
+/**
  * 把每個勢力的邊界取成封閉曲線 / Extract each faction's boundary as closed curves.
  *
  * 做法：先收集邊界「單位線段」（格子座標），把線段接成一圈一圈，再轉成圖座標並切角。
  * 一個勢力可能有好幾圈（領地中間挖空、或分離的兩塊），所以回傳的是陣列的陣列。
+ * 回傳的每一圈都**已正規化繞向**：外圈一個方向、洞反向——renderer 的 nonzero 填色
+ * 依賴這一點才挖得出洞（見 `orientLoopsForNonzeroFill`）。
  *
  * Method: collect the boundary unit segments in cell coordinates, chain them into loops,
  * then convert to graph coordinates and smooth. A faction can have several loops (a hole,
- * or two disconnected holdings), hence an array of arrays.
+ * or two disconnected holdings), hence an array of arrays. Every returned loop is
+ * **winding-normalised**: outer loops one way, holes the other — the renderer's nonzero
+ * fill depends on that to cut holes (see `orientLoopsForNonzeroFill`).
  *
  * @param field - 密度場 / the density field
  * @param iterations - 每個角的切角次數 / corner-cutting passes
@@ -299,7 +390,7 @@ export function factionOutlines(field: TerritoryField, iterations = 2): FactionO
     }
     const used = new Set<string>();
     const edgeKey = (a: number, b: number) => (a < b ? `${a}:${b}` : `${b}:${a}`);
-    const loops: OutlinePoint[][] = [];
+    const raws: OutlinePoint[][] = [];
 
     for (const startKey of adj.keys()) {
       // 從這點出發還有沒走過的邊嗎 / any unused edge left at this vertex?
@@ -321,13 +412,20 @@ export function factionOutlines(field: TerritoryField, iterations = 2): FactionO
       }
       if (loop.length < 4) continue;
 
-      const raw: OutlinePoint[] = loop.map((v) => {
-        const gpx = v % stride;
-        const gpy = (v - gpx) / stride;
-        return { x: field.minX + gpx * cellW, y: field.minY + gpy * cellH };
-      });
-      loops.push(smoothLoop(raw, iterations));
+      raws.push(
+        loop.map((v) => {
+          const gpx = v % stride;
+          const gpy = (v - gpx) / stride;
+          return { x: field.minX + gpx * cellW, y: field.minY + gpy * cellH };
+        })
+      );
     }
+    // 繞向正規化（洞反向，見 orientLoopsForNonzeroFill）之後才切角——切角不會改變
+    // 繞向，先正規化或先切角結果相同，但先正規化讓規則只寫在一處。
+    // Normalise winding (holes reversed — see orientLoopsForNonzeroFill) before
+    // smoothing. Chaikin preserves winding, so the order is equivalent; normalising
+    // first keeps the rule in exactly one place.
+    const loops = orientLoopsForNonzeroFill(raws).map((raw) => smoothLoop(raw, iterations));
     if (loops.length > 0) out.push({ faction, loops });
   }
   return out;
@@ -421,6 +519,8 @@ export function meanNeighbourDistance(
  * @param minForce - 佔有一格所需的最低力量 / Minimum force for a cell to count as held
  * @param coreForce - 核心保證項的峰值力 / Peak force of the core-guarantee term
  * @param coreRadiusFraction - 核心半徑 = 此比例 × 宣稱半徑 / Core radius = this fraction × the claim radius
+ * @param cellsPerRadius - 每個宣稱半徑的格數（解析度；越大邊界越圓）/ Cells per claim radius (resolution; higher = rounder borders)
+ * @param voidMaskRatio - 無主遮罩比值：留白條件 `d_void < ratio × d_owned` / Unowned-mask ratio: blank iff `d_void < ratio × d_owned`
  * @returns 密度場 / The field, or null when there are no sites
  */
 export function buildTerritoryField(
@@ -460,7 +560,30 @@ export function buildTerritoryField(
    * core on the same scale as the claim itself: smaller in dense worlds, larger
    * in sparse ones.
    */
-  coreRadiusFraction = 0.35
+  coreRadiusFraction = 0.35,
+  /**
+   * 每個宣稱半徑的格數：決定場的解析度，也就是邊界有多「圓」。10 是節省成本的
+   * 下限（拉遠仍讀得出階梯），14 幾乎看不出格子。上限交給 maxResolution。
+   *
+   * Cells per claim radius: it sets the field's resolution, hence how *round* the
+   * borders look. 10 is the cost-saving floor (steps still readable zoomed out);
+   * 14 makes the grid essentially invisible. maxResolution caps the total.
+   */
+  cellsPerRadius = 10,
+  /**
+   * 無主之地遮罩的比值：留白條件是 `d_void < ratio × d_owned`。邊界是以無主
+   * 地方為焦點的圓弧，留白圈沿軸推進約 `ratio/(1+ratio) × 間距`——0.8 時無主
+   * 之地保住間距約 44% 的圓形留白（它的力），有主那側保有 56%。1 = 舊的垂直
+   * 平分線（直線邊），0 = 遮罩全關（無主之地整個被有主領色蓋掉）。
+   *
+   * The unowned mask's ratio: blank iff `d_void < ratio × d_owned`, so the
+   * boundary is a circular arc focused on the void site and the blank halo
+   * advances `ratio/(1+ratio)` of the gap — at 0.8 the void keeps a round blank
+   * claim of ~44% of the gap (its force) and the owned side keeps 56%. 1 = the
+   * old perpendicular bisector (a straight border); 0 = mask off (void land is
+   * swallowed by owned colour entirely).
+   */
+  voidMaskRatio = 1
 ): TerritoryField | null {
   const count = sites.length;
   if (count === 0) return null;
@@ -506,12 +629,14 @@ export function buildTerritoryField(
   const coreR = Math.max(1e-6, coreRadiusFraction * radius);
 
   // 解析度要讓「宣稱半徑」落在足夠多格子上，否則 upscale 之後邊界還是會有階梯。
-  // 目標是半徑約等於 10 格；上限由 maxResolution 決定，2000 個地方時也不會太慢。
+  // 目標是半徑約等於 `cellsPerRadius` 格（每個半徑的格數越多，圓形的邊界就越圓；
+  // 10 讀得出階梯、12–14 讀不出）；上限由 maxResolution 決定，2000 個地方時也不會太慢。
   // The resolution must put the claim radius across enough cells, or the upscaled
-  // border still shows steps. Aim for a radius of roughly 10 cells, bounded by
-  // maxResolution so 2000 places stay affordable.
+  // border still shows steps. Aim for the claim radius spanning `cellsPerRadius`
+  // cells (more cells per radius = rounder arcs: 10 reads as steps, 12–14 do not),
+  // bounded by maxResolution so 2000 places stay affordable.
   const maxSpan = Math.max(fullSpanX, fullSpanY);
-  const target = Math.min(maxResolution, Math.max(48, Math.round((maxSpan * 10) / radius)));
+  const target = Math.min(maxResolution, Math.max(48, Math.round((maxSpan * cellsPerRadius) / radius)));
   const aspect = fullSpanX / fullSpanY;
   let width: number;
   let height: number;
@@ -641,9 +766,39 @@ export function buildTerritoryField(
           }
         }
       }
-      // 離無主之地更近 → 留白，不繪製；原地圖在該處保持可見 /
-      // Nearer to unowned land → leave the cell blank so the map underneath shows
-      if (nearestUnowned < nearestOwned) continue;
+      // 遮罩：**比值規則**，不是兩個絕對半徑的角力。`d_void < ratio × d_owned`
+      // 才留白，邊界是以無主地方為焦點的**圓弧**（阿波羅尼烏斯圓），圓心在無主
+      // 地方背向有主地方的那一側、半徑約 `ratio/(1+ratio) × 間距`——無主之地
+      // 保住一小圈自己的圓形留白，邊界是圓的不是直線，而且**永遠碰不到有主
+      // 節點**（有主那側保有 (1-ratio) 以上的間距）。
+      //
+      // 這條換掉過兩個都失敗的版本。原版 `d_void < d_owned`（ratio = 1，垂直
+      // 平分線）：直線貼著節點切過去——實測低近崖旁 23 單位的無主冰鯊湖，缺口
+      // 直接切進地方，看起來像「這個地方不在自己的領地裡」。其後一版用「核心
+      // 盤內遮罩讓路」補救，但核心盤是**全域相對尺度**（0.35 × 宣稱半徑，實測
+      // 世界數百單位），把無主之地**自己的周圍**也吞進了有主領色，無主之地看
+      // 起來變成有主的。兩把絕對的尺對貼近的兩點必錯一邊；比值對任何間距都
+      // 同時保住兩端——無主之地有圓形留白圈，有主地方有自己的領地。
+      //
+      // The mask is a **ratio rule**, not a contest between two absolute radii.
+      // Blank iff `d_void < ratio × d_owned`: the boundary is a **circular arc**
+      // (an Apollonius circle, centred beyond the void site away from the owned
+      // one, radius roughly `ratio/(1+ratio) × the gap`) — the void keeps its
+      // own small round blank halo, the border is round rather than straight,
+      // and it can **never reach the owned node** (the owned side keeps ≥
+      // (1-ratio) of the gap).
+      //
+      // Two absolute-radii designs both failed here and were replaced by this.
+      // The original `d_void < d_owned` (ratio = 1, a perpendicular bisector)
+      // cut a straight line against the node — measured live: 低近崖 notched by
+      // unowned 冰鯊湖 23 units away, so the place read as outside its own
+      // territory. The next version made the mask yield inside a place's core
+      // disc, but the core is **globally scaled** (0.35 × the claim radius,
+      // hundreds of units live), so it swallowed the void's *own* surroundings
+      // too and the unowned place read as claimed. With two close sites, two
+      // absolute scales must get one side wrong; the ratio keeps both ends safe
+      // at any gap.
+      if (nearestUnowned < voidMaskRatio * nearestOwned) continue;
 
       let bestFaction = -1;
       let bestForce = 0;
@@ -671,6 +826,37 @@ export function buildTerritoryField(
       // are equal, so whichever faction is nearer pushes the border further away.
       owner[py * width + px] = bestFaction;
     }
+  }
+
+  // ── 駐地格釘住：每個地方自己所在的格子，歸屬由地方本身決定 ──
+  // 上面的力場與遮罩都以**格心**計算，而實況世界的格邊長（約 25-40 單位）可以比
+  // 兩個緊鄰地方的間距還大（實測：低近崖與冰鯊湖只隔 23）。格心落在哪一側純粹是
+  // 格網相位問題，會讓「有主地方的家門口格」被遮罩翻成留白（缺口）、或「無主之地的
+  // 家門口格」被勢力翻成領色（吞併）。這裡把每個地方所在的那**一格**釘住：無主格
+  // 先釘（留白）、有主格後釘（同格時有主優先——受控地方的格子必須顯示它的勢力）。
+  // 只釘一格：世界尺度隨格網自然縮放，也不會畫出與力場語意不一致的大片方形。
+  //
+  // ── Site-cell pin: the cell a place itself sits in is decided by that place ──
+  // The field and the mask both evaluate at **cell centres**, and the live world's
+  // cell pitch (~25-40 units) can exceed the gap between two neighbouring places
+  // (measured: 低近崖 and 冰鯊湖 are 23 apart). Which side a centre lands on is pure
+  // grid phase, so a controlled place's doorstep cell can snap to blank (the notch)
+  // or an unowned place's to faction colour (the swallow). Pin the single cell each
+  // place sits in: void cells first (blank), then owned cells — so a shared cell
+  // keeps the owned place's faction, because a controlled place's cell must show
+  // its faction. One cell only: it scales with the grid naturally and never draws
+  // a large square patch that disagrees with the field's semantics.
+  for (let i = 0; i < count; i++) {
+    if (siteFaction[i] !== BLOCKED) continue;
+    const px = clampIndex(((sites[i].x - minX) / fullSpanX) * width, width);
+    const py = clampIndex(((sites[i].y - minY) / fullSpanY) * height, height);
+    owner[py * width + px] = -1;
+  }
+  for (let i = 0; i < count; i++) {
+    if (siteFaction[i] === BLOCKED) continue;
+    const px = clampIndex(((sites[i].x - minX) / fullSpanX) * width, width);
+    const py = clampIndex(((sites[i].y - minY) / fullSpanY) * height, height);
+    owner[py * width + px] = siteFaction[i];
   }
 
   return { width, height, owner, factions: factionKeys, minX, minY, maxX, maxY };

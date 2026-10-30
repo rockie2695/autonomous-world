@@ -14,6 +14,7 @@ import {
   NEIGHBOUR_LEFT,
   NEIGHBOUR_RIGHT,
   NEIGHBOUR_TOP,
+  type TerritoryField,
   type TerritorySite,
 } from './territory';
 import { solveLabelFontSize } from '@/components/mapShared';
@@ -57,6 +58,44 @@ function pointInLoop(
     }
   }
   return hit;
+}
+
+/**
+ * nonzero 填色規則的繞數 / The winding number under the nonzero fill rule.
+ *
+ * 這是 canvas `ctx.fill()` 預設規則的獨立實作：Σ > 0 會被塗色，Σ = 0 留白。
+ * 測試用它直接驗證「填色畫出來的東西 = 場說的歸屬」。
+ * An independent implementation of canvas `ctx.fill()`'s default rule: Σ > 0 paints,
+ * Σ = 0 stays blank. The tests use it to check "what the fill paints = what the field
+ * says" directly.
+ */
+function windingOfLoop(
+  loop: Array<{ x: number; y: number }>,
+  gx: number,
+  gy: number
+): number {
+  let w = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i]!;
+    const b = loop[(i + 1) % loop.length]!;
+    if (a.y <= gy) {
+      if (b.y > gy && (b.x - a.x) * (gy - a.y) - (gx - a.x) * (b.y - a.y) > 0) w += 1;
+    } else if (b.y <= gy && (b.x - a.x) * (gy - a.y) - (gx - a.x) * (b.y - a.y) < 0) {
+      w -= 1;
+    }
+  }
+  return w;
+}
+
+/** 鞋帶公式的有向面積 / the signed shoelace area of a closed loop */
+function shoelaceArea(loop: Array<{ x: number; y: number }>): number {
+  let area = 0;
+  for (let i = 0; i < loop.length; i++) {
+    const a = loop[i]!;
+    const b = loop[(i + 1) % loop.length]!;
+    area += a.x * b.y - b.x * a.y;
+  }
+  return area / 2;
 }
 
 /** 可重現的亂數（測試專用）/ a reproducible PRNG for the tests */
@@ -467,6 +506,107 @@ describe('factionOutlines', () => {
       expect(outline.faction).toBeGreaterThanOrEqual(0);
       expect(outline.faction).toBeLessThan(field.factions.length);
     }
+  });
+
+  /**
+   * 「有主地方圍一圈、中央無主」的場景：洞完全被領地包住——這是填色挖洞的最低
+   * 要求，也是實測世界冰鯊湖／墟黑津的形狀（無主湖四周全是白虎王庭）。
+   * The "owned ring around a central void" scene: the hole is fully enclosed by
+   * territory — the minimum case a hole-cutting fill must handle, and the shape of
+   * the live 冰鯊湖／墟黑津 lakes (unowned, surrounded on all sides by one faction).
+   */
+  function ringScene(): TerritoryField {
+    const sites: TerritorySite[] = [{ id: 'void', x: 0, y: 0, faction: null }];
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      sites.push({ id: `ring${k}`, x: Math.cos(a) * 40, y: Math.sin(a) * 40, faction: FACTION_A });
+    }
+    const field = buildTerritoryField(
+      sites,
+      720,
+      0.2,
+      1.8,
+      0.12,
+      CONFIG.TERRITORY_CORE_FORCE,
+      CONFIG.TERRITORY_CORE_RADIUS,
+      CONFIG.TERRITORY_CELLS_PER_RADIUS,
+      CONFIG.TERRITORY_VOID_MASK_RATIO
+    );
+    if (!field) throw new Error('expected a field');
+    return field;
+  }
+
+  it('winds hole loops opposite to their container so the nonzero fill cuts them', () => {
+    // 邊的串接是無向的，繞向本來任意；而 renderer 用 nonzero 填色，洞圈與外圈
+    // **同向**時洞內繞數是 2、洞被整片塗掉（實測世界 96 格，就是「無主領地仍有
+    // 顏色」的回報）。回歸保證：有洞的勢力，圈的正負號必須混合。
+    //
+    // The edge chaining is undirected, so winding is arbitrary by default; the
+    // renderer fills with the nonzero rule, and a hole loop wound the *same* way as
+    // its container leaves the hole at winding 2 — painted over (96 live cells,
+    // exactly the reported "unowned territory still has colour"). Regression: a
+    // faction that encloses a hole must emit loops of **mixed** sign.
+    const field = ringScene();
+    const outlines = factionOutlines(field, CONFIG.TERRITORY_BORDER_SMOOTH_ITERATIONS);
+    const alpha = outlines.find((o) => field.factions[o.faction] === FACTION_A);
+    if (!alpha) throw new Error('expected an alpha outline');
+    // 外圈 + 洞：至少兩圈 / the outer boundary plus the hole: at least two loops
+    expect(alpha.loops.length).toBeGreaterThanOrEqual(2);
+    const signs = new Set(alpha.loops.map((loop) => Math.sign(shoelaceArea(loop))));
+    expect(signs.has(1)).toBe(true);
+    expect(signs.has(-1)).toBe(true);
+  });
+
+  it('paints exactly what the field says — no blank cell inside the fill', () => {
+    // 直接驗證填色語意：對每一格算所有圈的繞數總和（canvas nonzero 的實際行為），
+    // 場說留白的格子總和必須是 0、有主的格子必須非 0。只取「半徑 2 格內歸屬一致」
+    // 的內部格，避開切角曲線在格角的擺動區。
+    //
+    // Verify the fill's semantics directly: sum the winding numbers of every loop at
+    // each cell (what canvas nonzero actually does) — a cell the field leaves blank
+    // must sum to 0, an owned cell must not. Only cells with uniform ownership in a
+    // 2-cell radius are sampled, clearing the Chaikin curve's wiggle zone at corners.
+    const field = ringScene();
+    const outlines = factionOutlines(field, CONFIG.TERRITORY_BORDER_SMOOTH_ITERATIONS);
+    const spanX = field.maxX - field.minX;
+    const spanY = field.maxY - field.minY;
+    const kindAt = (px: number, py: number): 'blank' | 'owned' | 'mixed' => {
+      let sawBlank = false;
+      let sawOwned = false;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (field.owner[(py + dy) * field.width + (px + dx)] >= 0) sawOwned = true;
+          else sawBlank = true;
+        }
+      }
+      if (sawBlank && sawOwned) return 'mixed';
+      return sawBlank ? 'blank' : 'owned';
+    };
+    let blankChecked = 0;
+    let ownedChecked = 0;
+    for (let py = 2; py < field.height - 2; py++) {
+      for (let px = 2; px < field.width - 2; px++) {
+        const kind = kindAt(px, py);
+        if (kind === 'mixed') continue;
+        const x = field.minX + ((px + 0.5) / field.width) * spanX;
+        const y = field.minY + ((py + 0.5) / field.height) * spanY;
+        let w = 0;
+        for (const outline of outlines) {
+          for (const loop of outline.loops) w += windingOfLoop(loop, x, y);
+        }
+        if (kind === 'blank') {
+          blankChecked += 1;
+          expect(w).toBe(0);
+        } else {
+          ownedChecked += 1;
+          expect(w).not.toBe(0);
+        }
+      }
+    }
+    // 兩種內部格都要真的取到，否則斷言是空的 /
+    // Both interior kinds must actually be sampled, or the assertions are vacuous
+    expect(blankChecked).toBeGreaterThan(0);
+    expect(ownedChecked).toBeGreaterThan(0);
   });
 });
 
@@ -1023,6 +1163,181 @@ describe('territoryAlpha', () => {
       expect(alpha).toBeLessThanOrEqual(previous + 1e-9);
       previous = alpha;
     }
+  });
+});
+
+describe('the unowned mask and the round void halo', () => {
+  /**
+   * 打造「有主地方緊鄰無主之地」的最小場景，遮罩用 prod 的比值
+   * `CONFIG.TERRITORY_VOID_MASK_RATIO`。誘餌（decoy）只負責把地圖撐出二維範圍：
+   * 兩個地方在 y 上沒有跨度，範圍會被補回成 1.4——那樣凡離軸的取樣都會落到
+   * 範圍外、`factionAt` 一律回 null。誘餌離得遠，不改變遮罩與力場的近鄰計算。
+   *
+   * The minimal "owned place beside an unowned one" scene, with the mask at the
+   * production ratio `CONFIG.TERRITORY_VOID_MASK_RATIO`. The decoys only give the
+   * map a real 2D extent: two sites have zero y-span, which gets padded to 1.4 —
+   * then any off-axis sample falls outside the extent and `factionAt`
+   * legitimately returns null. Decoys sit far away and do not change the mask's
+   * or the field's nearest-neighbour maths.
+   */
+  function maskScene(
+    ownedX: number,
+    unownedX: number,
+    extraSites: TerritorySite[] = [],
+    decoys = true
+  ): TerritoryField {
+    const midX = (ownedX + unownedX) / 2;
+    const sites: TerritorySite[] = [
+      { id: 'owned', x: ownedX, y: 0, faction: 'alpha' },
+      { id: 'void', x: unownedX, y: 0, faction: null },
+      // 誘餌相對於這一對擺放：東/西各 80、上/下各 80，把範圍撐成真正的二維，
+      // 並讓節點周圍的取樣落在範圍內。寬間距的場景**不要**誘餌——80 的誘餌會比
+      // 間距本身還近，把 dOwned 縮小、讓遮罩往無主之地縮；兩點共線的場景範圍在
+      // x 上被切成 48 細格，y=0 的取樣照樣落在補回的範圍內 /
+      // Decoys placed relative to the pair: ±80 on each axis, giving a real 2D
+      // extent so samples around the nodes land inside it. Wide-gap scenes must
+      // NOT take decoys — an 80-unit decoy is closer than the gap itself, which
+      // shrinks dOwned and pulls the mask in toward the void; a collinear
+      // two-site scene is still sliced into 48 fine columns along x, and y=0
+      // samples land inside the padded extent.
+      ...(decoys
+        ? ([
+            { id: 'decoy-e', x: ownedX + 80, y: 0, faction: 'alpha' },
+            { id: 'decoy-w', x: unownedX - 80, y: 0, faction: 'alpha' },
+            { id: 'decoy-n', x: midX, y: 80, faction: 'alpha' },
+            { id: 'decoy-s', x: midX, y: -80, faction: 'alpha' },
+          ] satisfies TerritorySite[])
+        : []),
+      ...extraSites,
+    ];
+    const field = buildTerritoryField(
+      sites,
+      720,
+      0.2,
+      1.8,
+      0.12,
+      CONFIG.TERRITORY_CORE_FORCE,
+      CONFIG.TERRITORY_CORE_RADIUS,
+      CONFIG.TERRITORY_CELLS_PER_RADIUS,
+      CONFIG.TERRITORY_VOID_MASK_RATIO
+    );
+    if (!field) throw new Error('expected a field');
+    return field;
+  }
+
+  it('gives the void its own round blank halo, not half the map', () => {
+    // 比值規則：d_void < ratio × d_owned 才留白，邊界是以無主地方為焦點的圓弧
+    // （圓心在背側）。間距 30、比值 0.8：留白圈沿軸朝有主方向推進約
+    // 0.8/1.8 × 30 ≈ 13.3，其餘方向更遠——取樣每一筆都離邊界 ≥ 3 個格子單位
+    // （場在這個尺度下約 4 單位一格），遠離格點化的抖動。
+    //
+    // Ratio rule: blank iff d_void < ratio × d_owned, the border a circular arc
+    // centred on the far side of the void. At gap 30, ratio 0.8: the halo
+    // advances ~0.8/1.8 × 30 ≈ 13.3 along the axis toward the owned place and
+    // further every other way — every probe below sits ≥ 3 cells from the
+    // boundary at this scale (cells are ~4 units), clear of grid jitter.
+    const field = maskScene(30, 0);
+    for (const [x, y] of [
+      [2, 0], [0, 5], [-5, 0], [-12, 0], [0, -10], [4, 6], [-20, 0],
+    ] as const) {
+      expect(factionAt(field, x, y)).toBeNull();
+    }
+    for (const [x, y] of [
+      [16, 0], [16, 10], [22, -6], [24, 0], [30, 0],
+    ] as const) {
+      expect(factionAt(field, x, y)).toBe('alpha');
+    }
+  });
+
+  it('keeps every cell near the owned node its own — 低近崖 regression', () => {
+    // 回歸場景：低近崖（有主）旁 23 單位有無主的冰鯊湖。比值 0.8 時留白圈沿軸
+    // 只推進到 23.5/1.8 ≈ 13.1（從有主節點算），節點周圍半徑 ≤ 10 的全方位取樣
+    // 都在留白圈之外、力場也足夠強——全是自己的勢力，不再有直線缺口。
+    //
+    // Regression: 低近崖 (owned) with unowned 冰鯊湖 23 units away. At ratio 0.8
+    // the halo reaches only 23.5/1.8 ≈ 13.1 from the owned node along the axis,
+    // so a full sweep of directions at radius ≤ 10 sits beyond it with force to
+    // spare — the place's own faction everywhere, no straight notch.
+    const field = maskScene(0, -23.5); // the real measured distance 低近崖—冰鯊湖
+    for (let a = 0; a < 24; a++) {
+      const ang = (a / 24) * 2 * Math.PI;
+      for (const d of [4, 7, 10]) {
+        expect(factionAt(field, Math.cos(ang) * d, Math.sin(ang) * d)).toBe('alpha');
+      }
+    }
+  });
+
+  it('still blanks a wide wedge around an isolated void land', () => {
+    // 間距 300：留白圈也隨之巨大，貼著無主之地遠達約 0.8/1.8 × 300 ≈ 133 的格子
+    // 留白；遮罩的工作——不讓無主之地被鄰近勢力上色——不因比值調整而失去。
+    // **無誘餌**：80 單位的誘餌會比間距還近，反而把 dOwned 縮小；兩點共線的場景
+    // 在 x 上有 48 個 ~6 單位的細格，取樣都落在格心安全區。
+    //
+    // Gap 300: the halo is correspondingly large, so cells hugging the void out
+    // to roughly 0.8/1.8 × 300 ≈ 133 stay blank; the mask's job — unowned land
+    // is not painted by a nearby faction — survives the ratio change. **No
+    // decoys**: an 80-unit decoy would sit closer than the gap and shrink
+    // dOwned; the collinear two-site scene gets 48 fine ~6-unit columns along x,
+    // and every probe lands safely inside its cell.
+    const field = maskScene(300, 0, [], false);
+    for (const x of [20, 40, 60, 80, 110]) {
+      expect(factionAt(field, x, 0)).toBeNull();
+    }
+    // 圈之外力場接管：170 離有主地方 130，力足以過門檻 /
+    // Beyond the halo the field takes over: 170 is 130 from the owned place,
+    // force well above the threshold
+    expect(factionAt(field, 170, 0)).toBe('alpha');
+    expect(factionAt(field, 300, 0)).toBe('alpha');
+  });
+
+  it('pins every site’s own cell — owned keeps its faction, void stays blank', () => {
+    // 場與遮罩都以**格心**計算，而格邊長可以比兩個緊鄰地方的間距還大——格心落在
+    // 哪一側是純格網相位，會讓有主地方的家門口格被翻成留白（缺口）、或無主之地的
+    // 被翻成領色（吞併）。釘住之後，無論格網相位如何，每個地方自己那格必定讀對。
+    // 場景刻意讓格邊長 ≥ 間距（誘餌把範圍撐到間距的 25 倍、解析度 48 格下限），
+    // 讓「同一格裝下兩個地方」成為可能。
+    //
+    // The field and the mask both evaluate at **cell centres**, and the cell
+    // pitch can exceed the gap between two neighbouring places — which side a
+    // centre lands on is pure grid phase, so a controlled place's doorstep cell
+    // can snap to blank (the notch) or an unowned place's to faction colour
+    // (the swallow). With the pin, every place's own cell reads correctly
+    // whatever the phase. The scene deliberately makes the cell pitch ≥ the gap
+    // (decoys stretch the extent to 25 × the gap, resolution at the 48 floor),
+    // so one cell *can* hold both places.
+    const sites: TerritorySite[] = [
+      { id: 'owned', x: 0, y: 0, faction: 'alpha' },
+      { id: 'void', x: -10, y: 0, faction: null },
+      { id: 'decoy-e', x: 250, y: 0, faction: 'alpha' },
+      { id: 'decoy-w', x: -250, y: 0, faction: 'alpha' },
+      { id: 'decoy-n', x: 0, y: 250, faction: 'alpha' },
+      { id: 'decoy-s', x: 0, y: -250, faction: 'alpha' },
+    ];
+    const field = buildTerritoryField(
+      sites,
+      720,
+      0.2,
+      1.8,
+      0.12,
+      CONFIG.TERRITORY_CORE_FORCE,
+      CONFIG.TERRITORY_CORE_RADIUS,
+      CONFIG.TERRITORY_CELLS_PER_RADIUS,
+      CONFIG.TERRITORY_VOID_MASK_RATIO
+    );
+    if (!field) throw new Error('expected a field');
+    // 有主地方自己那格（取樣點與格心都查）：一定是它的勢力 /
+    // The owned place's own cell (probe both the site and its cell centre): its faction
+    expect(factionAt(field, 0, 0)).toBe('alpha');
+    const spanX = field.maxX - field.minX;
+    const spanY = field.maxY - field.minY;
+    const px = Math.min(field.width - 1, Math.max(0, Math.floor(((0 - field.minX) / spanX) * field.width)));
+    const py = Math.min(field.height - 1, Math.max(0, Math.floor(((0 - field.minY) / spanY) * field.height)));
+    const cx = field.minX + ((px + 0.5) / field.width) * spanX;
+    const cy = field.minY + ((py + 0.5) / field.height) * spanY;
+    expect(factionAt(field, cx, cy)).toBe('alpha');
+    // 無主地方自己那格：留白 /
+    // The void place's own cell: blank
+    expect(factionAt(field, -10, 0)).toBeNull();
   });
 });
 
